@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NuGet.TestServer.Cli/NuGet.TestServer.Cli.csproj" />
+    <Project Path="src/NuGet.TestServer/NuGet.TestServer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NuGet.TestServer.FunctionalTests/NuGet.TestServer.FunctionalTests.csproj" />
+    <Project Path="tests/NuGet.TestServer.UnitTests/NuGet.TestServer.UnitTests.csproj" />
+  </Folder>
+</Solution>
