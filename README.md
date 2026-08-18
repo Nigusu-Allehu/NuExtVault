@@ -1,5 +1,7 @@
 # NuGet Test Server
 
+[![CI](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/ci.yml/badge.svg)](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/ci.yml)
+
 A lightweight local NuGet V3 server for deterministic integration and
 end-to-end testing. It runs on real Kestrel, persists CLI package state locally,
 uses isolated in-memory state for programmatic test servers, and provides
@@ -15,6 +17,9 @@ test-only APIs for resetting state, injecting failures, and inspecting requests.
 dotnet build NuGet.TestServer.slnx
 dotnet test NuGet.TestServer.slnx
 ```
+
+CI runs warning-free Release builds and the complete unit and functional suites
+on Windows, Ubuntu, and macOS.
 
 The test suite includes:
 
