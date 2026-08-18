@@ -44,6 +44,7 @@ public sealed class ProtocolResourceTests
     {
         await using var server = await NuGetTestServerHost.StartAsync();
         await server.Packages.AddAsync(TestPackageBuilder.Create("Example.Logging", "1.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Example.Logging", "1.5.0").Build());
         await server.Packages.AddAsync(TestPackageBuilder.Create("Example.Logging", "2.0.0-beta.1").Build());
 
         using var registration = await server.HttpClient.GetAsync("/registration/example.logging/index.json");
@@ -51,7 +52,7 @@ public sealed class ProtocolResourceTests
         using var registrationJson = JsonDocument.Parse(await registration.Content.ReadAsStreamAsync());
         var page = Assert.Single(
             registrationJson.RootElement.GetProperty("items").EnumerateArray().ToArray());
-        Assert.Equal(2, page.GetProperty("count").GetInt32());
+        Assert.Equal(3, page.GetProperty("count").GetInt32());
 
         var repository = Repository.Factory.GetCoreV3(server.ServiceIndexUrl.ToString());
         var search = await repository.GetResourceAsync<PackageSearchResource>()
@@ -66,7 +67,83 @@ public sealed class ProtocolResourceTests
 
         var result = Assert.Single(results);
         Assert.Equal("Example.Logging", result.Identity.Id);
-        Assert.Equal("1.0.0", result.Identity.Version.ToNormalizedString());
+        Assert.Equal("1.5.0", result.Identity.Version.ToNormalizedString());
+        Assert.Equal(
+            ["1.0.0", "1.5.0"],
+            (await result.GetVersionsAsync()).Select(version => version.Version.ToNormalizedString()));
+    }
+
+    [Fact]
+    public async Task Search_total_and_pages_are_stable_for_casing_offsets_and_empty_queries()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Zulu.Package", "1.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("alpha.Package", "1.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Bravo.Package", "1.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Hidden.Package", "1.0.0").Build());
+        using var unlist = await server.HttpClient.DeleteAsync("/package/Hidden.Package/1.0.0");
+        Assert.Equal(HttpStatusCode.NoContent, unlist.StatusCode);
+
+        using var response = await server.HttpClient.GetAsync(
+            "/query?q=PACKAGE&skip=1&take=1&prerelease=false");
+        response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        Assert.Equal(3, json.RootElement.GetProperty("totalHits").GetInt32());
+        var item = Assert.Single(json.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal("Bravo.Package", item.GetProperty("id").GetString());
+
+        var repository = Repository.Factory.GetCoreV3(server.ServiceIndexUrl.ToString());
+        var search = await repository.GetResourceAsync<PackageSearchResource>()
+            ?? throw new InvalidOperationException("SearchQueryService was not discovered.");
+        var results = (await search.SearchAsync(
+            string.Empty,
+            new SearchFilter(includePrerelease: false),
+            skip: 2,
+            take: 2,
+            NullLogger.Instance,
+            CancellationToken.None)).ToArray();
+
+        var result = Assert.Single(results);
+        Assert.Equal("Zulu.Package", result.Identity.Id);
+    }
+
+    [Fact]
+    public async Task Search_versions_follow_stable_and_prerelease_filters()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Versions.Package", "1.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Versions.Package", "2.0.0-beta.1").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Versions.Package", "2.0.0").Build());
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Versions.Package", "3.0.0-beta.1").Build());
+
+        var repository = Repository.Factory.GetCoreV3(server.ServiceIndexUrl.ToString());
+        var search = await repository.GetResourceAsync<PackageSearchResource>()
+            ?? throw new InvalidOperationException("SearchQueryService was not discovered.");
+
+        var stable = Assert.Single(await search.SearchAsync(
+            "versions",
+            new SearchFilter(includePrerelease: false),
+            skip: 0,
+            take: 20,
+            NullLogger.Instance,
+            CancellationToken.None));
+        var prerelease = Assert.Single(await search.SearchAsync(
+            "VERSIONS",
+            new SearchFilter(includePrerelease: true),
+            skip: 0,
+            take: 20,
+            NullLogger.Instance,
+            CancellationToken.None));
+
+        Assert.Equal("2.0.0", stable.Identity.Version.ToNormalizedString());
+        Assert.Equal(
+            ["1.0.0", "2.0.0"],
+            (await stable.GetVersionsAsync()).Select(version => version.Version.ToNormalizedString()));
+        Assert.Equal("3.0.0-beta.1", prerelease.Identity.Version.ToNormalizedString());
+        Assert.Equal(
+            ["1.0.0", "2.0.0-beta.1", "2.0.0", "3.0.0-beta.1"],
+            (await prerelease.GetVersionsAsync()).Select(version => version.Version.ToNormalizedString()));
     }
 
     [Fact]

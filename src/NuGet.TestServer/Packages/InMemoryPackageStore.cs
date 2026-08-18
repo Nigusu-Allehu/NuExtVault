@@ -102,7 +102,7 @@ public sealed class InMemoryPackageStore : IPackageStore
         return ValueTask.FromResult(result);
     }
 
-    public ValueTask<IReadOnlyList<TestPackage>> SearchAsync(
+    public ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,
@@ -114,20 +114,27 @@ public sealed class InMemoryPackageStore : IPackageStore
         take = Math.Clamp(take, 0, 1000);
         skip = Math.Max(skip, 0);
 
-        IReadOnlyList<TestPackage> result = _packages.Values
+        var applicablePackages = _packages.Values
             .Where(package => package.IsListed)
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
-            .Where(package =>
+            .ToArray();
+        var matches = applicablePackages
+            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Any(package =>
                 package.Identity.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 package.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.MaxBy(package => package.Identity.Version)!)
-            .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            .Select(group => new PackageSearchItem(
+                group.MaxBy(package => package.Identity.Version)!,
+                group.OrderBy(package => package.Identity.Version).ToArray()))
+            .OrderBy(item => item.Package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Package.Identity.Id, StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyList<PackageSearchItem> items = matches
             .Skip(skip)
             .Take(take)
             .ToArray();
-        return ValueTask.FromResult(result);
+        return ValueTask.FromResult(new PackageSearchPage(matches.Length, items));
     }
 
     public async ValueTask<bool> SetListedAsync(
@@ -356,3 +363,11 @@ public sealed class InMemoryPackageStore : IPackageStore
         _packages.Clear();
     }
 }
+
+public sealed record PackageSearchPage(
+    int TotalHits,
+    IReadOnlyList<PackageSearchItem> Items);
+
+public sealed record PackageSearchItem(
+    TestPackage Package,
+    IReadOnlyList<TestPackage> Versions);

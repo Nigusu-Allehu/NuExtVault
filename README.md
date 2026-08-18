@@ -489,7 +489,7 @@ The current implementation supports:
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
 - Inline registration metadata
-- Package search
+- Package search with stable pagination totals and complete listed-version metadata
 - Package push
 - Package unlisting
 - Package seeding and hard deletion through the control API
