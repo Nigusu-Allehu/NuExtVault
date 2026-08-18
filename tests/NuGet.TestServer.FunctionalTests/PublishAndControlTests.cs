@@ -170,7 +170,7 @@ public sealed class PublishAndControlTests
     }
 
     [Fact]
-    public async Task Raw_nupkg_can_be_pushed_and_duplicate_push_conflicts()
+    public async Task Raw_nupkg_can_be_pushed_and_identical_duplicate_is_idempotent()
     {
         await using var server = await NuGetTestServerHost.StartAsync();
         var package = TestPackageBuilder.Create("Pushed.Package", "1.0.0").Build();
@@ -179,7 +179,7 @@ public sealed class PublishAndControlTests
         using var duplicate = await server.HttpClient.PutAsync("/package", new ByteArrayContent(package.Content));
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, duplicate.StatusCode);
         Assert.NotNull(await server.Packages.FindAsync("pushed.package", "1.0.0"));
     }
 

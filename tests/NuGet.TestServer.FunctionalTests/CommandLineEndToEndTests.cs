@@ -236,7 +236,6 @@ public sealed class CommandLineEndToEndTests
         var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
         using var storage = TemporaryDirectory.Create();
         using var first = StartCli(cliPath, firstPort, storage.Path);
-
         try
         {
             using var client = new HttpClient
@@ -259,6 +258,119 @@ public sealed class CommandLineEndToEndTests
             {
                 first.Kill(entireProcessTree: true);
                 await first.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Cli_production_mode_rejects_anonymous_configuration()
+    {
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+
+        var result = await RunAsync(
+            "dotnet",
+            $"\"{cliPath}\" start --production",
+            AppContext.BaseDirectory);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("authentication", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Cli_production_mode_reports_mode_and_omits_control_api()
+    {
+        var port = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"\"{cliPath}\" start --production --port {port} --storage \"{storage.Path}\" --api-key-env TEST_SERVER_KEY",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEST_SERVER_KEY"] = "publish-key";
+        using var process = Process.Start(startInfo)!;
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}")
+            };
+            await WaitUntilHealthyAsync(client);
+            using var health = await client.GetAsync("/__test/health");
+            var healthBody = await health.Content.ReadAsStringAsync();
+            using var control = await client.GetAsync("/__test/state");
+
+            Assert.Contains("\"mode\":\"production\"", healthBody);
+            Assert.Equal(HttpStatusCode.NotFound, control.StatusCode);
+
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            var output = await process.StandardOutput.ReadToEndAsync() +
+                         await process.StandardError.ReadToEndAsync();
+            Assert.Contains("Mode:        Production", output);
+            Assert.DoesNotContain("Control API:", output);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Cli_loads_scoped_identities_from_environment_behind_a_trusted_proxy()
+    {
+        var port = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"\"{cliPath}\" start --production --port {port} --storage \"{storage.Path}\" " +
+                "--identity-config-env TEST_IDENTITIES --trusted-proxy 127.0.0.1",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEST_IDENTITIES"] =
+            """
+            {"identities":[{"name":"reader","apiKeys":["reader-key"],"scopes":["read"],"namespaces":["*"]}]}
+            """;
+        using var process = Process.Start(startInfo)!;
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}")
+            };
+            client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+            client.DefaultRequestHeaders.Add("X-NuGet-ApiKey", "reader-key");
+            await WaitUntilHealthyAsync(client);
+
+            using var index = await client.GetAsync("/v3/index.json");
+            var body = await index.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            Assert.Contains($"https://127.0.0.1:{port}/", body);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
             }
         }
     }

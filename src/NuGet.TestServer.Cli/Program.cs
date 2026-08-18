@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
@@ -13,7 +14,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0 || !string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server start [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
+        "Usage: nuget-test-server start [--production] [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
     return 2;
 }
 
@@ -92,7 +93,11 @@ if (authentication.GeneratedApiKey is not null)
     authentication = authentication with { GeneratedApiKey = null };
 }
 
-Microsoft.AspNetCore.Builder.WebApplication app;
+var mode = arguments.Any(argument =>
+    string.Equals(argument, "--production", StringComparison.OrdinalIgnoreCase))
+    ? ServerMode.Production
+    : ServerMode.Test;
+WebApplication app;
 try
 {
     app = ServerApplication.Build(
@@ -100,10 +105,14 @@ try
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
         vulnerabilities: vulnerabilityProvider,
-        packageLimits: packageLimits);
+        packageLimits: packageLimits,
+        mode: mode,
+        trustedProxies: ParseTrustedProxies(arguments));
 }
 catch (Exception exception) when (
-    exception is PackageStorageInUseException or PackageStorageCorruptionException)
+    exception is PackageStorageInUseException or
+        PackageStorageCorruptionException or
+        ServerHostingConfigurationException)
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
@@ -143,7 +152,13 @@ var address = app.Services
     .Addresses.Single()
     ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
 Console.WriteLine($"Source:      {address}/v3/index.json");
-Console.WriteLine($"Control API: {address}/__test");
+Console.WriteLine($"Mode:        {mode}");
+if (mode == ServerMode.Test)
+{
+    Console.WriteLine($"Control API: {address}/__test");
+}
+
+Console.WriteLine($"Health:      {address}/__test/health");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
 Console.WriteLine(
     $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
@@ -175,6 +190,7 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
         {
             return arguments[index + 1];
         }
+
     }
 
     return null;
@@ -197,6 +213,17 @@ static long ReadPositiveLongOption(
     }
 
     return parsed;
+}
+
+static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)
+{
+    var value = ReadOption(arguments, "--trusted-proxy");
+    return value is null
+        ? null
+        : new TrustedProxyOptions(
+            value.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 }
 
 static string GenerateApiKey()
