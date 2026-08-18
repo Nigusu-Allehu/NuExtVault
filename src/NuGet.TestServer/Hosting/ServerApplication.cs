@@ -5,6 +5,7 @@ using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
+using NuGet.TestServer.Vulnerabilities;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -14,7 +15,8 @@ public static class ServerApplication
         string[]? args = null,
         string? url = null,
         string? storageDirectory = null,
-        AuthenticationConfiguration? authentication = null)
+        AuthenticationConfiguration? authentication = null,
+        VulnerabilitySnapshotProvider? vulnerabilities = null)
     {
         var builder = WebApplication.CreateBuilder(args ?? []);
         builder.WebHost.UseUrls(url ?? "http://127.0.0.1:0");
@@ -23,6 +25,9 @@ public static class ServerApplication
         builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory));
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
+        builder.Services.AddSingleton(
+            vulnerabilities ??
+            new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()));
 
         var app = builder.Build();
         MapMiddleware(app);
@@ -79,7 +84,10 @@ public static class ServerApplication
 
     private static void MapProtocolEndpoints(WebApplication app)
     {
-        app.MapMethods("/v3/index.json", [HttpMethods.Get, HttpMethods.Head], (HttpContext context) =>
+        app.MapMethods(
+            "/v3/index.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            (HttpContext context, VulnerabilitySnapshotProvider vulnerabilities) =>
         {
             var root = GetRoot(context);
             var resources = new object[]
@@ -88,7 +96,8 @@ public static class ServerApplication
                 Descriptor($"{root}/registration/", "RegistrationsBaseUrl/3.6.0"),
                 Descriptor($"{root}/query", "SearchQueryService/3.0.0-beta"),
                 Descriptor($"{root}/query", "SearchQueryService/3.5.0"),
-                Descriptor($"{root}/package", "PackagePublish/2.0.0")
+                Descriptor($"{root}/package", "PackagePublish/2.0.0"),
+                Descriptor($"{root}/v3/vulnerabilities/index.json", "VulnerabilityInfo/6.7.0")
             };
             return Results.Json(new Dictionary<string, object?>
             {
@@ -96,6 +105,30 @@ public static class ServerApplication
                 ["resources"] = resources
             });
         }).WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/v3/vulnerabilities/index.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            (HttpContext context, VulnerabilitySnapshotProvider vulnerabilities) =>
+                Results.Bytes(
+                    vulnerabilities.Active.CreateLocalIndex(new Uri($"{GetRoot(context)}/")),
+                    "application/json"))
+            .WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/v3/vulnerabilities/{snapshotId}/{pageName}.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            IResult (
+                string snapshotId,
+                string pageName,
+                VulnerabilitySnapshotProvider vulnerabilities) =>
+            {
+                return vulnerabilities.TryGet(snapshotId, out var snapshot) &&
+                       snapshot!.TryGetPage(pageName, out var page)
+                    ? Results.Bytes(page!.Content.ToArray(), "application/json")
+                    : Results.NotFound();
+            })
+            .WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
             "/flatcontainer/{id}/index.json",
@@ -152,6 +185,7 @@ public static class ServerApplication
                 HttpContext context,
                 string id,
                 InMemoryPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
                 var packages = await store.FindByIdAsync(id, token);
@@ -178,7 +212,8 @@ public static class ServerApplication
                             ["count"] = packages.Count,
                             ["lower"] = first.NormalizedVersion,
                             ["upper"] = last.NormalizedVersion,
-                            ["items"] = packages.Select(package => RegistrationLeaf(context, package))
+                            ["items"] = packages.Select(
+                                package => RegistrationLeaf(context, package, vulnerabilities))
                         }
                     }
                 });
@@ -192,12 +227,13 @@ public static class ServerApplication
                 string id,
                 string version,
                 InMemoryPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
                 var package = await store.FindAsync(id, version, token);
                 return package is null
                     ? Results.NotFound()
-                    : Results.Json(RegistrationLeaf(context, package));
+                    : Results.Json(RegistrationLeaf(context, package, vulnerabilities));
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
@@ -417,35 +453,49 @@ public static class ServerApplication
         published = package.Published
     };
 
-    private static object RegistrationLeaf(HttpContext context, TestPackage package)
+    private static object RegistrationLeaf(
+        HttpContext context,
+        TestPackage package,
+        VulnerabilitySnapshotProvider vulnerabilities)
     {
         var root = GetRoot(context);
         var id = package.Identity.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
+        var catalogEntry = new Dictionary<string, object?>
+        {
+            ["@id"] = $"{root}/registration/{id}/{version}.json",
+            ["@type"] = "PackageDetails",
+            ["id"] = package.Identity.Id,
+            ["version"] = version,
+            ["authors"] = package.Authors,
+            ["description"] = package.Description,
+            ["listed"] = package.IsListed,
+            ["published"] = package.Published,
+            ["dependencyGroups"] = package.DependencyGroups.Select(group => new
+            {
+                targetFramework = group.TargetFramework.GetShortFolderName(),
+                dependencies = group.Packages.Select(dependency => new
+                {
+                    id = dependency.Id,
+                    range = dependency.VersionRange.ToNormalizedString()
+                })
+            })
+        };
+        var advisories = vulnerabilities.Active.Find(package.Identity.Id, package.Identity.Version);
+        if (advisories.Count > 0)
+        {
+            catalogEntry["vulnerabilities"] = advisories.Select(advisory => new
+            {
+                advisoryUrl = advisory.Url.AbsoluteUri,
+                severity = advisory.Severity.ToString()
+            });
+        }
+
         return new Dictionary<string, object?>
         {
             ["@id"] = $"{root}/registration/{id}/{version}.json",
             ["@type"] = "Package",
-            ["catalogEntry"] = new Dictionary<string, object?>
-            {
-                ["@id"] = $"{root}/registration/{id}/{version}.json",
-                ["@type"] = "PackageDetails",
-                ["id"] = package.Identity.Id,
-                ["version"] = version,
-                ["authors"] = package.Authors,
-                ["description"] = package.Description,
-                ["listed"] = package.IsListed,
-                ["published"] = package.Published,
-                ["dependencyGroups"] = package.DependencyGroups.Select(group => new
-                {
-                    targetFramework = group.TargetFramework.GetShortFolderName(),
-                    dependencies = group.Packages.Select(dependency => new
-                    {
-                        id = dependency.Id,
-                        range = dependency.VersionRange.ToNormalizedString()
-                    })
-                })
-            },
+            ["catalogEntry"] = catalogEntry,
             ["packageContent"] = $"{root}/flatcontainer/{id}/{version}/{id}.{version}.nupkg",
             ["registration"] = $"{root}/registration/{id}/index.json"
         };
