@@ -329,6 +329,34 @@ Uri source = server.ServiceIndexUrl;
 
 Each in-process server binds to a random loopback port and owns isolated package, fault, and request state.
 
+### Bound runtime request and fault state
+
+Request history retains the newest 10,000 requests by sequence, and a server
+accepts at most 100 fault rules by default. Old request records are evicted
+deterministically; adding a fault rule at capacity returns HTTP 409.
+
+Override the CLI defaults through standard ASP.NET Core configuration:
+
+```powershell
+$env:RuntimeState__RequestHistoryCapacity = "2000"
+$env:RuntimeState__FaultRuleCapacity = "25"
+nuget-test-server start
+```
+
+Configure an in-process server directly:
+
+```csharp
+await using var server = await NuGetTestServerHost.StartAsync(
+    new RuntimeStateConfiguration(
+        requestHistoryCapacity: 2000,
+        faultRuleCapacity: 25));
+```
+
+`GET /__test/state` reports `requestCount`, `requestCapacity`,
+`evictedRequestCount`, `faultCount`, and `faultCapacity`. Resetting the server
+or deleting request history clears retained requests and the eviction count;
+the reset request itself is not retained.
+
 ## Use the control API
 
 The `/__test` endpoints are test-only and are never advertised in the NuGet service index.
