@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using NuGet.Packaging;
 using NuGet.TestServer.Packages;
 
@@ -29,5 +30,35 @@ public sealed class TestPackageBuilderTests
     {
         Assert.Throws<ArgumentException>(() => TestPackageBuilder.Create("", "1.0.0"));
         Assert.Throws<ArgumentException>(() => TestPackageBuilder.Create("Example", "not-a-version"));
+    }
+
+    [Fact]
+    public void Build_preserves_rich_nuspec_metadata_and_computes_package_hash()
+    {
+        var package = TestPackageBuilder.Create("Example.Metadata", "1.0.0")
+            .WithAuthors("Alice, Bob")
+            .WithDescription("Description")
+            .WithSummary("Summary")
+            .WithTitle("Title")
+            .WithProjectUrl("https://example.test/project")
+            .WithReadme("README.md", "# Read me")
+            .WithIcon("icon.png", [1, 2, 3])
+            .WithLicenseExpression("MIT")
+            .WithPackageType("DotnetTool", "1.0.0")
+            .WithRepository("git", "https://example.test/repository.git", "abc123", "main")
+            .Build();
+
+        Assert.Equal("Summary", package.Summary);
+        Assert.Equal("Title", package.Title);
+        Assert.Equal(new Uri("https://example.test/project"), package.ProjectUrl);
+        Assert.Equal("README.md", package.Readme);
+        Assert.Equal("icon.png", package.Icon);
+        Assert.Equal("MIT", package.LicenseExpression);
+        Assert.Equal("DotnetTool", Assert.Single(package.PackageTypes).Name);
+        Assert.Equal("git", package.Repository?.Type);
+        Assert.Equal("abc123", package.Repository?.Commit);
+        Assert.Equal(
+            Convert.ToBase64String(SHA512.HashData(package.Content)),
+            package.PackageHash);
     }
 }

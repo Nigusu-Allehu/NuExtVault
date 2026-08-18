@@ -119,6 +119,12 @@ public sealed class PackageControlClient(InMemoryPackageStore store)
         CancellationToken token = default) =>
         store.FindAsync(id, version, token);
 
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        store.FindSymbolAsync(id, version, token);
+
     public ValueTask ResetAsync(CancellationToken token = default) => store.ResetAsync(token);
 }
 

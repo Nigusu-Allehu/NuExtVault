@@ -26,6 +26,7 @@ public sealed class ServerLifecycleTests
         Assert.Contains(resources, r => r.GetProperty("@type").GetString() == "RegistrationsBaseUrl/3.6.0");
         Assert.Contains(resources, r => r.GetProperty("@type").GetString() == "SearchQueryService/3.5.0");
         Assert.Contains(resources, r => r.GetProperty("@type").GetString() == "PackagePublish/2.0.0");
+        Assert.Contains(resources, r => r.GetProperty("@type").GetString() == "SymbolPackagePublish/4.9.0");
         Assert.All(resources, r => Assert.True(Uri.TryCreate(r.GetProperty("@id").GetString(), UriKind.Absolute, out _)));
 
         var health = await server.HttpClient.GetFromJsonAsync<JsonElement>("/__test/health");

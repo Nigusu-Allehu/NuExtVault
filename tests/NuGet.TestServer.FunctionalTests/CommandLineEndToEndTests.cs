@@ -170,6 +170,41 @@ public sealed class CommandLineEndToEndTests
     }
 
     [Fact]
+    public async Task Dotnet_nuget_push_publishes_a_symbol_package_to_the_advertised_resource()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        using var directory = TemporaryDirectory.Create();
+        var package = TestPackageBuilder.Create("Cli.Symbols", "1.0.0").Build();
+        var symbols = TestPackageBuilder.Create("Cli.Symbols", "1.0.0")
+            .WithFile("lib/net10.0/Cli.Symbols.pdb", [1, 2, 3, 4])
+            .Build();
+        var packagePath = Path.Combine(directory.Path, "Cli.Symbols.1.0.0.nupkg");
+        var symbolPath = Path.Combine(directory.Path, "Cli.Symbols.1.0.0.snupkg");
+        await File.WriteAllBytesAsync(packagePath, package.Content);
+        await File.WriteAllBytesAsync(symbolPath, symbols.Content);
+        var configPath = Path.Combine(directory.Path, "NuGet.config");
+        await File.WriteAllTextAsync(
+            configPath,
+            $"""
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="TestServer" value="{server.ServiceIndexUrl}" allowInsecureConnections="true" />
+              </packageSources>
+            </configuration>
+            """);
+
+        var result = await RunAsync(
+            "dotnet",
+            $"nuget push \"{packagePath}\" --source TestServer --api-key test --configfile \"{configPath}\"",
+            directory.Path);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.NotNull(await server.Packages.FindAsync("Cli.Symbols", "1.0.0"));
+        Assert.Equal(symbols.Content, await server.Packages.FindSymbolAsync("Cli.Symbols", "1.0.0"));
+    }
+
+    [Fact]
     public async Task Cli_start_exposes_a_healthy_server()
     {
         var port = GetAvailablePort();

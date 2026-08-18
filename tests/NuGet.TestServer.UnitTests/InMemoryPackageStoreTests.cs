@@ -81,6 +81,33 @@ public sealed class InMemoryPackageStoreTests
     }
 
     [Fact]
+    public async Task Search_filters_explicit_and_implicit_package_types()
+    {
+        var store = new InMemoryPackageStore();
+        await store.AddAsync(TestPackageBuilder.Create("Library", "1.0.0").Build());
+        await store.AddAsync(
+            TestPackageBuilder.Create("Tool", "1.0.0")
+                .WithPackageType("DotnetTool", "1.0.0")
+                .Build());
+
+        var dependencies = await store.SearchAsync(
+            string.Empty,
+            includePrerelease: false,
+            skip: 0,
+            take: 20,
+            packageType: "dependency");
+        var tools = await store.SearchAsync(
+            string.Empty,
+            includePrerelease: false,
+            skip: 0,
+            take: 20,
+            packageType: "DOTNETTOOL");
+
+        Assert.Equal(["Library"], dependencies.Items.Select(item => item.Package.Identity.Id));
+        Assert.Equal(["Tool"], tools.Items.Select(item => item.Package.Identity.Id));
+    }
+
+    [Fact]
     public async Task File_backed_store_persists_packages_and_listing_state()
     {
         var directory = Path.Combine(
@@ -102,6 +129,49 @@ public sealed class InMemoryPackageStoreTests
             Assert.True(await second.DeleteAsync("Persistent.Package", "1.0.0"));
             var third = new InMemoryPackageStore(directory);
             Assert.Null(await third.FindAsync("Persistent.Package", "1.0.0"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Store_updates_and_persists_repository_metadata()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "NuGet.TestServer.UnitTests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var first = new InMemoryPackageStore(directory);
+            await first.AddAsync(TestPackageBuilder.Create("Persistent.Package", "1.0.0").Build());
+            var update = new PackageRepositoryMetadata(
+                ["Alice", "Bob"],
+                Downloads: 42,
+                Verified: true,
+                new PackageDeprecation(
+                    ["Legacy", "Other"],
+                    "Use the replacement.",
+                    new AlternatePackage("Replacement.Package", "[2.0.0,)")));
+
+            Assert.True(await first.SetRepositoryMetadataAsync(
+                "Persistent.Package",
+                "1.0.0",
+                update));
+
+            var restored = await new InMemoryPackageStore(directory)
+                .FindAsync("persistent.package", "1.0.0");
+            Assert.Equal(["Alice", "Bob"], restored!.RepositoryMetadata.Owners);
+            Assert.Equal(42, restored.RepositoryMetadata.Downloads);
+            Assert.True(restored.RepositoryMetadata.Verified);
+            Assert.Equal(
+                "Replacement.Package",
+                restored.RepositoryMetadata.Deprecation!.AlternatePackage!.Id);
         }
         finally
         {
