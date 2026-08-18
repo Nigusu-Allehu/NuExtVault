@@ -424,7 +424,7 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
-- Inline registration metadata
+- Registration indexes, pages, and leaf metadata
 - Package search
 - Package push
 - Package unlisting
