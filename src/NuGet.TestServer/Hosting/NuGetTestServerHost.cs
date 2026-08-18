@@ -4,6 +4,7 @@ using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
+using NuGet.TestServer.Vulnerabilities;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -45,8 +46,32 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         AuthenticationConfiguration authentication,
         CancellationToken token = default)
     {
+        return await StartAsync(
+            authentication,
+            EmbeddedVulnerabilitySnapshot.Load(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        VulnerabilitySnapshot vulnerabilities,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            AuthenticationConfiguration.Anonymous,
+            vulnerabilities,
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        CancellationToken token = default)
+    {
         ArgumentNullException.ThrowIfNull(authentication);
-        var application = ServerApplication.Build(authentication: authentication);
+        ArgumentNullException.ThrowIfNull(vulnerabilities);
+        var application = ServerApplication.Build(
+            authentication: authentication,
+            vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities));
         try
         {
             await application.StartAsync(token);

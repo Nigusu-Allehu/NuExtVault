@@ -6,6 +6,8 @@ A lightweight local NuGet V3 server for deterministic integration and
 end-to-end testing. It runs on real Kestrel, persists CLI package state locally,
 uses isolated in-memory state for programmatic test servers, and provides
 test-only APIs for resetting state, injecting failures, and inspecting requests.
+It also serves a local nuget.org vulnerability snapshot for offline audit and
+Package Manager UI scenarios.
 
 ## Requirements
 
@@ -27,6 +29,7 @@ The test suite includes:
 - Functional tests against a real loopback Kestrel server.
 - End-to-end tests using NuGet.Protocol, `dotnet restore`, and `dotnet nuget push`.
 - Authentication tests for API-key publishing and private Basic-authenticated feeds.
+- Vulnerability schema, cache-integrity, registration, and real restore-audit tests.
 - Functional tests that start and probe the packaged CLI.
 
 ## Start the server
@@ -43,6 +46,7 @@ The CLI selects an available loopback port and prints the endpoints:
 Source:      http://127.0.0.1:54321/v3/index.json
 Control API: http://127.0.0.1:54321/__test
 Storage:     C:\Users\<user>\AppData\Local\nuget-test-server
+Vulnerabilities: 2026-08-18T17:36:11.6736167+00:00 (<snapshot-id>)
 ```
 
 Use a fixed port when needed:
@@ -115,6 +119,51 @@ Local development uses HTTP on loopback. Current NuGet clients require HTTP sour
 ```
 
 Replace `54321` with the port printed by the server.
+
+## Vulnerability auditing
+
+No vulnerability-specific setup is required. Every server advertises
+`VulnerabilityInfo/6.7.0` and serves its index and pages from local URLs:
+
+```text
+GET/HEAD /v3/vulnerabilities/index.json
+GET/HEAD /v3/vulnerabilities/{snapshot-id}/{page-name}.json
+```
+
+The tool package contains a validated nuget.org baseline, so first startup and
+NuGet audit work without network access. Registration metadata also includes
+matching advisories for hosted package IDs and versions, enabling Package
+Manager UI vulnerability details.
+
+CLI servers prefer a newer valid snapshot cached under:
+
+```text
+<storage>\vulnerabilities
+```
+
+After the server is ready, a stale snapshot is refreshed from nuget.org in the
+background. A refresh downloads every referenced page with bounded timeouts and
+sizes, validates the complete snapshot, records source and SHA-256 integrity
+metadata, and atomically activates it. Failed or partial refreshes produce a
+warning and leave the previous snapshot available. The three most recent cached
+snapshots are retained.
+
+Programmatic servers created with `NuGetTestServerHost.StartAsync()` always use
+the embedded snapshot and never refresh from the network, preserving
+deterministic test behavior.
+
+To select the local source explicitly for restore auditing, add it as an audit
+source:
+
+```xml
+<auditSources>
+  <clear />
+  <add
+    key="TestServer"
+    value="http://127.0.0.1:54321/v3/index.json"
+    allowInsecureConnections="true" />
+</auditSources>
+```
 
 ## Authentication
 
@@ -386,6 +435,8 @@ The current implementation supports:
 - Basic authentication for private sources
 - Combined Basic and API-key authentication
 - Persistent CLI package storage
+- Embedded and cached nuget.org vulnerability data
+- Local restore auditing and registration vulnerability metadata
 
 CLI package state is persisted in the Local AppData storage directory. Servers
 created with `NuGetTestServerHost.StartAsync()` remain isolated and in memory.
@@ -420,5 +471,6 @@ Repository agents and contributors follow the workflow in
 - This is test infrastructure, not a production package feed.
 - Programmatic test-server storage is in memory; the CLI persists packages locally.
 - The server uses anonymous HTTP by default unless credentials are supplied.
-- Multi-user authorization, scoped keys, HTTPS, advanced network faults, vulnerability data, symbols, and repository signatures are not yet implemented.
+- Multi-user authorization, scoped keys, HTTPS, advanced network faults, symbols,
+  and repository signatures are not yet implemented.
 - The server binds to `127.0.0.1` unless its hosting configuration is changed.

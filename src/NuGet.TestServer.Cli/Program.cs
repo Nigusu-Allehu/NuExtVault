@@ -7,6 +7,7 @@ using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Storage;
+using NuGet.TestServer.Vulnerabilities;
 
 var arguments = args.ToList();
 if (arguments.Count == 0 || !string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
@@ -24,6 +25,11 @@ if (!int.TryParse(port, out var parsedPort) || parsedPort is < 0 or > 65535)
 }
 
 var storageDirectory = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+var vulnerabilityCache = new VulnerabilitySnapshotCache(
+    Path.Combine(storageDirectory, "vulnerabilities"));
+var vulnerabilitySnapshot = await vulnerabilityCache.LoadBestAsync(
+    EmbeddedVulnerabilitySnapshot.Load());
+var vulnerabilityProvider = new VulnerabilitySnapshotProvider(vulnerabilitySnapshot);
 AuthenticationCliOptions authentication;
 try
 {
@@ -54,7 +60,8 @@ if (authentication.GeneratedApiKey is not null)
 var app = ServerApplication.Build(
     url: $"http://127.0.0.1:{parsedPort}",
     storageDirectory: storageDirectory,
-    authentication: authentication.Configuration);
+    authentication: authentication.Configuration,
+    vulnerabilities: vulnerabilityProvider);
 await app.StartAsync();
 
 var dataDirectory = ReadOption(arguments, "--data");
@@ -86,8 +93,25 @@ var address = app.Services
 Console.WriteLine($"Source:      {address}/v3/index.json");
 Console.WriteLine($"Control API: {address}/__test");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
+Console.WriteLine(
+    $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
+
+using var refreshClient = new HttpClient
+{
+    Timeout = TimeSpan.FromSeconds(30)
+};
+var refresher = new VulnerabilitySnapshotRefresher(
+    vulnerabilityProvider,
+    vulnerabilityCache,
+    refreshClient,
+    new Uri("https://api.nuget.org/v3/vulnerabilities/index.json"));
+var refreshTask =
+    DateTimeOffset.UtcNow - vulnerabilityProvider.Active.FetchedAt > TimeSpan.FromHours(6)
+        ? RefreshVulnerabilitiesAsync(refresher, app.Lifetime.ApplicationStopping)
+        : Task.CompletedTask;
 
 await app.WaitForShutdownAsync();
+await refreshTask;
 await app.DisposeAsync();
 return 0;
 
@@ -139,5 +163,25 @@ static string ReadSecret(string prompt)
         {
             characters.Add(key.KeyChar);
         }
+    }
+}
+
+static async Task RefreshVulnerabilitiesAsync(
+    VulnerabilitySnapshotRefresher refresher,
+    CancellationToken token)
+{
+    try
+    {
+        if (await refresher.RefreshAsync(token))
+        {
+            Console.Error.WriteLine("Updated the cached nuget.org vulnerability snapshot.");
+        }
+    }
+    catch (OperationCanceledException) when (token.IsCancellationRequested)
+    {
+    }
+    catch (VulnerabilityRefreshException exception)
+    {
+        Console.Error.WriteLine($"Warning: {exception.Message}");
     }
 }
