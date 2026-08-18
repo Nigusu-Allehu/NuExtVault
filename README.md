@@ -55,6 +55,35 @@ Use a fixed port when needed:
 dotnet run --project .\src\NuGet.TestServer.Cli -- start --port 5000
 ```
 
+### Configure package resource limits
+
+Package uploads are streamed through bounded temporary files and validated before
+they become visible. Package downloads are streamed from the active package
+content. The defaults are:
+
+| Limit | CLI option | Default |
+| --- | --- | ---: |
+| HTTP request body | `--max-request-bytes` | 128 MiB |
+| Compressed package | `--max-package-bytes` | 100 MiB |
+| Archive entries | `--max-archive-entries` | 10,000 |
+| One expanded archive entry | `--max-entry-bytes` | 64 MiB |
+| Total expanded archive content | `--max-expanded-bytes` | 512 MiB |
+
+For example:
+
+```powershell
+nuget-test-server start `
+  --max-request-bytes 67108864 `
+  --max-package-bytes 52428800 `
+  --max-archive-entries 5000 `
+  --max-entry-bytes 16777216 `
+  --max-expanded-bytes 268435456
+```
+
+Malformed packages return `400 Bad Request`. Request, package, entry-count,
+entry-size, and expanded-size violations return `413 Payload Too Large`.
+Canceled and rejected uploads remove their partial temporary files.
+
 Seed every `.nupkg` in a directory during startup:
 
 ```powershell
@@ -329,9 +358,29 @@ Uri source = server.ServiceIndexUrl;
 
 Each in-process server binds to a random loopback port and owns isolated package, fault, and request state.
 
+Pass `PackageTransferLimits` to configure an in-process server:
+
+```csharp
+var limits = new PackageTransferLimits
+{
+    MaxRequestBodyBytes = 16 * 1024 * 1024,
+    MaxPackageBytes = 12 * 1024 * 1024,
+    MaxArchiveEntries = 1000,
+    MaxArchiveEntryBytes = 8 * 1024 * 1024,
+    MaxExpandedArchiveBytes = 64 * 1024 * 1024
+};
+
+await using var server = await NuGetTestServerHost.StartAsync(limits);
+```
+
 ## Use the control API
 
 The `/__test` endpoints are test-only and are never advertised in the NuGet service index.
+
+`POST /__test/packages` accepts `application/octet-stream` for memory-safe
+package uploads. The existing JSON `{ "content": "<base64>" }` format remains
+available for compatibility and is limited to 4 MiB of decoded package content;
+use the binary format for larger packages.
 
 When authentication is configured, the control API uses the same write policy:
 

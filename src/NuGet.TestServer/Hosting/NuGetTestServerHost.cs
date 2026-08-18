@@ -49,6 +49,18 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             authentication,
             EmbeddedVulnerabilitySnapshot.Load(),
+            PackageTransferLimits.Default,
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            AuthenticationConfiguration.Anonymous,
+            EmbeddedVulnerabilitySnapshot.Load(),
+            packageLimits,
             token);
     }
 
@@ -59,6 +71,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             AuthenticationConfiguration.Anonymous,
             vulnerabilities,
+            PackageTransferLimits.Default,
             token);
     }
 
@@ -67,11 +80,26 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         VulnerabilitySnapshot vulnerabilities,
         CancellationToken token = default)
     {
+        return await StartAsync(
+            authentication,
+            vulnerabilities,
+            PackageTransferLimits.Default,
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
         ArgumentNullException.ThrowIfNull(authentication);
         ArgumentNullException.ThrowIfNull(vulnerabilities);
+        ArgumentNullException.ThrowIfNull(packageLimits);
         var application = ServerApplication.Build(
             authentication: authentication,
-            vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities));
+            vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
+            packageLimits: packageLimits);
         try
         {
             await application.StartAsync(token);
