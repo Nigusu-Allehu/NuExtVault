@@ -184,6 +184,31 @@ public sealed class PublishAndControlTests
     }
 
     [Fact]
+    public async Task Durable_kestrel_server_serves_a_package_after_restart()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var package = TestPackageBuilder.Create("Durable.Kestrel", "1.0.0").Build();
+        await using (var first = await NuGetTestServerHost.StartAsync(
+                         directory.Path,
+                         CreateLimits()))
+        {
+            using var upload = await first.HttpClient.PutAsync(
+                "/package",
+                new ByteArrayContent(package.Content));
+            upload.EnsureSuccessStatusCode();
+        }
+
+        await using var second = await NuGetTestServerHost.StartAsync(
+            directory.Path,
+            CreateLimits());
+        using var download = await second.HttpClient.GetAsync(
+            "/flatcontainer/durable.kestrel/1.0.0/durable.kestrel.1.0.0.nupkg");
+
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal(package.Content, await download.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
     public async Task Control_api_can_add_list_and_reset_packages()
     {
         await using var server = await NuGetTestServerHost.StartAsync();

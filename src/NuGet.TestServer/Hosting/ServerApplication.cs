@@ -38,7 +38,10 @@ public static class ServerApplication
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(authentication ?? AuthenticationConfiguration.Anonymous);
         builder.Services.AddSingleton(packageLimits);
-        builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory, packageLimits));
+        builder.Services.AddSingleton<IPackageStore>(_ =>
+            storageDirectory is null
+                ? new InMemoryPackageStore(limits: packageLimits)
+                : new DurablePackageStore(storageDirectory, packageLimits));
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
         builder.Services.AddSingleton(
@@ -46,6 +49,16 @@ public static class ServerApplication
             new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()));
 
         var app = builder.Build();
+        try
+        {
+            _ = app.Services.GetRequiredService<IPackageStore>();
+        }
+        catch
+        {
+            app.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            throw;
+        }
+
         MapMiddleware(app);
         MapProtocolEndpoints(app);
         MapControlEndpoints(app);
@@ -149,7 +162,7 @@ public static class ServerApplication
         app.MapMethods(
             "/flatcontainer/{id}/index.json",
             [HttpMethods.Get, HttpMethods.Head],
-            async Task<IResult> (string id, InMemoryPackageStore store, CancellationToken token) =>
+            async Task<IResult> (string id, IPackageStore store, CancellationToken token) =>
             {
                 var packages = await store.FindByIdAsync(id, token);
                 return packages.Count == 0
@@ -167,7 +180,7 @@ public static class ServerApplication
                 string id,
                 string version,
                 string fileName,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 CancellationToken token) =>
             {
                 var package = await store.FindAsync(id, version, token);
@@ -180,10 +193,17 @@ public static class ServerApplication
                 if (fileName.Equals($"{normalizedId}.{package.NormalizedVersion}.nupkg",
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    return Results.File(
-                        package.OpenReadStream(),
-                        "application/octet-stream",
-                        enableRangeProcessing: true);
+                    try
+                    {
+                        return Results.File(
+                            package.OpenReadStream(),
+                            "application/octet-stream",
+                            enableRangeProcessing: true);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        return Results.NotFound();
+                    }
                 }
 
                 if (fileName.Equals($"{normalizedId}.nuspec", StringComparison.OrdinalIgnoreCase))
@@ -200,7 +220,7 @@ public static class ServerApplication
             async Task<IResult> (
                 HttpContext context,
                 string id,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
@@ -242,7 +262,7 @@ public static class ServerApplication
                 HttpContext context,
                 string id,
                 string version,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
@@ -257,7 +277,7 @@ public static class ServerApplication
             [HttpMethods.Get, HttpMethods.Head],
             async Task<IResult> (
                 HttpContext context,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 string? q,
                 int? skip,
                 int? take,
@@ -286,7 +306,7 @@ public static class ServerApplication
             async Task<IResult> (
                 string id,
                 string version,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 CancellationToken token) =>
                 await store.SetListedAsync(id, version, false, token)
                     ? Results.NoContent()
@@ -301,7 +321,7 @@ public static class ServerApplication
 
         app.MapGet(
             "/__test/state",
-            async (InMemoryPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
+            async (IPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
                 Results.Json(new
                 {
                     packageCount = (await packages.GetAllAsync()).Count,
@@ -312,7 +332,7 @@ public static class ServerApplication
 
         app.MapPost(
             "/__test/reset",
-            async (InMemoryPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
+            async (IPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
             {
                 await packages.ResetAsync();
                 faults.Reset();
@@ -323,7 +343,7 @@ public static class ServerApplication
 
         app.MapGet(
             "/__test/packages",
-            async (InMemoryPackageStore store, CancellationToken token) =>
+            async (IPackageStore store, CancellationToken token) =>
                 Results.Json((await store.GetAllAsync(token)).Select(PackageSummary)))
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -331,7 +351,7 @@ public static class ServerApplication
             "/__test/packages",
             async Task<IResult> (
                 HttpRequest request,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 PackageTransferLimits limits,
                 CancellationToken token) =>
             {
@@ -417,7 +437,7 @@ public static class ServerApplication
             async Task<IResult> (
                 string id,
                 string version,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 CancellationToken token) =>
                 await store.DeleteAsync(id, version, token)
                     ? Results.NoContent()
@@ -429,7 +449,7 @@ public static class ServerApplication
             async Task<IResult> (
                 string id,
                 string version,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 CancellationToken token) =>
                 await store.SetListedAsync(id, version, true, token)
                     ? Results.NoContent()
@@ -441,7 +461,7 @@ public static class ServerApplication
             async Task<IResult> (
                 string id,
                 string version,
-                InMemoryPackageStore store,
+                IPackageStore store,
                 CancellationToken token) =>
                 await store.SetListedAsync(id, version, false, token)
                     ? Results.NoContent()
@@ -472,7 +492,7 @@ public static class ServerApplication
 
     private static async Task<IResult> PublishPackageAsync(
         HttpRequest request,
-        InMemoryPackageStore store,
+        IPackageStore store,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -505,7 +525,7 @@ public static class ServerApplication
 
     private static async Task<IResult> AddPackageAsync(
         Stream content,
-        InMemoryPackageStore store,
+        IPackageStore store,
         PackageTransferLimits limits,
         CancellationToken token)
     {

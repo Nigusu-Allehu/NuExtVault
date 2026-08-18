@@ -217,12 +217,48 @@ public sealed class CommandLineEndToEndTests
                 Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             }
         }
+
         finally
         {
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Cli_rejects_a_second_process_using_the_same_storage_root()
+    {
+        var firstPort = GetAvailablePort();
+        var secondPort = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        using var first = StartCli(cliPath, firstPort, storage.Path);
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{firstPort}")
+            };
+            await WaitUntilHealthyAsync(client);
+            var second = await RunAsync(
+                "dotnet",
+                $"\"{cliPath}\" start --port {secondPort} --storage \"{storage.Path}\"",
+                storage.Path);
+
+            Assert.Equal(2, second.ExitCode);
+            Assert.Contains("already in use", second.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Unhandled exception", second.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (!first.HasExited)
+            {
+                first.Kill(entireProcessTree: true);
+                await first.WaitForExitAsync();
             }
         }
     }
@@ -300,6 +336,17 @@ public sealed class CommandLineEndToEndTests
         await process.WaitForExitAsync();
         return (process.ExitCode, await outputTask + await errorTask);
     }
+
+    private static Process StartCli(string cliPath, int port, string storagePath) =>
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{cliPath}\" start --port {port} --storage \"{storagePath}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
 
     private static int GetAvailablePort()
     {

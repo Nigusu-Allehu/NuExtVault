@@ -3,7 +3,7 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore : IAsyncDisposable
+public sealed class InMemoryPackageStore : IPackageStore
 {
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
         new(StringComparer.OrdinalIgnoreCase);

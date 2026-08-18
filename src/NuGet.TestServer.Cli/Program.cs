@@ -92,12 +92,23 @@ if (authentication.GeneratedApiKey is not null)
     authentication = authentication with { GeneratedApiKey = null };
 }
 
-var app = ServerApplication.Build(
-    url: $"http://127.0.0.1:{parsedPort}",
-    storageDirectory: storageDirectory,
-    authentication: authentication.Configuration,
-    vulnerabilities: vulnerabilityProvider,
-    packageLimits: packageLimits);
+Microsoft.AspNetCore.Builder.WebApplication app;
+try
+{
+    app = ServerApplication.Build(
+        url: $"http://127.0.0.1:{parsedPort}",
+        storageDirectory: storageDirectory,
+        authentication: authentication.Configuration,
+        vulnerabilities: vulnerabilityProvider,
+        packageLimits: packageLimits);
+}
+catch (Exception exception) when (
+    exception is PackageStorageInUseException or PackageStorageCorruptionException)
+{
+    Console.Error.WriteLine(exception.Message);
+    return 2;
+}
+
 await app.StartAsync();
 
 var dataDirectory = ReadOption(arguments, "--data");
@@ -110,7 +121,7 @@ if (dataDirectory is not null)
         return 2;
     }
 
-    var store = app.Services.GetRequiredService<InMemoryPackageStore>();
+    var store = app.Services.GetRequiredService<IPackageStore>();
     foreach (var packagePath in Directory.EnumerateFiles(dataDirectory, "*.nupkg"))
     {
         await using var packageStream = File.OpenRead(packagePath);
