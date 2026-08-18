@@ -81,6 +81,20 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public static async Task<NuGetTestServerHost> StartAsync(
         ServerMode mode,
         AuthenticationConfiguration authentication,
+        string storageDirectory,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        var application = ServerApplication.Build(
+            storageDirectory: storageDirectory,
+            authentication: authentication,
+            mode: mode);
+        return await StartApplicationAsync(application, token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
         VulnerabilitySnapshot vulnerabilities,
         CancellationToken token = default)
     {
@@ -90,6 +104,13 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             authentication: authentication,
             vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
             mode: mode);
+        return await StartApplicationAsync(application, token);
+    }
+
+    private static async Task<NuGetTestServerHost> StartApplicationAsync(
+        WebApplication application,
+        CancellationToken token)
+    {
         try
         {
             await application.StartAsync(token);

@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Text.Json;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
@@ -56,5 +58,92 @@ public sealed class ProductionModeTests
 
         Assert.Equal("test", health.GetProperty("mode").GetString());
         Assert.Equal(HttpStatusCode.OK, state.StatusCode);
+    }
+
+    [Fact]
+    public async Task Liveness_remains_healthy_when_storage_readiness_fails()
+    {
+        var authentication = AuthenticationConfiguration.Create(
+            username: null,
+            password: null,
+            apiKey: "publish-key");
+        using var storage = TemporaryDirectory.Create();
+        await using var server = await NuGetTestServerHost.StartAsync(
+            ServerMode.Production,
+            authentication,
+            storage.Path);
+        Directory.Delete(storage.Path, recursive: true);
+
+        using var live = await server.HttpClient.GetAsync("/health/live");
+        using var ready = await server.HttpClient.GetAsync("/health/ready");
+        var readiness = await ready.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.Equal(HttpStatusCode.OK, live.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
+        Assert.Equal("unhealthy", readiness.GetProperty("status").GetString());
+        Assert.Equal("storage", readiness.GetProperty("dependency").GetString());
+    }
+
+    [Fact]
+    public async Task Requests_emit_open_telemetry_compatible_metrics_and_traces()
+    {
+        var measurements = new List<string>();
+        using var meterListener = new MeterListener
+        {
+            InstrumentPublished = (instrument, listener) =>
+            {
+                if (instrument.Meter.Name == "NuGet.TestServer")
+                {
+                    listener.EnableMeasurementEvents(instrument);
+                }
+            }
+        };
+        meterListener.SetMeasurementEventCallback<long>(
+            (instrument, _, _, _) => measurements.Add(instrument.Name));
+        meterListener.SetMeasurementEventCallback<double>(
+            (instrument, _, _, _) => measurements.Add(instrument.Name));
+        meterListener.Start();
+        var activities = new List<Activity>();
+        using var activityListener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "NuGet.TestServer",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllData,
+            ActivityStopped = activity => activities.Add(activity)
+        };
+        ActivitySource.AddActivityListener(activityListener);
+        await using var server = await NuGetTestServerHost.StartAsync();
+
+        using var response = await server.HttpClient.GetAsync("/v3/index.json");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("nuget.server.requests", measurements);
+        Assert.Contains("nuget.server.request.duration", measurements);
+        Assert.Contains(activities, activity => activity.OperationName == "nuget.request");
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        private TemporaryDirectory(string path) => Path = path;
+
+        public string Path { get; }
+
+        public static TemporaryDirectory Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "NuGet.TestServer.FunctionalTests",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            return new TemporaryDirectory(path);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
     }
 }
