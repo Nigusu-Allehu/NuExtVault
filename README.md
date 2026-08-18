@@ -112,12 +112,38 @@ the next startup; control-API resets use the same recoverable deletion protocol.
 Existing filesystem-only package layouts are imported in place, including
 `.unlisted` markers.
 
+Persistent exact lookup, registration enumeration, and stable paged search run
+against normalized, indexed SQLite metadata. The schema stores normalized package
+identity, semantic version ordering, listing and prerelease state, and a trigram
+full-text projection of package ID, description, and tags. Search count, page
+selection, and version metadata share one read transaction, so `totalHits` and
+the returned page represent one snapshot while packages are being published.
+Metadata-only requests do not open `.nupkg` bodies; package content is opened only
+for downloads or one-time import of an untracked filesystem package.
+
 Only one server process may use a storage root at a time; a second process exits
-with a clear diagnostic. Startup also verifies each tracked blob's identity and
-SHA-256 digest, removes interrupted temporary publications, recovers complete
-untracked blobs, and reports package-specific corruption instead of silently
-serving inconsistent state. Programmatic servers created without a storage path
-continue to use the isolated in-memory implementation.
+with a clear diagnostic. Startup validates that every tracked blob exists with
+the recorded length without reading package content, removes interrupted
+temporary publications, and recovers complete untracked blobs by validating and
+hashing them once. Programmatic servers created without a storage path continue
+to use the isolated in-memory implementation and the same `IPackageStore`
+semantics.
+
+### Indexed storage performance targets
+
+The deterministic Release-mode regression corpus contains 200 package versions
+with 16 KiB bodies. CI enforces these budgets on that corpus:
+
+| Area | Target |
+| --- | ---: |
+| Restart startup | under 5 seconds |
+| Restart allocations on the startup thread | under 12 MiB |
+| 100 indexed search page queries | under 5 seconds |
+| Concurrent consistency | 8 readers during 1 writer, with stable ordered pages |
+
+These are regression budgets for a local test server rather than production
+service-level guarantees. Package body size does not affect metadata-only startup
+or query allocations.
 
 Stop the server with Ctrl+C.
 

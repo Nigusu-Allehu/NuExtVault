@@ -147,6 +147,60 @@ public sealed class ProtocolResourceTests
     }
 
     [Fact]
+    public async Task Durable_indexed_queries_survive_restart_with_correct_protocol_metadata()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "NuGet.TestServer.FunctionalTests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using (var writer = await NuGetTestServerHost.StartAsync(
+                             directory,
+                             PackageTransferLimits.Default))
+            {
+                await writer.Packages.AddAsync(
+                    TestPackageBuilder.Create("Durable.Search", "1.0.0").Build());
+                await writer.Packages.AddAsync(
+                    TestPackageBuilder.Create("Durable.Search", "2.0.0-beta.1").Build());
+                await writer.Packages.AddAsync(
+                    TestPackageBuilder.Create("Durable.Search", "2.0.0").Build());
+            }
+
+            await using var reader = await NuGetTestServerHost.StartAsync(
+                directory,
+                PackageTransferLimits.Default);
+            var repository = Repository.Factory.GetCoreV3(reader.ServiceIndexUrl.ToString());
+            var search = await repository.GetResourceAsync<PackageSearchResource>()
+                ?? throw new InvalidOperationException("SearchQueryService was not discovered.");
+            var result = Assert.Single(await search.SearchAsync(
+                "durable",
+                new SearchFilter(includePrerelease: false),
+                0,
+                20,
+                NullLogger.Instance,
+                CancellationToken.None));
+
+            Assert.Equal("2.0.0", result.Identity.Version.ToNormalizedString());
+            Assert.Equal(
+                ["1.0.0", "2.0.0"],
+                (await result.GetVersionsAsync()).Select(version => version.Version.ToNormalizedString()));
+
+            using var response = await reader.HttpClient.GetAsync("/query?q=durable&skip=0&take=1");
+            response.EnsureSuccessStatusCode();
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+            Assert.Equal(1, json.RootElement.GetProperty("totalHits").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Protocol_delete_unlists_without_removing_download_content()
     {
         await using var server = await NuGetTestServerHost.StartAsync();

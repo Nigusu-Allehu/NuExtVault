@@ -15,7 +15,7 @@ public interface IPackageStore : IAsyncDisposable
 
     ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default);
 
-    ValueTask<IReadOnlyList<TestPackage>> SearchAsync(
+    ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,

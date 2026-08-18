@@ -132,6 +132,30 @@ public sealed record TestPackage : IDisposable
         }
     }
 
+    internal static TestPackage FromMetadata(
+        PackageMetadata metadata,
+        string contentPath)
+    {
+        using var nuspecStream = new MemoryStream(metadata.Nuspec, writable: false);
+        var nuspec = new NuspecReader(nuspecStream);
+        return new TestPackage
+        {
+            Identity = new PackageIdentity(
+                metadata.Id,
+                NuGetVersion.Parse(metadata.OriginalVersion)),
+            ContentPath = Path.GetFullPath(contentPath),
+            StoredContentLength = metadata.ContentLength,
+            NuspecContent = metadata.Nuspec,
+            NormalizedVersion = metadata.NormalizedVersion,
+            Description = metadata.Description,
+            Authors = metadata.Authors,
+            Tags = metadata.Tags,
+            DependencyGroups = nuspec.GetDependencyGroups().ToArray(),
+            Published = metadata.Published,
+            IsListed = metadata.IsListed
+        };
+    }
+
     public Stream OpenReadStream()
     {
         if (MemoryContent is not null)
