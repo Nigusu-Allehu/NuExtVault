@@ -21,11 +21,18 @@ public static class ServerApplication
         string? storageDirectory = null,
         AuthenticationConfiguration? authentication = null,
         VulnerabilitySnapshotProvider? vulnerabilities = null,
+        ServerMode mode = ServerMode.Test,
+        RuntimeStateConfiguration? runtimeState = null,
         PackageTransferLimits? packageLimits = null)
     {
-        packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
+        var hosting = ServerHostingOptions.Create(
+            mode,
+            url ?? "http://127.0.0.1:0",
+            authentication ?? AuthenticationConfiguration.Anonymous);
         var builder = WebApplication.CreateBuilder(args ?? []);
-        builder.WebHost.UseUrls(url ?? "http://127.0.0.1:0");
+        runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
+        packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
+        builder.WebHost.UseUrls(hosting.Url);
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = packageLimits.MaxRequestBodyBytes;
@@ -36,7 +43,9 @@ public static class ServerApplication
             options.MultipartBodyLengthLimit = packageLimits.MaxRequestBodyBytes;
         });
         builder.Services.AddSingleton(TimeProvider.System);
-        builder.Services.AddSingleton(authentication ?? AuthenticationConfiguration.Anonymous);
+        builder.Services.AddSingleton(hosting);
+        builder.Services.AddSingleton(hosting.Authentication);
+        builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(packageLimits);
         builder.Services.AddSingleton<IPackageStore>(_ =>
             storageDirectory is null
@@ -59,54 +68,65 @@ public static class ServerApplication
             throw;
         }
 
-        MapMiddleware(app);
+        MapMiddleware(app, mode);
         MapProtocolEndpoints(app);
-        MapControlEndpoints(app);
+        MapHealthEndpoint(app, mode);
+        if (mode == ServerMode.Test)
+        {
+            MapControlEndpoints(app);
+        }
+
         return app;
     }
 
-    private static void MapMiddleware(WebApplication app)
+    private static void MapMiddleware(WebApplication app, ServerMode mode)
     {
-        app.Use(async (context, next) =>
+        if (mode == ServerMode.Test)
         {
-            var recorder = context.RequestServices.GetRequiredService<RequestRecorder>();
-            var faults = context.RequestServices.GetRequiredService<FaultRuleStore>();
-            var sequence = recorder.NextSequence();
-            var started = Stopwatch.GetTimestamp();
-            string? faultRuleId = null;
-
-            try
+            app.Use(async (context, next) =>
             {
-                var fault = context.Request.Path.StartsWithSegments("/__test")
-                    ? null
-                    : faults.Match(context.Request.Method, context.Request.Path);
-                if (fault is not null)
+                var recorder = context.RequestServices.GetRequiredService<RequestRecorder>();
+                var faults = context.RequestServices.GetRequiredService<FaultRuleStore>();
+                var sequence = recorder.NextSequence();
+                var started = Stopwatch.GetTimestamp();
+                string? faultRuleId = null;
+
+                try
                 {
-                    faultRuleId = fault.Id;
-                    if (fault.Delay > TimeSpan.Zero)
+                    var fault = context.Request.Path.StartsWithSegments("/__test")
+                        ? null
+                        : faults.Match(context.Request.Method, context.Request.Path);
+                    if (fault is not null)
                     {
-                        await Task.Delay(fault.Delay, context.RequestAborted);
+                        faultRuleId = fault.Id;
+                        if (fault.Delay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(fault.Delay, context.RequestAborted);
+                        }
+
+                        context.Response.StatusCode = (int)fault.StatusCode;
+                        return;
                     }
 
-                    context.Response.StatusCode = (int)fault.StatusCode;
-                    return;
+                    await next(context);
                 }
-
-                await next(context);
-            }
-            finally
-            {
-                recorder.Add(new RequestRecord(
-                    sequence,
-                    recorder.UtcNow,
-                    context.Request.Method,
-                    context.Request.Path,
-                    context.Response.StatusCode,
-                    (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    faultRuleId,
-                    context.User.Identity?.Name));
-            }
-        });
+                finally
+                {
+                    if (!ClearsRequestHistory(context.Request))
+                    {
+                        recorder.Add(new RequestRecord(
+                            sequence,
+                            recorder.UtcNow,
+                            context.Request.Method,
+                            context.Request.Path,
+                            context.Response.StatusCode,
+                            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                            faultRuleId,
+                            context.User.Identity?.Name));
+                    }
+                }
+            });
+        }
 
         app.UseMiddleware<NuGetAuthenticationMiddleware>();
     }
@@ -230,29 +250,35 @@ public static class ServerApplication
                     return Results.NotFound();
                 }
 
-                var first = packages[0];
-                var last = packages[^1];
                 var root = GetRoot(context);
-                var normalizedId = first.Identity.Id.ToLowerInvariant();
+                var normalizedId = packages[0].Identity.Id.ToLowerInvariant();
                 return Results.Json(new Dictionary<string, object?>
                 {
                     ["@id"] = $"{root}/registration/{normalizedId}/index.json",
                     ["count"] = 1,
                     ["items"] = new[]
                     {
-                        new Dictionary<string, object?>
-                        {
-                            ["@id"] =
-                                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
-                            ["@type"] = "catalog:CatalogPage",
-                            ["count"] = packages.Count,
-                            ["lower"] = first.NormalizedVersion,
-                            ["upper"] = last.NormalizedVersion,
-                            ["items"] = packages.Select(
-                                package => RegistrationLeaf(context, package, vulnerabilities))
-                        }
+                        RegistrationPage(context, packages, vulnerabilities)
                     }
                 });
+            }).WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/registration/{id}/page/{lower}/{upper}.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            async Task<IResult> (
+                HttpContext context,
+                string id,
+                string lower,
+                string upper,
+                IPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
+                CancellationToken token) =>
+            {
+                var packages = await store.FindByIdAsync(id, token);
+                return RegistrationPageBounds.Matches(packages, lower, upper)
+                    ? Results.Json(RegistrationPage(context, packages, vulnerabilities))
+                    : Results.NotFound();
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
@@ -317,11 +343,18 @@ public static class ServerApplication
             .WithMetadata(NuGetAccessRequirement.Write);
     }
 
+    private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
+    {
+        app.MapGet("/__test/health", () => Results.Json(new
+        {
+            status = "healthy",
+            mode = mode.ToString().ToLowerInvariant()
+        }))
+            .WithMetadata(NuGetAccessRequirement.Anonymous);
+    }
+
     private static void MapControlEndpoints(WebApplication app)
     {
-        app.MapGet("/__test/health", () => Results.Json(new { status = "healthy" }))
-            .WithMetadata(NuGetAccessRequirement.Anonymous);
-
         app.MapGet(
             "/__test/state",
             async (IPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
@@ -329,7 +362,10 @@ public static class ServerApplication
                 {
                     packageCount = (await packages.GetAllAsync()).Count,
                     faultCount = faults.GetAll().Count,
-                    requestCount = requests.GetAll().Count
+                    faultCapacity = faults.Capacity,
+                    requestCount = requests.GetAll().Count,
+                    requestCapacity = requests.Capacity,
+                    evictedRequestCount = requests.EvictedCount
                 }))
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -481,10 +517,19 @@ public static class ServerApplication
 
         app.MapGet("/__test/faults", (FaultRuleStore faults) => Results.Json(faults.GetAll()))
             .WithMetadata(NuGetAccessRequirement.Control);
-        app.MapPost("/__test/faults", (FaultRule rule, FaultRuleStore faults) =>
+        app.MapPost("/__test/faults", IResult (FaultRule rule, FaultRuleStore faults) =>
         {
-            faults.Add(rule);
-            return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            try
+            {
+                faults.Add(rule);
+                return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            }
+            catch (FaultRuleStore.FaultRuleConflictException exception)
+            {
+                return Results.Problem(
+                    exception.Message,
+                    statusCode: StatusCodes.Status409Conflict);
+            }
         }).WithMetadata(NuGetAccessRequirement.Control);
         app.MapDelete("/__test/faults", (FaultRuleStore faults) =>
         {
@@ -622,6 +667,30 @@ public static class ServerApplication
         };
     }
 
+    private static Dictionary<string, object?> RegistrationPage(
+        HttpContext context,
+        IReadOnlyList<TestPackage> packages,
+        VulnerabilitySnapshotProvider vulnerabilities)
+    {
+        var first = packages[0];
+        var last = packages[^1];
+        var root = GetRoot(context);
+        var normalizedId = first.Identity.Id.ToLowerInvariant();
+        var parent = $"{root}/registration/{normalizedId}/index.json";
+        return new Dictionary<string, object?>
+        {
+            ["@id"] =
+                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
+            ["@type"] = "catalog:CatalogPage",
+            ["parent"] = parent,
+            ["count"] = packages.Count,
+            ["lower"] = first.NormalizedVersion,
+            ["upper"] = last.NormalizedVersion,
+            ["items"] = packages.Select(
+                package => RegistrationLeaf(context, package, vulnerabilities))
+        };
+    }
+
     private static object SearchResult(
         HttpContext context,
         TestPackage package,
@@ -666,4 +735,10 @@ public static class ServerApplication
         $"{context.Request.Scheme}://{context.Request.Host}";
 
     public sealed record PackageContentRequest(string? Content);
+
+    private static bool ClearsRequestHistory(HttpRequest request) =>
+        (HttpMethods.IsPost(request.Method) &&
+         request.Path.Equals("/__test/reset", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpMethods.IsDelete(request.Method) &&
+         request.Path.Equals("/__test/requests", StringComparison.OrdinalIgnoreCase));
 }
