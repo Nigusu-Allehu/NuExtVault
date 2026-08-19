@@ -248,7 +248,7 @@ public static class ServerApplication
                 bool? prerelease,
                 CancellationToken token) =>
             {
-                var packages = await store.SearchAsync(
+                var page = await store.SearchAsync(
                     q ?? string.Empty,
                     prerelease ?? false,
                     skip ?? 0,
@@ -257,8 +257,11 @@ public static class ServerApplication
 
                 return Results.Json(new
                 {
-                    totalHits = packages.Count,
-                    data = packages.Select(package => SearchResult(context, package))
+                    totalHits = page.TotalHits,
+                    data = page.Items.Select(item => SearchResult(
+                        context,
+                        item.Package,
+                        item.Versions))
                 });
             }).WithMetadata(NuGetAccessRequirement.Read);
 
@@ -501,7 +504,10 @@ public static class ServerApplication
         };
     }
 
-    private static object SearchResult(HttpContext context, TestPackage package)
+    private static object SearchResult(
+        HttpContext context,
+        TestPackage package,
+        IReadOnlyList<TestPackage> versions)
     {
         var root = GetRoot(context);
         var id = package.Identity.Id.ToLowerInvariant();
@@ -522,15 +528,13 @@ public static class ServerApplication
             ["totalDownloads"] = 0,
             ["verified"] = false,
             ["packageTypes"] = Array.Empty<object>(),
-            ["versions"] = new[]
-            {
+            ["versions"] = versions.Select(item =>
                 new Dictionary<string, object?>
                 {
-                    ["version"] = version,
+                    ["version"] = item.NormalizedVersion,
                     ["downloads"] = 0,
-                    ["@id"] = $"{root}/registration/{id}/{version}.json"
-                }
-            }
+                    ["@id"] = $"{root}/registration/{id}/{item.NormalizedVersion}.json"
+                })
         };
     }
 
