@@ -141,6 +141,70 @@ public sealed class CommandLineEndToEndTests
     }
 
     [Fact]
+    public async Task Dotnet_restore_downloads_an_unlisted_exact_version()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Unlisted.Restore", "1.0.0").Build());
+        using var unlist = await server.HttpClient.DeleteAsync(
+            "/package/Unlisted.Restore/1.0.0");
+        Assert.Equal(HttpStatusCode.NoContent, unlist.StatusCode);
+
+        using var directory = TemporaryDirectory.Create();
+        var projectPath = Path.Combine(directory.Path, "UnlistedRestore.csproj");
+        var packagesPath = Path.Combine(directory.Path, "packages");
+        await File.WriteAllTextAsync(
+            projectPath,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Unlisted.Restore" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+        var configPath = Path.Combine(directory.Path, "NuGet.config");
+        await File.WriteAllTextAsync(
+            configPath,
+            $"""
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="TestServer" value="{server.ServiceIndexUrl}" allowInsecureConnections="true" />
+              </packageSources>
+            </configuration>
+            """);
+
+        var result = await RunAsync(
+            "dotnet",
+            $"restore \"{projectPath}\" --configfile \"{configPath}\" --packages \"{packagesPath}\" --no-cache",
+            directory.Path);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.Contains(
+            "Unlisted.Restore/1.0.0",
+            await File.ReadAllTextAsync(
+                Path.Combine(directory.Path, "obj", "project.assets.json")));
+        Assert.True(
+            File.Exists(Path.Combine(
+                packagesPath,
+                "unlisted.restore",
+                "1.0.0",
+                "unlisted.restore.1.0.0.nupkg")));
+        Assert.Contains(
+            await server.Requests.GetAsync(),
+            request => request.Path ==
+                "/flatcontainer/unlisted.restore/1.0.0/unlisted.restore.1.0.0.nupkg");
+        using var search = await server.HttpClient.GetAsync("/query?q=Unlisted.Restore");
+        Assert.DoesNotContain(
+            "Unlisted.Restore",
+            await search.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Dotnet_nuget_push_publishes_through_the_standard_client()
     {
         await using var server = await NuGetTestServerHost.StartAsync();
