@@ -460,9 +460,21 @@ public sealed class CommandLineEndToEndTests
 
         public void Dispose()
         {
-            if (Directory.Exists(Path))
+            const int maxAttempts = 20;
+            for (var attempt = 1; Directory.Exists(Path); attempt++)
             {
-                Directory.Delete(Path, recursive: true);
+                try
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
             }
         }
     }
