@@ -109,7 +109,10 @@ try
         packageLimits: packageLimits,
         trustedProxies: ParseTrustedProxies(arguments));
 }
-catch (ServerHostingConfigurationException exception)
+catch (Exception exception) when (
+    exception is ServerHostingConfigurationException
+        or PackageStorageInUseException
+        or PackageStorageCorruptionException)
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
@@ -126,7 +129,7 @@ if (dataDirectory is not null)
         return 2;
     }
 
-    var store = app.Services.GetRequiredService<InMemoryPackageStore>();
+    var store = app.Services.GetRequiredService<IPackageStore>();
     foreach (var packagePath in Directory.EnumerateFiles(dataDirectory, "*.nupkg"))
     {
         await using var packageStream = File.OpenRead(packagePath);

@@ -20,7 +20,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ControlUrl = new Uri(baseUrl, "/__test");
         HttpClient = new HttpClient { BaseAddress = baseUrl };
         Packages = new PackageControlClient(
-            application.Services.GetRequiredService<InMemoryPackageStore>());
+            application.Services.GetRequiredService<IPackageStore>());
         Faults = new FaultControlClient(
             application.Services.GetRequiredService<FaultRuleStore>());
         Requests = new RequestControlClient(
@@ -110,6 +110,35 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             packageLimits,
             new RuntimeStateConfiguration(),
             token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        string storageDirectory,
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        ArgumentNullException.ThrowIfNull(packageLimits);
+        var application = ServerApplication.Build(
+            storageDirectory: storageDirectory,
+            authentication: AuthenticationConfiguration.Anonymous,
+            vulnerabilities: new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()),
+            packageLimits: packageLimits);
+        try
+        {
+            await application.StartAsync(token);
+            var address = application.Services
+                .GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?
+                .Addresses.SingleOrDefault()
+                ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
+            return new NuGetTestServerHost(application, new Uri(address));
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
+        }
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -245,7 +274,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 }
 
-public sealed class PackageControlClient(InMemoryPackageStore store)
+public sealed class PackageControlClient(IPackageStore store)
 {
     public ValueTask AddAsync(TestPackage package, CancellationToken token = default) =>
         store.AddAsync(package, token);

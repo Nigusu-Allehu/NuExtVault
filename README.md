@@ -92,7 +92,7 @@ Seed every `.nupkg` in a directory during startup:
 dotnet run --project .\src\NuGet.TestServer.Cli -- start --data .\packages
 ```
 
-CLI packages persist across restarts under:
+CLI packages persist transactionally across restarts under:
 
 ```text
 %LOCALAPPDATA%\nuget-test-server
@@ -105,6 +105,21 @@ development:
 ```powershell
 nuget-test-server start --storage .\.nuget-test-server
 ```
+
+Package bodies remain streamed, file-backed blobs under `<storage>\packages`.
+SQLite metadata is stored in `<storage>\packages.db` with an explicit,
+automatically migrated schema version. Push, listing changes, deletion, and
+metadata publication are coordinated so interrupted operations are recovered on
+the next startup; control-API resets use the same recoverable deletion protocol.
+Existing filesystem-only package layouts are imported in place, including
+`.unlisted` markers.
+
+Only one server process may use a storage root at a time; a second process exits
+with a clear diagnostic. Startup also verifies each tracked blob's identity and
+SHA-256 digest, removes interrupted temporary publications, recovers complete
+untracked blobs, and reports package-specific corruption instead of silently
+serving inconsistent state. Programmatic servers created without a storage path
+continue to use the isolated in-memory implementation.
 
 Stop the server with Ctrl+C.
 
@@ -695,6 +710,6 @@ Repository agents and contributors follow the workflow in
 - This is test infrastructure, not a production package feed.
 - Programmatic test-server storage is in memory; the CLI persists packages locally.
 - The server uses anonymous HTTP by default unless credentials are supplied.
-- Multi-user authorization, scoped keys, HTTPS, advanced network faults, symbol
-  download, and repository signatures are not yet implemented.
+- Automatic certificate provisioning, advanced network faults, symbol download,
+  and repository signatures are not yet implemented.
 - The server binds to `127.0.0.1` unless its hosting configuration is changed.

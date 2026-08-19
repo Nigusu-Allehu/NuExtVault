@@ -5,7 +5,7 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore : IAsyncDisposable
+public sealed class InMemoryPackageStore : IPackageStore
 {
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
         new(StringComparer.OrdinalIgnoreCase);
@@ -100,26 +100,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(content);
         token.ThrowIfCancellationRequested();
-        TestPackage package;
-        try
-        {
-            package = TestPackage.FromContent(content);
-            using var archive = new ZipArchive(
-                new MemoryStream(content, writable: false),
-                ZipArchiveMode.Read);
-            if (!archive.Entries.Any(entry =>
-                    entry.FullName.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new InvalidDataException("A symbol package must contain a PDB.");
-            }
-        }
-        catch (Exception exception) when (
-            exception is InvalidPackageException or InvalidDataException)
-        {
-            throw new InvalidPackageException(
-                "The content is not a valid NuGet symbol package.",
-                exception);
-        }
+        var package = ParseSymbolPackage(content);
 
         var key = Key(package.Identity.Id, package.NormalizedVersion);
         await _persistenceGate.WaitAsync(token);
@@ -363,6 +344,31 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
 
     private static string Key(string id, string version) =>
         $"{id.ToLowerInvariant()}\n{version.ToLowerInvariant()}";
+
+    internal static TestPackage ParseSymbolPackage(byte[] content)
+    {
+        try
+        {
+            var package = TestPackage.FromContent(content);
+            using var archive = new ZipArchive(
+                new MemoryStream(content, writable: false),
+                ZipArchiveMode.Read);
+            if (!archive.Entries.Any(entry =>
+                    entry.FullName.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidDataException("A symbol package must contain a PDB.");
+            }
+
+            return package;
+        }
+        catch (Exception exception) when (
+            exception is InvalidPackageException or InvalidDataException)
+        {
+            throw new InvalidPackageException(
+                "The content is not a valid NuGet symbol package.",
+                exception);
+        }
+    }
 
     private static string Normalize(string version)
     {
