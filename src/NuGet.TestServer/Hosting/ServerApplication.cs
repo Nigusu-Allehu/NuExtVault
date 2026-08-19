@@ -23,6 +23,7 @@ public static class ServerApplication
         VulnerabilitySnapshotProvider? vulnerabilities = null,
         PackageTransferLimits? packageLimits = null,
         ServerMode mode = ServerMode.Test,
+        RuntimeStateConfiguration? runtimeState = null,
         TrustedProxyOptions? trustedProxies = null,
         int maximumAuthenticationFailures = 5,
         SupplyChainOptions? supplyChain = null,
@@ -35,6 +36,7 @@ public static class ServerApplication
             authentication ?? AuthenticationConfiguration.Anonymous,
             trustedProxies);
         var builder = WebApplication.CreateBuilder(args ?? []);
+        runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
         builder.WebHost.UseUrls(hosting.Url);
         builder.WebHost.ConfigureKestrel(options =>
         {
@@ -48,6 +50,7 @@ public static class ServerApplication
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
+        builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(packageLimits);
         builder.Services.AddSingleton<IPackageStore>(_ =>
         {
@@ -130,15 +133,18 @@ public static class ServerApplication
                 }
                 finally
                 {
-                    recorder.Add(new RequestRecord(
-                        sequence,
-                        recorder.UtcNow,
-                        context.Request.Method,
-                        context.Request.Path,
-                        context.Response.StatusCode,
-                        (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                        faultRuleId,
-                        context.User.Identity?.Name));
+                    if (!ClearsRequestHistory(context.Request))
+                    {
+                        recorder.Add(new RequestRecord(
+                            sequence,
+                            recorder.UtcNow,
+                            context.Request.Method,
+                            context.Request.Path,
+                            context.Response.StatusCode,
+                            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                            faultRuleId,
+                            context.User.Identity?.Name));
+                    }
                 }
             });
         }
@@ -265,29 +271,35 @@ public static class ServerApplication
                     return Results.NotFound();
                 }
 
-                var first = packages[0];
-                var last = packages[^1];
                 var root = GetRoot(context);
-                var normalizedId = first.Identity.Id.ToLowerInvariant();
+                var normalizedId = packages[0].Identity.Id.ToLowerInvariant();
                 return Results.Json(new Dictionary<string, object?>
                 {
                     ["@id"] = $"{root}/registration/{normalizedId}/index.json",
                     ["count"] = 1,
                     ["items"] = new[]
                     {
-                        new Dictionary<string, object?>
-                        {
-                            ["@id"] =
-                                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
-                            ["@type"] = "catalog:CatalogPage",
-                            ["count"] = packages.Count,
-                            ["lower"] = first.NormalizedVersion,
-                            ["upper"] = last.NormalizedVersion,
-                            ["items"] = packages.Select(
-                                package => RegistrationLeaf(context, package, vulnerabilities))
-                        }
+                        RegistrationPage(context, packages, vulnerabilities)
                     }
                 });
+            }).WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/registration/{id}/page/{lower}/{upper}.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            async Task<IResult> (
+                HttpContext context,
+                string id,
+                string lower,
+                string upper,
+                IPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
+                CancellationToken token) =>
+            {
+                var packages = await store.FindByIdAsync(id, token);
+                return RegistrationPageBounds.Matches(packages, lower, upper)
+                    ? Results.Json(RegistrationPage(context, packages, vulnerabilities))
+                    : Results.NotFound();
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
@@ -319,7 +331,7 @@ public static class ServerApplication
                 bool? prerelease,
                 CancellationToken token) =>
             {
-                var packages = await store.SearchAsync(
+                var page = await store.SearchAsync(
                     q ?? string.Empty,
                     prerelease ?? false,
                     skip ?? 0,
@@ -328,8 +340,11 @@ public static class ServerApplication
 
                 return Results.Json(new
                 {
-                    totalHits = packages.Count,
-                    data = packages.Select(package => SearchResult(context, package))
+                    totalHits = page.TotalHits,
+                    data = page.Items.Select(item => SearchResult(
+                        context,
+                        item.Package,
+                        item.Versions))
                 });
             }).WithMetadata(NuGetAccessRequirement.Read);
 
@@ -498,7 +513,10 @@ public static class ServerApplication
                 {
                     packageCount = (await packages.GetAllAsync()).Count,
                     faultCount = faults.GetAll().Count,
-                    requestCount = requests.GetAll().Count
+                    faultCapacity = faults.Capacity,
+                    requestCount = requests.GetAll().Count,
+                    requestCapacity = requests.Capacity,
+                    evictedRequestCount = requests.EvictedCount
                 }))
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -650,10 +668,19 @@ public static class ServerApplication
 
         app.MapGet("/__test/faults", (FaultRuleStore faults) => Results.Json(faults.GetAll()))
             .WithMetadata(NuGetAccessRequirement.Control);
-        app.MapPost("/__test/faults", (FaultRule rule, FaultRuleStore faults) =>
+        app.MapPost("/__test/faults", IResult (FaultRule rule, FaultRuleStore faults) =>
         {
-            faults.Add(rule);
-            return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            try
+            {
+                faults.Add(rule);
+                return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            }
+            catch (FaultRuleStore.FaultRuleConflictException exception)
+            {
+                return Results.Problem(
+                    exception.Message,
+                    statusCode: StatusCodes.Status409Conflict);
+            }
         }).WithMetadata(NuGetAccessRequirement.Control);
         app.MapDelete("/__test/faults", (FaultRuleStore faults) =>
         {
@@ -1020,7 +1047,34 @@ public static class ServerApplication
         };
     }
 
-    private static object SearchResult(HttpContext context, TestPackage package)
+    private static Dictionary<string, object?> RegistrationPage(
+        HttpContext context,
+        IReadOnlyList<TestPackage> packages,
+        VulnerabilitySnapshotProvider vulnerabilities)
+    {
+        var first = packages[0];
+        var last = packages[^1];
+        var root = GetRoot(context);
+        var normalizedId = first.Identity.Id.ToLowerInvariant();
+        var parent = $"{root}/registration/{normalizedId}/index.json";
+        return new Dictionary<string, object?>
+        {
+            ["@id"] =
+                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
+            ["@type"] = "catalog:CatalogPage",
+            ["parent"] = parent,
+            ["count"] = packages.Count,
+            ["lower"] = first.NormalizedVersion,
+            ["upper"] = last.NormalizedVersion,
+            ["items"] = packages.Select(
+                package => RegistrationLeaf(context, package, vulnerabilities))
+        };
+    }
+
+    private static object SearchResult(
+        HttpContext context,
+        TestPackage package,
+        IReadOnlyList<TestPackage> versions)
     {
         var root = GetRoot(context);
         var id = package.Identity.Id.ToLowerInvariant();
@@ -1041,15 +1095,13 @@ public static class ServerApplication
             ["totalDownloads"] = 0,
             ["verified"] = false,
             ["packageTypes"] = Array.Empty<object>(),
-            ["versions"] = new[]
-            {
+            ["versions"] = versions.Select(item =>
                 new Dictionary<string, object?>
                 {
-                    ["version"] = version,
+                    ["version"] = item.NormalizedVersion,
                     ["downloads"] = 0,
-                    ["@id"] = $"{root}/registration/{id}/{version}.json"
-                }
-            }
+                    ["@id"] = $"{root}/registration/{id}/{item.NormalizedVersion}.json"
+                })
         };
     }
 
@@ -1063,4 +1115,10 @@ public static class ServerApplication
         $"{context.Request.Scheme}://{context.Request.Host}";
 
     public sealed record PackageContentRequest(string? Content);
+
+    private static bool ClearsRequestHistory(HttpRequest request) =>
+        (HttpMethods.IsPost(request.Method) &&
+         request.Path.Equals("/__test/reset", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpMethods.IsDelete(request.Method) &&
+         request.Path.Equals("/__test/requests", StringComparison.OrdinalIgnoreCase));
 }

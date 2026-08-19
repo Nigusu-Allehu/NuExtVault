@@ -117,7 +117,6 @@ catch (Exception exception) when (
     Console.Error.WriteLine(exception.Message);
     return 2;
 }
-
 await app.StartAsync();
 
 var dataDirectory = ReadOption(arguments, "--data");

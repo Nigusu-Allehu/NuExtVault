@@ -198,6 +198,34 @@ public sealed class SupplyChainPackageStoreTests
     }
 
     [Fact]
+    public async Task Missing_policy_database_recovers_durable_packages_quarantined()
+    {
+        using var directory = TemporaryDirectory.Create();
+        await using (var first = new SupplyChainPackageStore(
+                         new DurablePackageStore(directory.Path),
+                         directory.Path,
+                         scanner: new FixedScanner(PackageScanOutcome.Malicious)))
+        {
+            var result = await first.PublishAsync(new(
+                TestPackageBuilder.Create("Rejected.Recovery", "1.0.0").Build(),
+                "publisher",
+                "repository"));
+            Assert.Equal(PackagePublicationOutcome.Rejected, result.Outcome);
+        }
+
+        File.Delete(Path.Combine(directory.Path, "supply-chain.db"));
+
+        await using var recovered = new SupplyChainPackageStore(
+            new DurablePackageStore(directory.Path),
+            directory.Path);
+
+        Assert.Null(await recovered.FindAsync("Rejected.Recovery", "1.0.0"));
+        Assert.Equal(
+            PackageModerationState.Quarantined,
+            (await recovered.GetStatusAsync("Rejected.Recovery", "1.0.0"))!.State);
+    }
+
+    [Fact]
     public async Task Search_uses_latest_published_version_and_deleted_tombstones_cannot_republish()
     {
         await using var store = new SupplyChainPackageStore(
@@ -225,13 +253,17 @@ public sealed class SupplyChainPackageStoreTests
             "repository",
             Administrator: true));
 
+        var search = await quarantinedStore.SearchAsync(
+            "Search.Package",
+            includePrerelease: false,
+            skip: 0,
+            take: 20);
+        Assert.Equal(1, search.TotalHits);
+        var searchItem = Assert.Single(search.Items);
+        Assert.Equal("1.0.0", searchItem.Package.NormalizedVersion);
         Assert.Equal(
             "1.0.0",
-            Assert.Single(await quarantinedStore.SearchAsync(
-                "Search.Package",
-                includePrerelease: false,
-                skip: 0,
-                take: 20)).NormalizedVersion);
+            Assert.Single(searchItem.Versions).NormalizedVersion);
 
         Assert.True(await store.DeleteControlledAsync(
             "Visible.Package",

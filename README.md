@@ -118,6 +118,8 @@ Existing filesystem-only package layouts are imported in place, including
 
 Supply-chain state, package-ID ownership, quota accounting, validation results,
 and moderation audit history are stored in `<storage>\supply-chain.db`.
+If that policy database is missing, existing durable packages are recovered as
+quarantined rather than trusted as published and require explicit moderation.
 Quarantined, rejected, and deleted packages remain absent from flat-container,
 registration, and search responses.
 Quota accounting includes every retained blob, including rejected and
@@ -553,6 +555,34 @@ var limits = new PackageTransferLimits
 await using var server = await NuGetTestServerHost.StartAsync(limits);
 ```
 
+### Bound runtime request and fault state
+
+Request history retains the newest 10,000 requests by sequence, and a server
+accepts at most 100 fault rules by default. Old request records are evicted
+deterministically; adding a fault rule at capacity returns HTTP 409.
+
+Override the CLI defaults through standard ASP.NET Core configuration:
+
+```powershell
+$env:RuntimeState__RequestHistoryCapacity = "2000"
+$env:RuntimeState__FaultRuleCapacity = "25"
+nuget-test-server start
+```
+
+Configure an in-process server directly:
+
+```csharp
+await using var server = await NuGetTestServerHost.StartAsync(
+    new RuntimeStateConfiguration(
+        requestHistoryCapacity: 2000,
+        faultRuleCapacity: 25));
+```
+
+`GET /__test/state` reports `requestCount`, `requestCapacity`,
+`evictedRequestCount`, `faultCount`, and `faultCapacity`. Resetting the server
+or deleting request history clears retained requests and the eviction count;
+the reset request itself is not retained.
+
 ## Use the control API
 
 The `/__test` control endpoints are test-only and are never advertised in the
@@ -655,8 +685,8 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
-- Inline registration metadata
-- Package search
+- Registration indexes, pages, and leaf metadata
+- Package search with stable pagination totals and complete listed-version metadata
 - Package push
 - Package unlisting
 - Package seeding and hard deletion through the control API

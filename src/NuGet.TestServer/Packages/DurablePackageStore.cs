@@ -97,7 +97,7 @@ public sealed class DurablePackageStore : IPackageStore
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default) =>
         _cache.GetAllAsync(token);
 
-    public ValueTask<IReadOnlyList<TestPackage>> SearchAsync(
+    public ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,

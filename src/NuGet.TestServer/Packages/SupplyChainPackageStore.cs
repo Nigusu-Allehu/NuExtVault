@@ -30,7 +30,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
         var dataSource = storageDirectory is null
             ? ":memory:"
             : Path.Combine(Path.GetFullPath(storageDirectory), "supply-chain.db");
-        var trustUntrackedPackages = storageDirectory is null || !File.Exists(dataSource);
+        var trustUntrackedPackages = storageDirectory is null;
         if (storageDirectory is not null)
         {
             Directory.CreateDirectory(storageDirectory);
@@ -339,7 +339,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
             IsPublished(package.Identity.Id, package.NormalizedVersion)).ToArray();
     }
 
-    public async ValueTask<IReadOnlyList<TestPackage>> SearchAsync(
+    public async ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,
@@ -348,20 +348,26 @@ public sealed class SupplyChainPackageStore : IPackageStore
     {
         query ??= string.Empty;
         var packages = await _inner.GetAllAsync(token);
-        return packages
+        var matches = packages
             .Where(package => IsPublished(package.Identity.Id, package.NormalizedVersion))
             .Where(package => package.IsListed)
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
-            .Where(package =>
+            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Any(package =>
                 package.Identity.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 package.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.MaxBy(package => package.Identity.Version)!)
-            .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            .Select(group => new PackageSearchItem(
+                group.MaxBy(package => package.Identity.Version)!,
+                group.OrderBy(package => package.Identity.Version).ToArray()))
+            .OrderBy(item => item.Package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Package.Identity.Id, StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyList<PackageSearchItem> items = matches
             .Skip(Math.Max(0, skip))
             .Take(Math.Clamp(take, 0, 1000))
             .ToArray();
+        return new PackageSearchPage(matches.Length, items);
     }
 
     public async ValueTask<bool> SetListedAsync(
