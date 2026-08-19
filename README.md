@@ -44,7 +44,9 @@ The CLI selects an available loopback port and prints the endpoints:
 
 ```text
 Source:      http://127.0.0.1:54321/v3/index.json
+Mode:        Test
 Control API: http://127.0.0.1:54321/__test
+Health:      http://127.0.0.1:54321/__test/health
 Storage:     C:\Users\<user>\AppData\Local\nuget-test-server
 Vulnerabilities: 2026-08-18T17:36:11.6736167+00:00 (<snapshot-id>)
 ```
@@ -120,6 +122,33 @@ serving inconsistent state. Programmatic servers created without a storage path
 continue to use the isolated in-memory implementation.
 
 Stop the server with Ctrl+C.
+
+### Use production-safe mode
+
+Production-safe mode removes the test control surface while retaining the NuGet
+protocol endpoints:
+
+```powershell
+$env:NUGET_TEST_SERVER_API_KEY = "<secret>"
+nuget-test-server start --production --api-key-env NUGET_TEST_SERVER_API_KEY
+```
+
+`GET /__test/health` remains available and reports `"mode":"production"`.
+Other `/__test` routes are not mapped, including state and package controls,
+reset, hard deletion, request inspection, and fault injection. Test mode remains
+the default and retains all existing test controls.
+
+Production mode refuses anonymous write configuration. It also refuses cleartext
+HTTP on non-loopback listeners. The CLI always binds to loopback, where HTTP is
+appropriate for a local tool and an API key or Basic credentials protect writes.
+Library hosts may use HTTPS on a non-loopback listener when Kestrel certificates
+are configured separately.
+
+A reverse proxy can expose the loopback listener, but the server cannot verify
+the proxy's public TLS, network policy, forwarded-host handling, or identity
+controls. Operators are responsible for those boundaries. This mode provides
+endpoint reduction and rejects unsafe application defaults; it does not add the
+broader remote identity and transport features tracked separately.
 
 ## Install the CLI as a local .NET tool
 
@@ -388,9 +417,39 @@ var limits = new PackageTransferLimits
 await using var server = await NuGetTestServerHost.StartAsync(limits);
 ```
 
+### Bound runtime request and fault state
+
+Request history retains the newest 10,000 requests by sequence, and a server
+accepts at most 100 fault rules by default. Old request records are evicted
+deterministically; adding a fault rule at capacity returns HTTP 409.
+
+Override the CLI defaults through standard ASP.NET Core configuration:
+
+```powershell
+$env:RuntimeState__RequestHistoryCapacity = "2000"
+$env:RuntimeState__FaultRuleCapacity = "25"
+nuget-test-server start
+```
+
+Configure an in-process server directly:
+
+```csharp
+await using var server = await NuGetTestServerHost.StartAsync(
+    new RuntimeStateConfiguration(
+        requestHistoryCapacity: 2000,
+        faultRuleCapacity: 25));
+```
+
+`GET /__test/state` reports `requestCount`, `requestCapacity`,
+`evictedRequestCount`, `faultCount`, and `faultCapacity`. Resetting the server
+or deleting request history clears retained requests and the eviction count;
+the reset request itself is not retained.
+
 ## Use the control API
 
-The `/__test` endpoints are test-only and are never advertised in the NuGet service index.
+The `/__test` control endpoints are test-only and are never advertised in the
+NuGet service index. Production-safe mode maps only `/__test/health`; all
+control endpoints below are absent.
 
 `POST /__test/packages` accepts `application/octet-stream` for memory-safe
 package uploads. The existing JSON `{ "content": "<base64>" }` format remains
@@ -488,8 +547,8 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
-- Inline registration metadata
-- Package search
+- Registration indexes, pages, and leaf metadata
+- Package search with stable pagination totals and complete listed-version metadata
 - Package push
 - Package unlisting
 - Package seeding and hard deletion through the control API

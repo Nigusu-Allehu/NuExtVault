@@ -264,6 +264,70 @@ public sealed class CommandLineEndToEndTests
     }
 
     [Fact]
+    public async Task Cli_production_mode_rejects_anonymous_configuration()
+    {
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+
+        var result = await RunAsync(
+            "dotnet",
+            $"\"{cliPath}\" start --production",
+            AppContext.BaseDirectory);
+
+        Assert.Equal(2, result.ExitCode);
+        Assert.Contains("authentication", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Cli_production_mode_reports_mode_and_omits_control_api()
+    {
+        var port = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"\"{cliPath}\" start --production --port {port} --storage \"{storage.Path}\" --api-key-env TEST_SERVER_KEY",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEST_SERVER_KEY"] = "publish-key";
+        using var process = Process.Start(startInfo)!;
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}")
+            };
+            await WaitUntilHealthyAsync(client);
+            using var health = await client.GetAsync("/__test/health");
+            var healthBody = await health.Content.ReadAsStringAsync();
+            using var control = await client.GetAsync("/__test/state");
+
+            Assert.Contains("\"mode\":\"production\"", healthBody);
+            Assert.Equal(HttpStatusCode.NotFound, control.StatusCode);
+
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            var output = await process.StandardOutput.ReadToEndAsync() +
+                         await process.StandardError.ReadToEndAsync();
+            Assert.Contains("Mode:        Production", output);
+            Assert.DoesNotContain("Control API:", output);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task Cli_api_key_option_protects_push_but_not_reads()
     {
         var port = GetAvailablePort();

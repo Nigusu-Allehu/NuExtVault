@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
+    <InternalsVisibleTo Include="NuGet.TestServer.UnitTests" />
   </ItemGroup>
 
 </Project>

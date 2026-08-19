@@ -1,11 +1,19 @@
-using System.Collections.Concurrent;
+using NuGet.TestServer.Hosting;
 
 namespace NuGet.TestServer.Faults;
 
-public sealed class FaultRuleStore
+public sealed class FaultRuleStore(RuntimeStateConfiguration configuration)
 {
-    private readonly ConcurrentDictionary<string, RuleState> _rules =
+    private readonly object _gate = new();
+    private readonly Dictionary<string, RuleState> _rules =
         new(StringComparer.OrdinalIgnoreCase);
+
+    public int Capacity { get; } = configuration.FaultRuleCapacity;
+
+    public FaultRuleStore()
+        : this(new RuntimeStateConfiguration())
+    {
+    }
 
     public void Add(FaultRule rule)
     {
@@ -20,29 +28,63 @@ public sealed class FaultRuleStore
             throw new ArgumentOutOfRangeException(nameof(rule), "Remaining matches must be positive.");
         }
 
-        if (!_rules.TryAdd(rule.Id, new RuleState(rule)))
+        lock (_gate)
         {
-            throw new InvalidOperationException($"Fault rule '{rule.Id}' already exists.");
+            if (_rules.ContainsKey(rule.Id))
+            {
+                throw new FaultRuleConflictException(
+                    $"Fault rule '{rule.Id}' already exists.");
+            }
+
+            if (_rules.Count >= Capacity)
+            {
+                throw new FaultRuleConflictException(
+                    $"The fault rule capacity of {Capacity} has been reached.");
+            }
+
+            _rules.Add(rule.Id, new RuleState(rule));
         }
     }
 
+    internal sealed class FaultRuleConflictException(string message)
+        : InvalidOperationException(message);
+
     public FaultRule? Match(string method, string path)
     {
-        foreach (var state in _rules.Values.OrderBy(value => value.Rule.Id, StringComparer.Ordinal))
+        lock (_gate)
         {
-            if (state.TryMatch(method, path))
+            foreach (var state in _rules.Values.OrderBy(
+                         value => value.Rule.Id,
+                         StringComparer.Ordinal))
             {
-                return state.Rule;
+                if (state.TryMatch(method, path))
+                {
+                    return state.Rule;
+                }
             }
         }
 
         return null;
     }
 
-    public IReadOnlyList<FaultRule> GetAll() =>
-        _rules.Values.Select(state => state.Snapshot()).OrderBy(rule => rule.Id).ToArray();
+    public IReadOnlyList<FaultRule> GetAll()
+    {
+        lock (_gate)
+        {
+            return _rules.Values
+                .Select(state => state.Snapshot())
+                .OrderBy(rule => rule.Id)
+                .ToArray();
+        }
+    }
 
-    public void Reset() => _rules.Clear();
+    public void Reset()
+    {
+        lock (_gate)
+        {
+            _rules.Clear();
+        }
+    }
 
     private sealed class RuleState(FaultRule rule)
     {
