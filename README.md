@@ -111,7 +111,8 @@ Stop the server with Ctrl+C.
 ### Use production-safe mode
 
 Production-safe mode removes the test control surface while retaining the NuGet
-protocol endpoints:
+protocol endpoints. The legacy single-key form remains available for local
+loopback use:
 
 ```powershell
 $env:NUGET_TEST_SERVER_API_KEY = "<secret>"
@@ -129,11 +130,68 @@ appropriate for a local tool and an API key or Basic credentials protect writes.
 Library hosts may use HTTPS on a non-loopback listener when Kestrel certificates
 are configured separately.
 
-A reverse proxy can expose the loopback listener, but the server cannot verify
-the proxy's public TLS, network policy, forwarded-host handling, or identity
-controls. Operators are responsible for those boundaries. This mode provides
-endpoint reduction and rejects unsafe application defaults; it does not add the
-broader remote identity and transport features tracked separately.
+For remote production use, configure scoped identities through an environment
+configuration provider. Do not put the JSON or its credentials directly on the
+command line:
+
+```powershell
+$env:NUGET_TEST_SERVER_IDENTITIES = @'
+{
+  "identities": [
+    {
+      "name": "contoso-publisher",
+      "apiKeys": ["current-key", "previous-key-during-rotation"],
+      "passwords": [],
+      "scopes": ["read", "publish", "unlist"],
+      "namespaces": ["Contoso."]
+    },
+    {
+      "name": "feed-admin",
+      "apiKeys": ["admin-key"],
+      "passwords": [],
+      "scopes": ["admin"],
+      "namespaces": ["*"]
+    }
+  ]
+}
+'@
+
+nuget-test-server start --production `
+  --identity-config-env NUGET_TEST_SERVER_IDENTITIES `
+  --trusted-proxy 127.0.0.1
+```
+
+`--identity-config-stdin` is also supported. `--identity-config` emits the same
+process-listing warning as other literal secret options. Production identity
+configuration cannot be combined with the legacy username, password, or API-key
+options.
+
+Each identity may have multiple API keys and Basic-auth passwords so credentials
+can overlap during rotation. Secrets are immediately converted to individually
+salted PBKDF2-SHA256 digests and are never retained in clear text by the runtime.
+Identity names and credentials must be unique.
+
+The available scopes are `read`, `publish`, `unlist`, `delete`, and `admin`.
+`admin` grants every operation and namespace. A publisher must also match a
+configured package ID prefix. The first successful publisher claims ownership of
+the package ID; later versions, unlisting, and hard deletion are restricted to
+that owner or an administrator. Ownership is persisted separately under
+`<storage>\security\package-owners.json`, without changing package blob storage.
+Hard deletion is available only with production identities at
+`DELETE /package/{id}/{version}/hard`.
+
+Production identities require end-to-end HTTPS or an explicitly trusted reverse
+proxy. For a proxy, bind the server to loopback, list the proxy's exact IP with
+`--trusted-proxy`, preserve the public `Host` header, and send exactly one
+`X-Forwarded-Proto: https` value. Forwarded transport and client-address headers
+are ignored unless the immediate peer is trusted. Requests that cannot prove a
+secure transport receive `426 Upgrade Required`.
+
+Authentication failures are atomically limited per validated client address, with
+bounded tracking for address churn. Authentication, authorization, throttling,
+and ownership events are emitted as structured records and appended to
+`<storage>\security\audit.jsonl` for CLI servers. In-memory retention is capped
+at 1,000 events; the audit file rotates at 10 MiB with one previous file retained.
 
 ## Install the CLI as a local .NET tool
 

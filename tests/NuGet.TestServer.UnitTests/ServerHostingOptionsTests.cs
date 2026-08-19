@@ -76,4 +76,45 @@ public sealed class ServerHostingOptionsTests
 
         Assert.Equal(ServerMode.Production, options.Mode);
     }
+
+    [Fact]
+    public void Production_identity_mode_requires_https_or_explicit_trusted_proxies()
+    {
+        var authentication = AuthenticationConfiguration.CreateProduction(
+            ProductionSecurityConfiguration.Create(
+            [
+                new("publisher", ["key"], [SecurityScope.Publish], ["*"])
+            ]));
+
+        Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerHostingOptions.Create(
+                ServerMode.Production,
+                "http://127.0.0.1:5000",
+                authentication));
+
+        var proxied = ServerHostingOptions.Create(
+            ServerMode.Production,
+            "http://127.0.0.1:5000",
+            authentication,
+            new TrustedProxyOptions(["127.0.0.1"]));
+
+        Assert.Single(proxied.Transport.TrustedProxies);
+    }
+
+    [Fact]
+    public void Production_identities_cannot_run_with_test_mode_controls()
+    {
+        var authentication = AuthenticationConfiguration.CreateProduction(
+            ProductionSecurityConfiguration.Create(
+            [
+                new("administrator", ["key"], [SecurityScope.Admin], ["*"])
+            ]));
+
+        Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerHostingOptions.Create(
+                ServerMode.Test,
+                "http://127.0.0.1:0",
+                authentication,
+                new TrustedProxyOptions(["127.0.0.1"])));
+    }
 }

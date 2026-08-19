@@ -327,6 +327,55 @@ public sealed class CommandLineEndToEndTests
     }
 
     [Fact]
+    public async Task Cli_loads_scoped_identities_from_environment_behind_a_trusted_proxy()
+    {
+        var port = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"\"{cliPath}\" start --production --port {port} --storage \"{storage.Path}\" " +
+                "--identity-config-env TEST_IDENTITIES --trusted-proxy 127.0.0.1",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEST_IDENTITIES"] =
+            """
+            {"identities":[{"name":"reader","apiKeys":["reader-key"],"scopes":["read"],"namespaces":["*"]}]}
+            """;
+        using var process = Process.Start(startInfo)!;
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}")
+            };
+            client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+            client.DefaultRequestHeaders.Add("X-NuGet-ApiKey", "reader-key");
+            await WaitUntilHealthyAsync(client);
+
+            using var index = await client.GetAsync("/v3/index.json");
+            var body = await index.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            Assert.Contains($"https://127.0.0.1:{port}/", body);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task Cli_api_key_option_protects_push_but_not_reads()
     {
         var port = GetAvailablePort();

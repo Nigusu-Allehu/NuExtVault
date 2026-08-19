@@ -106,7 +106,8 @@ try
         authentication: authentication.Configuration,
         vulnerabilities: vulnerabilityProvider,
         mode: mode,
-        packageLimits: packageLimits);
+        packageLimits: packageLimits,
+        trustedProxies: ParseTrustedProxies(arguments));
 }
 catch (ServerHostingConfigurationException exception)
 {
@@ -185,9 +186,21 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
         {
             return arguments[index + 1];
         }
+
     }
 
     return null;
+}
+
+static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)
+{
+    var value = ReadOption(arguments, "--trusted-proxy");
+    return value is null
+        ? null
+        : new TrustedProxyOptions(
+            value.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 }
 
 static long ReadPositiveLongOption(

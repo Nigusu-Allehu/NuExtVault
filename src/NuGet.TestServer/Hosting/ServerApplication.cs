@@ -24,12 +24,15 @@ public static class ServerApplication
         VulnerabilitySnapshotProvider? vulnerabilities = null,
         ServerMode mode = ServerMode.Test,
         RuntimeStateConfiguration? runtimeState = null,
-        PackageTransferLimits? packageLimits = null)
+        PackageTransferLimits? packageLimits = null,
+        TrustedProxyOptions? trustedProxies = null,
+        int maximumAuthenticationFailures = 5)
     {
         var hosting = ServerHostingOptions.Create(
             mode,
             url ?? "http://127.0.0.1:0",
-            authentication ?? AuthenticationConfiguration.Anonymous);
+            authentication ?? AuthenticationConfiguration.Anonymous,
+            trustedProxies);
         var builder = WebApplication.CreateBuilder(args ?? []);
         runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
@@ -46,6 +49,15 @@ public static class ServerApplication
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
+        builder.Services.AddSingleton(
+            new AuthenticationAttemptLimiter(
+                maximumAuthenticationFailures,
+                TimeSpan.FromMinutes(1),
+                TimeProvider.System));
+        builder.Services.AddSingleton<ISecurityAuditSink>(
+            new SecurityAuditSink(storageDirectory));
+        builder.Services.AddSingleton<IPackageOwnershipStore>(
+            new PackageOwnershipStore(storageDirectory));
         builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(packageLimits);
         builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory, packageLimits));
@@ -319,7 +331,11 @@ public static class ServerApplication
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapPut("/package", PublishPackageAsync)
-            .WithMetadata(NuGetAccessRequirement.Write);
+            .WithMetadata(
+                app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+                AuthenticationProfile.Production
+                    ? NuGetAccessRequirement.Publish
+                    : NuGetAccessRequirement.Write);
 
         app.MapPut("/symbolpackage", PublishSymbolPackageAsync)
             .WithMetadata(NuGetAccessRequirement.Write);
@@ -327,14 +343,54 @@ public static class ServerApplication
         app.MapDelete(
             "/package/{id}/{version}",
             async Task<IResult> (
+                HttpContext context,
                 string id,
                 string version,
                 InMemoryPackageStore store,
+                IPackageOwnershipStore ownership,
+                ISecurityAuditSink audits,
                 CancellationToken token) =>
-                await store.SetListedAsync(id, version, false, token)
+            {
+                if (!CanManagePackage(context, id, ownership, audits))
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                return await store.SetListedAsync(id, version, false, token)
                     ? Results.NoContent()
-                    : Results.NotFound())
-            .WithMetadata(NuGetAccessRequirement.Write);
+                    : Results.NotFound();
+            })
+            .WithMetadata(
+                app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+                AuthenticationProfile.Production
+                    ? NuGetAccessRequirement.Unlist
+                    : NuGetAccessRequirement.Write);
+
+        if (app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+            AuthenticationProfile.Production)
+        {
+            app.MapDelete(
+                "/package/{id}/{version}/hard",
+                async Task<IResult> (
+                    HttpContext context,
+                    string id,
+                    string version,
+                    InMemoryPackageStore store,
+                    IPackageOwnershipStore ownership,
+                    ISecurityAuditSink audits,
+                    CancellationToken token) =>
+                {
+                    if (!CanManagePackage(context, id, ownership, audits))
+                    {
+                        return Results.StatusCode(StatusCodes.Status403Forbidden);
+                    }
+
+                    return await store.DeleteAsync(id, version, token)
+                        ? Results.NoContent()
+                        : Results.NotFound();
+                })
+                .WithMetadata(NuGetAccessRequirement.Delete);
+        }
     }
 
     private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
@@ -558,6 +614,8 @@ public static class ServerApplication
     private static async Task<IResult> PublishPackageAsync(
         HttpRequest request,
         InMemoryPackageStore store,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -582,10 +640,119 @@ public static class ServerApplication
             }
 
             await using var stream = file.OpenReadStream();
-            return await AddPackageAsync(stream, store, limits, token);
+            return await PublishPackageContentAsync(
+                request,
+                stream,
+                store,
+                ownership,
+                audits,
+                limits,
+                token);
         }
 
-        return await AddPackageAsync(request.Body, store, limits, token);
+        return await PublishPackageContentAsync(
+            request,
+            request.Body,
+            store,
+            ownership,
+            audits,
+            limits,
+            token);
+    }
+
+    private static async Task<IResult> PublishPackageContentAsync(
+        HttpRequest request,
+        Stream content,
+        InMemoryPackageStore store,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits,
+        PackageTransferLimits limits,
+        CancellationToken token)
+    {
+        TestPackage? package = null;
+        try
+        {
+            package = await TestPackage.FromStreamAsync(
+                content,
+                limits,
+                cancellationToken: token);
+
+            var identity =
+                request.HttpContext.Items[typeof(ProductionIdentity)] as ProductionIdentity;
+            if (identity is not null)
+            {
+                if (!identity.AllowsPackage(package.Identity.Id))
+                {
+                    WriteAuthorizationDenied(
+                        request.HttpContext,
+                        audits,
+                        identity,
+                        $"Package '{package.Identity.Id}' is outside configured namespaces.");
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                var publishResult = await ownership.PublishAsync(
+                    package.Identity.Id,
+                    identity.Name,
+                    identity.HasScope(SecurityScope.Admin),
+                    async cancellationToken =>
+                        (await store.FindByIdAsync(
+                            package.Identity.Id,
+                            cancellationToken)).Count > 0,
+                    async cancellationToken =>
+                    {
+                        await store.AddAsync(package, cancellationToken);
+                    },
+                    token);
+
+                if (!publishResult.Authorized)
+                {
+                    WriteAuthorizationDenied(
+                        request.HttpContext,
+                        audits,
+                        identity,
+                        $"Package '{package.Identity.Id}' is owned by another identity.");
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                if (publishResult.OwnershipClaimed)
+                {
+                    audits.Write(CreateAudit(
+                        request.HttpContext,
+                        SecurityAuditEventType.PackageOwnershipClaimed,
+                        identity.Name,
+                        package.Identity.Id));
+                }
+            }
+            else
+            {
+                await store.AddAsync(package, token);
+            }
+
+            var result = Results.Created(
+                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
+                PackageSummary(package));
+            package = null;
+            return result;
+        }
+        catch (PackageLimitExceededException exception)
+        {
+            return Results.Problem(
+                exception.Message,
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+        catch (InvalidPackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+        catch (DuplicatePackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+        finally
+        {
+            package?.Dispose();
+        }
     }
 
     private static async Task<IResult> PublishSymbolPackageAsync(
@@ -672,6 +839,81 @@ public static class ServerApplication
             package?.Dispose();
         }
     }
+
+    private static async Task<IResult> AddPackageAsync(
+        TestPackage package,
+        InMemoryPackageStore store,
+        CancellationToken token)
+    {
+        try
+        {
+            await store.AddAsync(package, token);
+            return Results.Created(
+                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
+                PackageSummary(package));
+        }
+        catch (DuplicatePackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+    }
+
+    private static bool CanManagePackage(
+        HttpContext context,
+        string packageId,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits)
+    {
+        var identity = context.Items[typeof(ProductionIdentity)] as ProductionIdentity;
+        if (identity is null)
+        {
+            return true;
+        }
+
+        var owner = ownership.GetOwner(packageId);
+        if ((owner is not null &&
+             string.Equals(owner, identity.Name, StringComparison.Ordinal)) ||
+            identity.HasScope(SecurityScope.Admin))
+        {
+            return true;
+        }
+
+        WriteAuthorizationDenied(
+            context,
+            audits,
+            identity,
+            owner is null
+                ? $"Package '{packageId}' has no recorded owner."
+                : $"Package '{packageId}' is owned by another identity.");
+        return false;
+    }
+
+    private static void WriteAuthorizationDenied(
+        HttpContext context,
+        ISecurityAuditSink audits,
+        ProductionIdentity identity,
+        string detail) =>
+        audits.Write(CreateAudit(
+            context,
+            SecurityAuditEventType.AuthorizationDenied,
+            identity.Name,
+            detail));
+
+    private static SecurityAuditEvent CreateAudit(
+        HttpContext context,
+        SecurityAuditEventType eventType,
+        string? identity,
+        string? detail) =>
+        new(
+            DateTimeOffset.UtcNow,
+            eventType,
+            context.Items[SecurityContextItems.Client] as string ??
+            context.Connection.RemoteIpAddress?.ToString() ??
+            "unknown",
+            identity,
+            context.Request.Method,
+            context.Request.Path,
+            detail);
 
     private static object PackageSummary(TestPackage package) => new
     {
