@@ -75,6 +75,8 @@ public static class ServerApplication
             storageDirectory is null
                 ? new InMemoryPackageStore(limits: packageLimits)
                 : new DurablePackageStore(storageDirectory, packageLimits));
+        builder.Services.AddSingleton<IPackageCandidateStore>(provider =>
+            new PackageCandidateReader(provider.GetRequiredService<IPackageStore>()));
         builder.Services.AddSingleton(provider => new PackageSupplyChainService(
             provider.GetRequiredService<IPackageStore>(),
             storageDirectory,
@@ -255,11 +257,11 @@ public static class ServerApplication
             [HttpMethods.Get, HttpMethods.Head],
             async Task<IResult> (
                 string id,
-                IPackageStore store,
+                IPackageCandidateStore candidates,
                 PackageVisibilityPolicy visibility,
                 CancellationToken token) =>
             {
-                var packages = (await store.FindByIdAsync(id, token))
+                var packages = (await candidates.FindStoredByIdAsync(id, token))
                     .Where(package => visibility.CanRead(
                         package,
                         PackageResourceClass.VersionEnumeration))
@@ -328,12 +330,12 @@ public static class ServerApplication
             async Task<IResult> (
                 HttpContext context,
                 string id,
-                IPackageStore store,
+                IPackageCandidateStore candidates,
                 PackageVisibilityPolicy visibility,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
-                var packages = (await store.FindByIdAsync(id, token))
+                var packages = (await candidates.FindStoredByIdAsync(id, token))
                     .Where(package => visibility.CanRead(
                         package,
                         PackageResourceClass.Registration))
@@ -364,12 +366,12 @@ public static class ServerApplication
                 string id,
                 string lower,
                 string upper,
-                IPackageStore store,
+                IPackageCandidateStore candidates,
                 PackageVisibilityPolicy visibility,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
-                var packages = (await store.FindByIdAsync(id, token))
+                var packages = (await candidates.FindStoredByIdAsync(id, token))
                     .Where(package => visibility.CanRead(
                         package,
                         PackageResourceClass.Registration))
@@ -391,7 +393,7 @@ public static class ServerApplication
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
-                var package = await store.FindAsync(id, version, token);
+                var package = await store.FindStoredAsync(id, version, token);
                 return package is null ||
                        !visibility.CanRead(package, PackageResourceClass.Registration)
                     ? Results.NotFound()

@@ -4,20 +4,25 @@ namespace NuGet.TestServer.UnitTests;
 
 public sealed class PackageVisibilityPolicyTests
 {
-    public static TheoryData<int, int, bool> VisibilityMatrix
+    public static TheoryData<int, bool, int, bool> VisibilityMatrix
     {
         get
         {
-            var data = new TheoryData<int, int, bool>();
-            foreach (var state in Enum.GetValues<PackageLifecycleState>())
+            var data = new TheoryData<int, bool, int, bool>();
+            foreach (var moderationState in Enum.GetValues<PackageModerationState>())
             {
-                foreach (var resourceClass in Enum.GetValues<PackageResourceClass>())
+                foreach (var listed in new[] { false, true })
                 {
-                    var expected = resourceClass == PackageResourceClass.Administrative ||
-                        state == PackageLifecycleState.Published ||
-                        state == PackageLifecycleState.Unlisted &&
-                        resourceClass != PackageResourceClass.Search;
-                    data.Add((int)state, (int)resourceClass, expected);
+                    foreach (var resourceClass in Enum.GetValues<PackageResourceClass>())
+                    {
+                        var expected = moderationState == PackageModerationState.Published &&
+                            (listed || resourceClass != PackageResourceClass.Search);
+                        data.Add(
+                            (int)moderationState,
+                            listed,
+                            (int)resourceClass,
+                            expected);
+                    }
                 }
             }
 
@@ -27,29 +32,41 @@ public sealed class PackageVisibilityPolicyTests
 
     [Theory]
     [MemberData(nameof(VisibilityMatrix))]
-    public void Visibility_is_defined_for_every_state_and_resource_class(
-        int stateValue,
+    public void Visibility_is_defined_for_every_authority_fact_and_resource_class(
+        int moderationStateValue,
+        bool listed,
         int resourceClassValue,
         bool expected)
     {
-        var state = (PackageLifecycleState)stateValue;
+        var facts = new PackageAuthorityFacts(
+            (PackageModerationState)moderationStateValue,
+            listed);
         var resourceClass = (PackageResourceClass)resourceClassValue;
-        Assert.Equal(expected, PackageVisibilityPolicy.Instance.CanRead(state, resourceClass));
+        Assert.Equal(expected, PackageVisibilityPolicy.Instance.CanRead(facts, resourceClass));
     }
 
-    [Theory]
-    [InlineData(PackageModerationState.Published, true, (int)PackageLifecycleState.Published)]
-    [InlineData(PackageModerationState.Published, false, (int)PackageLifecycleState.Unlisted)]
-    [InlineData(PackageModerationState.Quarantined, true, (int)PackageLifecycleState.Quarantined)]
-    [InlineData(PackageModerationState.Rejected, true, (int)PackageLifecycleState.Quarantined)]
-    [InlineData(PackageModerationState.Deleted, true, (int)PackageLifecycleState.Deleted)]
-    public void Existing_durable_fields_map_to_one_lifecycle_state(
-        PackageModerationState moderationState,
-        bool listed,
-        int expectedValue)
+    [Fact]
+    public void Unknown_authority_facts_and_resource_classes_fail_closed()
     {
-        var expected = (PackageLifecycleState)expectedValue;
-        Assert.Equal(expected, PackageVisibilityPolicy.Instance.GetState(moderationState, listed));
+        var policy = PackageVisibilityPolicy.Instance;
+
+        Assert.All(
+            Enum.GetValues<PackageResourceClass>(),
+            resourceClass => Assert.False(policy.CanRead(
+                new PackageAuthorityFacts((PackageModerationState)int.MaxValue, IsListed: true),
+                resourceClass)));
+        Assert.False(policy.CanRead(
+            new PackageAuthorityFacts(PackageModerationState.Published, IsListed: true),
+            (PackageResourceClass)int.MaxValue));
+    }
+
+    [Fact]
+    public void Immutable_grant_sets_can_model_independently_differing_resource_classes()
+    {
+        var grants = PackagePublicGrantSet.Create([PackageResourceClass.Registration]);
+
+        Assert.True(grants.Contains(PackageResourceClass.Registration));
+        Assert.False(grants.Contains(PackageResourceClass.VersionEnumeration));
     }
 
     [Fact]
@@ -69,13 +86,16 @@ public sealed class PackageVisibilityPolicyTests
         }
 
         await using var restarted = new DurablePackageStore(directory.Path);
+        var restartedCandidates = Assert.IsAssignableFrom<IPackageCandidateStore>(restarted);
         Assert.Null(await restarted.FindAsync("Visibility.Package", "1.0.0"));
         Assert.Null(await restarted.FindSymbolAsync("Visibility.Package", "1.0.0"));
         Assert.NotNull(await restarted.FindStoredAsync("Visibility.Package", "1.0.0"));
+        Assert.Single(await restartedCandidates.FindStoredByIdAsync("Visibility.Package"));
     }
 
     private static async Task AssertStoreVisibilityAsync(IPackageStore store)
     {
+        var candidates = Assert.IsAssignableFrom<IPackageCandidateStore>(store);
         var package = TestPackageBuilder.Create("Visibility.Package", "1.0.0").Build();
         var symbols = TestPackageBuilder.Create("Visibility.Package", "1.0.0")
             .WithFile("lib/net10.0/Visibility.Package.pdb", [1, 2, 3, 4])
@@ -103,9 +123,24 @@ public sealed class PackageVisibilityPolicyTests
         Assert.Equal(0, (await store.SearchAsync("Visibility.Package", false, 0, 20)).TotalHits);
         Assert.Null(await store.FindSymbolAsync("Visibility.Package", "1.0.0"));
         Assert.NotNull(await store.FindStoredAsync("Visibility.Package", "1.0.0"));
+        Assert.Single(await candidates.FindStoredByIdAsync("Visibility.Package"));
         Assert.Contains(
             await store.GetAllStoredAsync(),
             stored => stored.Identity.Id == "Visibility.Package");
+
+        await store.AddAsync(TestPackageBuilder.Create("Search.Listed", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Search.Unlisted", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Search.Hidden", "1.0.0").Build());
+        Assert.True(await store.SetListedAsync("Search.Unlisted", "1.0.0", false));
+        Assert.True(await store.SetModerationStateAsync(
+            "Search.Hidden",
+            "1.0.0",
+            PackageModerationState.Quarantined));
+
+        var search = await store.SearchAsync("Search.", false, 0, 20);
+
+        Assert.Equal(1, search.TotalHits);
+        Assert.Equal("Search.Listed", Assert.Single(search.Items).Package.Identity.Id);
     }
 
     private sealed class TemporaryDirectory : IDisposable

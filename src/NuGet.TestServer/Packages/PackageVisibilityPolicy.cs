@@ -1,14 +1,8 @@
 namespace NuGet.TestServer.Packages;
 
-internal enum PackageLifecycleState
-{
-    Staged,
-    Quarantined,
-    Published,
-    Unlisted,
-    Deleted,
-    Recovered
-}
+internal readonly record struct PackageAuthorityFacts(
+    PackageModerationState ModerationState,
+    bool IsListed);
 
 internal enum PackageResourceClass
 {
@@ -16,12 +10,57 @@ internal enum PackageResourceClass
     VersionEnumeration,
     Registration,
     Search,
-    Symbols,
-    Administrative
+    Symbols
+}
+
+internal sealed class PackagePublicGrantSet
+{
+    private readonly HashSet<PackageResourceClass> _resourceClasses;
+
+    private PackagePublicGrantSet(IEnumerable<PackageResourceClass> resourceClasses)
+    {
+        _resourceClasses = resourceClasses.ToHashSet();
+        if (_resourceClasses.Any(resourceClass => !Enum.IsDefined(resourceClass)))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(resourceClasses),
+                "Public resource grants must use defined resource classes.");
+        }
+    }
+
+    public static PackagePublicGrantSet Create(
+        IEnumerable<PackageResourceClass> resourceClasses)
+    {
+        ArgumentNullException.ThrowIfNull(resourceClasses);
+        return new PackagePublicGrantSet(resourceClasses);
+    }
+
+    public bool Contains(PackageResourceClass resourceClass) =>
+        Enum.IsDefined(resourceClass) && _resourceClasses.Contains(resourceClass);
 }
 
 internal sealed class PackageVisibilityPolicy
 {
+    private static readonly PackagePublicGrantSet NoPublicResources =
+        PackagePublicGrantSet.Create([]);
+    private static readonly PackagePublicGrantSet UnlistedResources =
+        PackagePublicGrantSet.Create(
+        [
+            PackageResourceClass.ExactContent,
+            PackageResourceClass.VersionEnumeration,
+            PackageResourceClass.Registration,
+            PackageResourceClass.Symbols
+        ]);
+    private static readonly PackagePublicGrantSet ListedResources =
+        PackagePublicGrantSet.Create(
+        [
+            PackageResourceClass.ExactContent,
+            PackageResourceClass.VersionEnumeration,
+            PackageResourceClass.Registration,
+            PackageResourceClass.Search,
+            PackageResourceClass.Symbols
+        ]);
+
     public static PackageVisibilityPolicy Instance { get; } = new();
 
     private PackageVisibilityPolicy()
@@ -31,55 +70,30 @@ internal sealed class PackageVisibilityPolicy
     public bool CanRead(TestPackage package, PackageResourceClass resourceClass)
     {
         ArgumentNullException.ThrowIfNull(package);
-        return CanRead(GetState(package.ModerationState, package.IsListed), resourceClass);
+        return CanRead(
+            new PackageAuthorityFacts(package.ModerationState, package.IsListed),
+            resourceClass);
     }
 
     public bool CanRead(
         PackageModerationState moderationState,
         bool listed,
         PackageResourceClass resourceClass) =>
-        CanRead(GetState(moderationState, listed), resourceClass);
+        CanRead(new PackageAuthorityFacts(moderationState, listed), resourceClass);
 
-    public bool CanRead(PackageLifecycleState state, PackageResourceClass resourceClass)
+    public bool CanRead(
+        PackageAuthorityFacts facts,
+        PackageResourceClass resourceClass) =>
+        ResolvePublicGrants(facts).Contains(resourceClass);
+
+    public PackagePublicGrantSet ResolvePublicGrants(PackageAuthorityFacts facts)
     {
-        if (!Enum.IsDefined(state) || !Enum.IsDefined(resourceClass))
+        if (!Enum.IsDefined(facts.ModerationState) ||
+            facts.ModerationState != PackageModerationState.Published)
         {
-            return false;
+            return NoPublicResources;
         }
 
-        if (resourceClass == PackageResourceClass.Administrative)
-        {
-            return true;
-        }
-
-        return state switch
-        {
-            PackageLifecycleState.Published => true,
-            PackageLifecycleState.Unlisted => resourceClass != PackageResourceClass.Search,
-            _ => false
-        };
+        return facts.IsListed ? ListedResources : UnlistedResources;
     }
-
-    public PackageLifecycleState GetState(
-        PackageModerationState moderationState,
-        bool listed) =>
-        moderationState switch
-        {
-            PackageModerationState.Published => listed
-                ? PackageLifecycleState.Published
-                : PackageLifecycleState.Unlisted,
-            PackageModerationState.Quarantined or PackageModerationState.Rejected =>
-                PackageLifecycleState.Quarantined,
-            PackageModerationState.Deleted => PackageLifecycleState.Deleted,
-            _ => PackageLifecycleState.Quarantined
-        };
-
-    public PackageModerationState GetPersistedModerationState(PackageLifecycleState state) =>
-        state switch
-        {
-            PackageLifecycleState.Published or PackageLifecycleState.Unlisted =>
-                PackageModerationState.Published,
-            PackageLifecycleState.Deleted => PackageModerationState.Deleted,
-            _ => PackageModerationState.Quarantined
-        };
 }

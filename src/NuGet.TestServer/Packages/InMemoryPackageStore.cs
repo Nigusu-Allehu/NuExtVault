@@ -5,7 +5,7 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore : IPackageStore
+public sealed class InMemoryPackageStore : IPackageStore, IPackageCandidateStore
 {
     private static readonly PackageVisibilityPolicy Visibility = PackageVisibilityPolicy.Instance;
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
@@ -100,12 +100,7 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        var package = _packages.GetValueOrDefault(Key(id, Normalize(version)));
-        return ValueTask.FromResult(
-            package is not null &&
-            Visibility.CanRead(package, PackageResourceClass.Administrative)
-                ? package
-                : null);
+        return ValueTask.FromResult(_packages.GetValueOrDefault(Key(id, Normalize(version))));
     }
 
     public ValueTask<byte[]?> FindSymbolAsync(
@@ -166,14 +161,20 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        IReadOnlyList<TestPackage> result = _packages.Values
-            .Where(package => string.Equals(package.Identity.Id, id, StringComparison.OrdinalIgnoreCase))
+        IReadOnlyList<TestPackage> result = FindStoredById(id)
             .Where(package => Visibility.CanRead(
                 package,
                 PackageResourceClass.VersionEnumeration))
-            .OrderBy(package => package.Identity.Version)
             .ToArray();
         return ValueTask.FromResult(result);
+    }
+
+    ValueTask<IReadOnlyList<TestPackage>> IPackageCandidateStore.FindStoredByIdAsync(
+        string id,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult<IReadOnlyList<TestPackage>>(FindStoredById(id));
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
@@ -194,9 +195,6 @@ public sealed class InMemoryPackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
-            .Where(package => Visibility.CanRead(
-                package,
-                PackageResourceClass.Administrative))
             .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
             .ThenBy(package => package.Identity.Version)
             .ToArray();
@@ -426,6 +424,15 @@ public sealed class InMemoryPackageStore : IPackageStore
 
     private static string Key(string id, string version) =>
         $"{id.ToLowerInvariant()}\n{version.ToLowerInvariant()}";
+
+    private TestPackage[] FindStoredById(string id) =>
+        _packages.Values
+            .Where(package => string.Equals(
+                package.Identity.Id,
+                id,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(package => package.Identity.Version)
+            .ToArray();
 
     internal static TestPackage ParseSymbolPackage(byte[] content)
     {

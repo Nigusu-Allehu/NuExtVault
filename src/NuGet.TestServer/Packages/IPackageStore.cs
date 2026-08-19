@@ -62,3 +62,23 @@ public interface IPackageStore : IAsyncDisposable
 
     ValueTask ResetAsync(CancellationToken token = default);
 }
+
+internal interface IPackageCandidateStore
+{
+    ValueTask<IReadOnlyList<TestPackage>> FindStoredByIdAsync(
+        string id,
+        CancellationToken token = default);
+}
+
+internal sealed class PackageCandidateReader(IPackageStore store) : IPackageCandidateStore
+{
+    private readonly IPackageCandidateStore _store = store as IPackageCandidateStore
+        ?? throw new ArgumentException(
+            "The package store does not provide internal candidate reads.",
+            nameof(store));
+
+    public ValueTask<IReadOnlyList<TestPackage>> FindStoredByIdAsync(
+        string id,
+        CancellationToken token = default) =>
+        _store.FindStoredByIdAsync(id, token);
+}

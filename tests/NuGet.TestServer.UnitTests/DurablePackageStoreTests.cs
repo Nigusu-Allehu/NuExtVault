@@ -287,6 +287,32 @@ public sealed class DurablePackageStoreTests
     }
 
     [Fact]
+    public async Task Numeric_moderation_state_fails_closed_in_search_and_metadata_reads()
+    {
+        using var directory = TemporaryDirectory.Create();
+        await using (var writer = new DurablePackageStore(directory.Path))
+        {
+            await writer.AddAsync(
+                TestPackageBuilder.Create("Invalid.State", "1.0.0").Build());
+        }
+
+        using (var connection = new SqliteConnection(
+                   $"Data Source={Path.Combine(directory.Path, "packages.db")};Pooling=False"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "UPDATE packages SET moderation_state = '1' WHERE normalized_id = 'invalid.state';";
+            command.ExecuteNonQuery();
+        }
+
+        await using var reader = new DurablePackageStore(directory.Path);
+        Assert.Equal(0, (await reader.SearchAsync("Invalid.State", false, 0, 20)).TotalHits);
+        Assert.Throws<PackageStorageCorruptionException>(
+            () => reader.FindAsync("Invalid.State", "1.0.0"));
+    }
+
+    [Fact]
     public async Task Legacy_file_layout_is_imported_without_moving_or_losing_packages()
     {
         using var directory = TemporaryDirectory.Create();

@@ -7,7 +7,7 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class DurablePackageStore : IPackageStore
+public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
 {
     private static readonly PackageVisibilityPolicy Visibility = PackageVisibilityPolicy.Instance;
     private readonly string _root;
@@ -104,14 +104,7 @@ public sealed class DurablePackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         var metadata = _metadata.Find(id, Normalize(version));
-        return ValueTask.FromResult(
-            metadata is not null &&
-            Visibility.CanRead(
-                metadata.ModerationState,
-                metadata.IsListed,
-                PackageResourceClass.Administrative)
-                ? Project(metadata)
-                : null);
+        return ValueTask.FromResult(metadata is null ? null : Project(metadata));
     }
 
     public ValueTask<byte[]?> FindSymbolAsync(
@@ -183,6 +176,14 @@ public sealed class DurablePackageStore : IPackageStore
             .ToArray()));
     }
 
+    ValueTask<IReadOnlyList<TestPackage>> IPackageCandidateStore.FindStoredByIdAsync(
+        string id,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(Project(_metadata.FindById(id)));
+    }
+
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
@@ -198,12 +199,7 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(Project(_metadata.GetAll()
-            .Where(package => Visibility.CanRead(
-                package.ModerationState,
-                package.IsListed,
-                PackageResourceClass.Administrative))
-            .ToArray()));
+        return ValueTask.FromResult(Project(_metadata.GetAll()));
     }
 
     public ValueTask<PackageSearchPage> SearchAsync(
@@ -1518,10 +1514,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             connection.CreateFunction<string, long, long, long>(
                 "package_can_read",
                 (state, listed, resourceClass) =>
-                    Enum.TryParse<PackageModerationState>(
-                        state,
-                        ignoreCase: true,
-                        out var moderation) &&
+                    TryParseModerationState(state, out var moderation) &&
                     Enum.IsDefined((PackageResourceClass)resourceClass) &&
                     _visibility.CanRead(
                         moderation,
@@ -1562,7 +1555,34 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                     ?? throw new PackageStorageCorruptionException(
                         "Stored package repository metadata is invalid."),
             reader.GetString(13),
-            Enum.Parse<PackageModerationState>(reader.GetString(14), ignoreCase: true));
+            ReadModerationState(reader.GetString(14)));
+
+    private static PackageModerationState ReadModerationState(string value)
+    {
+        if (TryParseModerationState(value, out var state))
+        {
+            return state;
+        }
+
+        throw new PackageStorageCorruptionException(
+            $"Stored package metadata has invalid moderation state '{value}'.");
+    }
+
+    private static bool TryParseModerationState(
+        string value,
+        out PackageModerationState state)
+    {
+        if (Enum.TryParse(value, ignoreCase: true, out state) &&
+            Enum.IsDefined(state) &&
+            Enum.GetName(state) is { } name &&
+            name.Equals(value, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        state = default;
+        return false;
+    }
 
     private static void AddParameters(SqliteCommand command, PackageMetadata package)
     {

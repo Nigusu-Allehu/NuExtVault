@@ -8,7 +8,6 @@ namespace NuGet.TestServer.Packages;
 
 public sealed class PackageSupplyChainService : IAsyncDisposable
 {
-    private readonly PackageVisibilityPolicy _visibility = PackageVisibilityPolicy.Instance;
     private readonly IPackageStore _inner;
     private readonly SupplyChainOptions _options;
     private readonly IPackagePolicyScanner _scanner;
@@ -576,10 +575,9 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
 
             var hash = ComputeHashAsync(package, CancellationToken.None)
                 .AsTask().GetAwaiter().GetResult();
-            var recoveredState = trustAsLegacy
-                ? PackageLifecycleState.Published
-                : PackageLifecycleState.Recovered;
-            var persistedState = _visibility.GetPersistedModerationState(recoveredState);
+            var persistedState = trustAsLegacy
+                ? PackageModerationState.Published
+                : PackageModerationState.Quarantined;
             using var transaction = _connection.BeginTransaction();
             Execute(
                 transaction,
