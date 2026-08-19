@@ -69,7 +69,9 @@ public sealed class StorageBackupTests
             () => StorageBackup.RestoreAsync(backupPath, destination.Path));
 
         Assert.Contains("integrity", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(Directory.EnumerateFileSystemEntries(destination.Path));
+        Assert.Equal(
+            [Path.Combine(destination.Path, ".storage.lock")],
+            Directory.EnumerateFileSystemEntries(destination.Path));
     }
 
     [Fact]
@@ -108,6 +110,27 @@ public sealed class StorageBackupTests
             new PackageSupplyChainService(restoredStore, destination.Path);
         Assert.NotNull(await restoredStore.FindAsync("Durable.Backup", "1.0.0"));
         Assert.NotNull(await restoredSupplyChain.GetStatusAsync("Durable.Backup", "1.0.0"));
+    }
+
+    [Fact]
+    public async Task Restore_rejects_a_live_target_without_removing_its_packages()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var sourceStore = new InMemoryPackageStore(source.Path);
+        await sourceStore.AddAsync(
+            TestPackageBuilder.Create("Backup.Source", "1.0.0").Build());
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+        await StorageBackup.CreateAsync(source.Path, backupPath);
+        await using var liveStore = new DurablePackageStore(destination.Path);
+        await liveStore.AddAsync(
+            TestPackageBuilder.Create("Live.Target", "1.0.0").Build());
+
+        var exception = await Assert.ThrowsAsync<IOException>(
+            () => StorageBackup.RestoreAsync(backupPath, destination.Path));
+
+        Assert.Contains("in use", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(await liveStore.FindAsync("Live.Target", "1.0.0"));
     }
 
     private sealed class TemporaryDirectory : IDisposable

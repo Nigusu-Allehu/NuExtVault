@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Data.Sqlite;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Operations;
@@ -936,7 +937,7 @@ public static class ServerApplication
             return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+            exception is IOException or UnauthorizedAccessException or SqliteException)
         {
             diagnostics.RecordStorageFailure();
             throw;
@@ -1029,7 +1030,7 @@ public static class ServerApplication
             return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException)
+            exception is IOException or UnauthorizedAccessException or SqliteException)
         {
             diagnostics.RecordStorageFailure();
             throw;

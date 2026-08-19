@@ -128,6 +128,8 @@ public static class StorageBackup
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
         var source = Path.GetFullPath(backupPath);
         var destination = Path.GetFullPath(storageDirectory);
+        Directory.CreateDirectory(destination);
+        using var storageLease = AcquireStorageLease(destination);
         EnsureRestoreTargetIsClean(destination);
         var parent = Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("Storage directory must have a parent directory.");
@@ -394,20 +396,15 @@ public static class StorageBackup
             Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()));
     }
 
-    private static FileStream? AcquireStorageLease(string root)
+    private static FileStream AcquireStorageLease(string root)
     {
         var lockPath = Path.Combine(root, ".storage.lock");
-        if (!File.Exists(lockPath))
-        {
-            return null;
-        }
-
         try
         {
             return new FileStream(
                 lockPath,
-                FileMode.Open,
-                FileAccess.Read,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
                 FileShare.None,
                 bufferSize: 1,
                 FileOptions.None);
