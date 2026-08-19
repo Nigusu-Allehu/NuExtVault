@@ -268,6 +268,33 @@ public sealed class DurablePackageStoreTests
     }
 
     [Fact]
+    public async Task Same_length_blob_tampering_is_detected_when_content_is_opened()
+    {
+        using var directory = TemporaryDirectory.Create();
+        await using (var first = new DurablePackageStore(directory.Path))
+        {
+            await first.AddAsync(TestPackageBuilder.Create("Tampered.Package", "1.0.0").Build());
+        }
+
+        var blob = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "packages"),
+            "*.nupkg",
+            SearchOption.AllDirectories));
+        var content = await File.ReadAllBytesAsync(blob);
+        content[^1] ^= 0xff;
+        await File.WriteAllBytesAsync(blob, content);
+
+        await using var second = new DurablePackageStore(directory.Path);
+        var package = await second.FindAsync("Tampered.Package", "1.0.0");
+
+        Assert.NotNull(package);
+        var error = Assert.Throws<PackageStorageCorruptionException>(
+            () => package.OpenReadStream());
+        Assert.Contains("Tampered.Package", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1.0.0", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task A_second_store_cannot_use_the_same_root_concurrently()
     {
         using var directory = TemporaryDirectory.Create();
