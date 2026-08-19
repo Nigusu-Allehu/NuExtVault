@@ -17,17 +17,20 @@ public static class ServerApplication
         string? storageDirectory = null,
         AuthenticationConfiguration? authentication = null,
         VulnerabilitySnapshotProvider? vulnerabilities = null,
-        ServerMode mode = ServerMode.Test)
+        ServerMode mode = ServerMode.Test,
+        RuntimeStateConfiguration? runtimeState = null)
     {
         var hosting = ServerHostingOptions.Create(
             mode,
             url ?? "http://127.0.0.1:0",
             authentication ?? AuthenticationConfiguration.Anonymous);
         var builder = WebApplication.CreateBuilder(args ?? []);
+        runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
         builder.WebHost.UseUrls(hosting.Url);
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
+        builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory));
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
@@ -80,15 +83,18 @@ public static class ServerApplication
                 }
                 finally
                 {
-                    recorder.Add(new RequestRecord(
-                        sequence,
-                        recorder.UtcNow,
-                        context.Request.Method,
-                        context.Request.Path,
-                        context.Response.StatusCode,
-                        (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                        faultRuleId,
-                        context.User.Identity?.Name));
+                    if (!ClearsRequestHistory(context.Request))
+                    {
+                        recorder.Add(new RequestRecord(
+                            sequence,
+                            recorder.UtcNow,
+                            context.Request.Method,
+                            context.Request.Path,
+                            context.Response.StatusCode,
+                            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                            faultRuleId,
+                            context.User.Identity?.Name));
+                    }
                 }
             });
         }
@@ -320,7 +326,10 @@ public static class ServerApplication
                 {
                     packageCount = (await packages.GetAllAsync()).Count,
                     faultCount = faults.GetAll().Count,
-                    requestCount = requests.GetAll().Count
+                    faultCapacity = faults.Capacity,
+                    requestCount = requests.GetAll().Count,
+                    requestCapacity = requests.Capacity,
+                    evictedRequestCount = requests.EvictedCount
                 }))
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -410,10 +419,19 @@ public static class ServerApplication
 
         app.MapGet("/__test/faults", (FaultRuleStore faults) => Results.Json(faults.GetAll()))
             .WithMetadata(NuGetAccessRequirement.Control);
-        app.MapPost("/__test/faults", (FaultRule rule, FaultRuleStore faults) =>
+        app.MapPost("/__test/faults", IResult (FaultRule rule, FaultRuleStore faults) =>
         {
-            faults.Add(rule);
-            return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            try
+            {
+                faults.Add(rule);
+                return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            }
+            catch (FaultRuleStore.FaultRuleConflictException exception)
+            {
+                return Results.Problem(
+                    exception.Message,
+                    statusCode: StatusCodes.Status409Conflict);
+            }
         }).WithMetadata(NuGetAccessRequirement.Control);
         app.MapDelete("/__test/faults", (FaultRuleStore faults) =>
         {
@@ -597,6 +615,12 @@ public static class ServerApplication
 
     private static string GetRoot(HttpContext context) =>
         $"{context.Request.Scheme}://{context.Request.Host}";
+
+    private static bool ClearsRequestHistory(HttpRequest request) =>
+        (HttpMethods.IsPost(request.Method) &&
+         request.Path.Equals("/__test/reset", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpMethods.IsDelete(request.Method) &&
+         request.Path.Equals("/__test/requests", StringComparison.OrdinalIgnoreCase));
 
     public sealed record PackageContentRequest(string Content);
 }
