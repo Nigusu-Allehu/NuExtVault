@@ -8,6 +8,7 @@ using NuGet.TestServer.Faults;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
 using NuGet.TestServer.Vulnerabilities;
+using NuGet.Versioning;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -23,12 +24,15 @@ public static class ServerApplication
         VulnerabilitySnapshotProvider? vulnerabilities = null,
         ServerMode mode = ServerMode.Test,
         RuntimeStateConfiguration? runtimeState = null,
-        PackageTransferLimits? packageLimits = null)
+        PackageTransferLimits? packageLimits = null,
+        TrustedProxyOptions? trustedProxies = null,
+        int maximumAuthenticationFailures = 5)
     {
         var hosting = ServerHostingOptions.Create(
             mode,
             url ?? "http://127.0.0.1:0",
-            authentication ?? AuthenticationConfiguration.Anonymous);
+            authentication ?? AuthenticationConfiguration.Anonymous,
+            trustedProxies);
         var builder = WebApplication.CreateBuilder(args ?? []);
         runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
@@ -45,6 +49,15 @@ public static class ServerApplication
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
+        builder.Services.AddSingleton(
+            new AuthenticationAttemptLimiter(
+                maximumAuthenticationFailures,
+                TimeSpan.FromMinutes(1),
+                TimeProvider.System));
+        builder.Services.AddSingleton<ISecurityAuditSink>(
+            new SecurityAuditSink(storageDirectory));
+        builder.Services.AddSingleton<IPackageOwnershipStore>(
+            new PackageOwnershipStore(storageDirectory));
         builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(packageLimits);
         builder.Services.AddSingleton<IPackageStore>(_ =>
@@ -146,6 +159,7 @@ public static class ServerApplication
                 Descriptor($"{root}/query", "SearchQueryService/3.0.0-beta"),
                 Descriptor($"{root}/query", "SearchQueryService/3.5.0"),
                 Descriptor($"{root}/package", "PackagePublish/2.0.0"),
+                Descriptor($"{root}/symbolpackage", "SymbolPackagePublish/4.9.0"),
                 Descriptor($"{root}/v3/vulnerabilities/index.json", "VulnerabilityInfo/6.7.0")
             };
             return Results.Json(new Dictionary<string, object?>
@@ -231,6 +245,13 @@ public static class ServerApplication
                     return Results.File(package.NuspecContent, "text/xml; charset=utf-8");
                 }
 
+                if (fileName.Equals(
+                        $"{normalizedId}.{package.NormalizedVersion}.nupkg.sha512",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return Results.Text(package.PackageHash, "text/plain; charset=utf-8");
+                }
+
                 return Results.NotFound();
             }).WithMetadata(NuGetAccessRequirement.Read);
 
@@ -308,6 +329,7 @@ public static class ServerApplication
                 int? skip,
                 int? take,
                 bool? prerelease,
+                string? packageType,
                 CancellationToken token) =>
             {
                 var page = await store.SearchAsync(
@@ -315,7 +337,8 @@ public static class ServerApplication
                     prerelease ?? false,
                     skip ?? 0,
                     take ?? 20,
-                    token);
+                    token,
+                    packageType);
 
                 return Results.Json(new
                 {
@@ -328,19 +351,66 @@ public static class ServerApplication
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapPut("/package", PublishPackageAsync)
+            .WithMetadata(
+                app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+                AuthenticationProfile.Production
+                    ? NuGetAccessRequirement.Publish
+                    : NuGetAccessRequirement.Write);
+
+        app.MapPut("/symbolpackage", PublishSymbolPackageAsync)
             .WithMetadata(NuGetAccessRequirement.Write);
 
         app.MapDelete(
             "/package/{id}/{version}",
             async Task<IResult> (
+                HttpContext context,
                 string id,
                 string version,
                 IPackageStore store,
+                IPackageOwnershipStore ownership,
+                ISecurityAuditSink audits,
                 CancellationToken token) =>
-                await store.SetListedAsync(id, version, false, token)
+            {
+                if (!CanManagePackage(context, id, ownership, audits))
+                {
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                return await store.SetListedAsync(id, version, false, token)
                     ? Results.NoContent()
-                    : Results.NotFound())
-            .WithMetadata(NuGetAccessRequirement.Write);
+                    : Results.NotFound();
+            })
+            .WithMetadata(
+                app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+                AuthenticationProfile.Production
+                    ? NuGetAccessRequirement.Unlist
+                    : NuGetAccessRequirement.Write);
+
+        if (app.Services.GetRequiredService<AuthenticationConfiguration>().Profile ==
+            AuthenticationProfile.Production)
+        {
+            app.MapDelete(
+                "/package/{id}/{version}/hard",
+                async Task<IResult> (
+                    HttpContext context,
+                    string id,
+                    string version,
+                    IPackageStore store,
+                    IPackageOwnershipStore ownership,
+                    ISecurityAuditSink audits,
+                    CancellationToken token) =>
+                {
+                    if (!CanManagePackage(context, id, ownership, audits))
+                    {
+                        return Results.StatusCode(StatusCodes.Status403Forbidden);
+                    }
+
+                    return await store.DeleteAsync(id, version, token)
+                        ? Results.NoContent()
+                        : Results.NotFound();
+                })
+                .WithMetadata(NuGetAccessRequirement.Delete);
+        }
     }
 
     private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
@@ -507,6 +577,29 @@ public static class ServerApplication
                     : Results.NotFound())
             .WithMetadata(NuGetAccessRequirement.Control);
 
+        app.MapPut(
+            "/__test/packages/{id}/{version}/metadata",
+            async Task<IResult> (
+                string id,
+                string version,
+                PackageRepositoryMetadata metadata,
+                IPackageStore store,
+                CancellationToken token) =>
+            {
+                var validationError = ValidateRepositoryMetadata(metadata);
+                if (validationError is not null)
+                {
+                    return Results.Problem(
+                        validationError,
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
+
+                return await store.SetRepositoryMetadataAsync(id, version, metadata, token)
+                    ? Results.NoContent()
+                    : Results.NotFound();
+            })
+            .WithMetadata(NuGetAccessRequirement.Control);
+
         app.MapGet("/__test/requests", (RequestRecorder recorder) => Results.Json(recorder.GetAll()))
             .WithMetadata(NuGetAccessRequirement.Control);
         app.MapDelete("/__test/requests", (RequestRecorder recorder) =>
@@ -541,6 +634,8 @@ public static class ServerApplication
     private static async Task<IResult> PublishPackageAsync(
         HttpRequest request,
         IPackageStore store,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -565,10 +660,164 @@ public static class ServerApplication
             }
 
             await using var stream = file.OpenReadStream();
-            return await AddPackageAsync(stream, store, limits, token);
+            return await PublishPackageContentAsync(
+                request,
+                stream,
+                store,
+                ownership,
+                audits,
+                limits,
+                token);
         }
 
-        return await AddPackageAsync(request.Body, store, limits, token);
+        return await PublishPackageContentAsync(
+            request,
+            request.Body,
+            store,
+            ownership,
+            audits,
+            limits,
+            token);
+    }
+
+    private static async Task<IResult> PublishPackageContentAsync(
+        HttpRequest request,
+        Stream content,
+        IPackageStore store,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits,
+        PackageTransferLimits limits,
+        CancellationToken token)
+    {
+        TestPackage? package = null;
+        try
+        {
+            package = await TestPackage.FromStreamAsync(
+                content,
+                limits,
+                cancellationToken: token);
+
+            var identity =
+                request.HttpContext.Items[typeof(ProductionIdentity)] as ProductionIdentity;
+            if (identity is not null)
+            {
+                if (!identity.AllowsPackage(package.Identity.Id))
+                {
+                    WriteAuthorizationDenied(
+                        request.HttpContext,
+                        audits,
+                        identity,
+                        $"Package '{package.Identity.Id}' is outside configured namespaces.");
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                var publishResult = await ownership.PublishAsync(
+                    package.Identity.Id,
+                    identity.Name,
+                    identity.HasScope(SecurityScope.Admin),
+                    async cancellationToken =>
+                        (await store.FindByIdAsync(
+                            package.Identity.Id,
+                            cancellationToken)).Count > 0,
+                    async cancellationToken =>
+                    {
+                        await store.AddAsync(package, cancellationToken);
+                    },
+                    token);
+
+                if (!publishResult.Authorized)
+                {
+                    WriteAuthorizationDenied(
+                        request.HttpContext,
+                        audits,
+                        identity,
+                        $"Package '{package.Identity.Id}' is owned by another identity.");
+                    return Results.StatusCode(StatusCodes.Status403Forbidden);
+                }
+
+                if (publishResult.OwnershipClaimed)
+                {
+                    audits.Write(CreateAudit(
+                        request.HttpContext,
+                        SecurityAuditEventType.PackageOwnershipClaimed,
+                        identity.Name,
+                        package.Identity.Id));
+                }
+            }
+            else
+            {
+                await store.AddAsync(package, token);
+            }
+
+            var result = Results.Created(
+                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
+                PackageSummary(package));
+            package = null;
+            return result;
+        }
+        catch (PackageLimitExceededException exception)
+        {
+            return Results.Problem(
+                exception.Message,
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+        catch (InvalidPackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+        catch (DuplicatePackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+        finally
+        {
+            package?.Dispose();
+        }
+    }
+
+    private static async Task<IResult> PublishSymbolPackageAsync(
+        HttpRequest request,
+        IPackageStore store,
+        CancellationToken token)
+    {
+        byte[] content;
+        if (request.HasFormContentType)
+        {
+            var form = await request.ReadFormAsync(token);
+            var file = form.Files.FirstOrDefault();
+            if (file is null)
+            {
+                return Results.Problem("The multipart request contains no symbol package.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, token);
+            content = buffer.ToArray();
+        }
+        else
+        {
+            using var buffer = new MemoryStream();
+            await request.Body.CopyToAsync(buffer, token);
+            content = buffer.ToArray();
+        }
+
+        try
+        {
+            var package = TestPackage.FromContent(content);
+            await store.AddSymbolAsync(content, token);
+            return Results.Created(
+                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}/symbols",
+                new { id = package.Identity.Id, version = package.NormalizedVersion });
+        }
+        catch (InvalidPackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status400BadRequest);
+        }
+        catch (DuplicatePackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
     }
 
     private static async Task<IResult> AddPackageAsync(
@@ -611,6 +860,81 @@ public static class ServerApplication
         }
     }
 
+    private static async Task<IResult> AddPackageAsync(
+        TestPackage package,
+        IPackageStore store,
+        CancellationToken token)
+    {
+        try
+        {
+            await store.AddAsync(package, token);
+            return Results.Created(
+                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
+                PackageSummary(package));
+        }
+        catch (DuplicatePackageException exception)
+        {
+            return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+    }
+
+    private static bool CanManagePackage(
+        HttpContext context,
+        string packageId,
+        IPackageOwnershipStore ownership,
+        ISecurityAuditSink audits)
+    {
+        var identity = context.Items[typeof(ProductionIdentity)] as ProductionIdentity;
+        if (identity is null)
+        {
+            return true;
+        }
+
+        var owner = ownership.GetOwner(packageId);
+        if ((owner is not null &&
+             string.Equals(owner, identity.Name, StringComparison.Ordinal)) ||
+            identity.HasScope(SecurityScope.Admin))
+        {
+            return true;
+        }
+
+        WriteAuthorizationDenied(
+            context,
+            audits,
+            identity,
+            owner is null
+                ? $"Package '{packageId}' has no recorded owner."
+                : $"Package '{packageId}' is owned by another identity.");
+        return false;
+    }
+
+    private static void WriteAuthorizationDenied(
+        HttpContext context,
+        ISecurityAuditSink audits,
+        ProductionIdentity identity,
+        string detail) =>
+        audits.Write(CreateAudit(
+            context,
+            SecurityAuditEventType.AuthorizationDenied,
+            identity.Name,
+            detail));
+
+    private static SecurityAuditEvent CreateAudit(
+        HttpContext context,
+        SecurityAuditEventType eventType,
+        string? identity,
+        string? detail) =>
+        new(
+            DateTimeOffset.UtcNow,
+            eventType,
+            context.Items[SecurityContextItems.Client] as string ??
+            context.Connection.RemoteIpAddress?.ToString() ??
+            "unknown",
+            identity,
+            context.Request.Method,
+            context.Request.Path,
+            detail);
+
     private static object PackageSummary(TestPackage package) => new
     {
         id = package.Identity.Id,
@@ -634,7 +958,30 @@ public static class ServerApplication
             ["id"] = package.Identity.Id,
             ["version"] = version,
             ["authors"] = package.Authors,
+            ["owners"] = package.RepositoryMetadata.Owners,
+            ["downloads"] = package.RepositoryMetadata.Downloads,
             ["description"] = package.Description,
+            ["summary"] = package.Summary,
+            ["title"] = string.IsNullOrEmpty(package.Title) ? package.Identity.Id : package.Title,
+            ["tags"] = package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+            ["projectUrl"] = package.ProjectUrl,
+            ["readme"] = package.Readme,
+            ["icon"] = package.Icon,
+            ["licenseExpression"] = package.LicenseExpression,
+            ["licenseFile"] = package.LicenseFile,
+            ["licenseUrl"] = package.LicenseUrl,
+            ["packageTypes"] = package.EffectivePackageTypes.Select(type => new
+            {
+                name = type.Name,
+                version = type.Version
+            }),
+            ["repository"] = package.Repository is null ? null : new
+            {
+                type = package.Repository.Type,
+                url = package.Repository.Url,
+                commit = package.Repository.Commit,
+                branch = package.Repository.Branch
+            },
             ["listed"] = package.IsListed,
             ["published"] = package.Published,
             ["dependencyGroups"] = package.DependencyGroups.Select(group => new
@@ -647,6 +994,19 @@ public static class ServerApplication
                 })
             })
         };
+        if (package.RepositoryMetadata.Deprecation is { } deprecation)
+        {
+            catalogEntry["deprecation"] = new
+            {
+                reasons = deprecation.Reasons,
+                message = deprecation.Message,
+                alternatePackage = deprecation.AlternatePackage is null ? null : new
+                {
+                    id = deprecation.AlternatePackage.Id,
+                    range = deprecation.AlternatePackage.Range
+                }
+            };
+        }
         var advisories = vulnerabilities.Active.Find(package.Identity.Id, package.Identity.Version);
         if (advisories.Count > 0)
         {
@@ -707,19 +1067,26 @@ public static class ServerApplication
             ["id"] = package.Identity.Id,
             ["version"] = version,
             ["description"] = package.Description,
-            ["summary"] = package.Description,
-            ["title"] = package.Identity.Id,
+            ["summary"] = string.IsNullOrEmpty(package.Summary)
+                ? package.Description
+                : package.Summary,
+            ["title"] = string.IsNullOrEmpty(package.Title) ? package.Identity.Id : package.Title,
             ["tags"] = package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries),
             ["authors"] = new[] { package.Authors },
-            ["owners"] = new[] { package.Authors },
-            ["totalDownloads"] = 0,
-            ["verified"] = false,
-            ["packageTypes"] = Array.Empty<object>(),
+            ["owners"] = package.RepositoryMetadata.Owners,
+            ["projectUrl"] = package.ProjectUrl,
+            ["totalDownloads"] = versions.Sum(item => item.RepositoryMetadata.Downloads),
+            ["verified"] = package.RepositoryMetadata.Verified,
+            ["packageTypes"] = package.EffectivePackageTypes.Select(type => new
+            {
+                name = type.Name,
+                version = type.Version
+            }),
             ["versions"] = versions.Select(item =>
                 new Dictionary<string, object?>
                 {
                     ["version"] = item.NormalizedVersion,
-                    ["downloads"] = 0,
+                    ["downloads"] = item.RepositoryMetadata.Downloads,
                     ["@id"] = $"{root}/registration/{id}/{item.NormalizedVersion}.json"
                 })
         };
@@ -733,6 +1100,42 @@ public static class ServerApplication
 
     private static string GetRoot(HttpContext context) =>
         $"{context.Request.Scheme}://{context.Request.Host}";
+
+    private static string? ValidateRepositoryMetadata(PackageRepositoryMetadata metadata)
+    {
+        if (metadata.Downloads < 0)
+        {
+            return "Downloads cannot be negative.";
+        }
+
+        if (metadata.Owners is null || metadata.Owners.Any(string.IsNullOrWhiteSpace))
+        {
+            return "Owners cannot contain empty values.";
+        }
+
+        if (metadata.Deprecation is not { } deprecation)
+        {
+            return null;
+        }
+
+        string[] validReasons = ["Legacy", "CriticalBugs", "Other"];
+        if (deprecation.Reasons is null ||
+            deprecation.Reasons.Count == 0 ||
+            deprecation.Reasons.Any(reason =>
+                !validReasons.Contains(reason, StringComparer.OrdinalIgnoreCase)))
+        {
+            return "Deprecation reasons must be Legacy, CriticalBugs, or Other.";
+        }
+
+        if (deprecation.AlternatePackage is { } alternate &&
+            (string.IsNullOrWhiteSpace(alternate.Id) ||
+             !VersionRange.TryParse(alternate.Range, out _)))
+        {
+            return "The alternate package requires an ID and valid version range.";
+        }
+
+        return null;
+    }
 
     public sealed record PackageContentRequest(string? Content);
 

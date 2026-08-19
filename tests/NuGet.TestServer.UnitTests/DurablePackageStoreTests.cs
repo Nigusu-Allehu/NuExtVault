@@ -78,8 +78,8 @@ public sealed class DurablePackageStoreTests
             WHERE packages_search MATCH '"migration"';
             """;
 
-        Assert.Equal(2L, versionCommand.ExecuteScalar());
-        Assert.Equal(2L, migrationCommand.ExecuteScalar());
+        Assert.Equal(3L, versionCommand.ExecuteScalar());
+        Assert.Equal(3L, migrationCommand.ExecuteScalar());
         Assert.Equal(4L, columnsCommand.ExecuteScalar());
         Assert.Equal(4L, indexesCommand.ExecuteScalar());
         Assert.Contains(
@@ -91,6 +91,7 @@ public sealed class DurablePackageStoreTests
             ReadQueryPlan(searchPlanCommand),
             StringComparison.OrdinalIgnoreCase);
         Assert.Equal("1.0.0", Assert.Single(packages).NormalizedVersion);
+        Assert.NotEmpty(Assert.Single(packages).PackageHash);
         Assert.Equal(1, search.TotalHits);
     }
 
@@ -215,6 +216,63 @@ public sealed class DurablePackageStoreTests
     }
 
     [Fact]
+    public async Task Repository_metadata_and_symbols_survive_restart()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var metadata = new PackageRepositoryMetadata(
+            ["Alice", "Bob"],
+            Downloads: 42,
+            Verified: true,
+            new PackageDeprecation(
+                ["Legacy", "Other"],
+                "Use the replacement.",
+                new AlternatePackage("Replacement.Package", "[2.0.0,)")));
+        var symbols = TestPackageBuilder.Create("Persistent.Package", "1.2.3")
+            .WithFile("lib/net10.0/Persistent.Package.pdb", [1, 2, 3, 4])
+            .Build()
+            .Content;
+
+        await using (var first = new DurablePackageStore(directory.Path))
+        {
+            await first.AddAsync(
+                TestPackageBuilder.Create("Persistent.Package", "1.2.3")
+                    .WithPackageType("DotnetTool", "1.0.0")
+                    .Build());
+            Assert.True(await first.SetRepositoryMetadataAsync(
+                "Persistent.Package",
+                "1.2.3",
+                metadata));
+            await first.AddSymbolAsync(symbols);
+        }
+
+        await using var second = new DurablePackageStore(directory.Path);
+        var restored = await second.FindAsync("persistent.package", "1.2.3");
+        var restoredSymbols = await second.FindSymbolAsync("persistent.package", "1.2.3");
+        var tools = await second.SearchAsync(
+            string.Empty,
+            includePrerelease: false,
+            skip: 0,
+            take: 20,
+            packageType: "dotnettool");
+
+        Assert.NotNull(restored);
+        Assert.Equal(metadata.Owners, restored.RepositoryMetadata.Owners);
+        Assert.Equal(metadata.Downloads, restored.RepositoryMetadata.Downloads);
+        Assert.Equal(metadata.Verified, restored.RepositoryMetadata.Verified);
+        Assert.Equal(
+            metadata.Deprecation!.Reasons,
+            restored.RepositoryMetadata.Deprecation!.Reasons);
+        Assert.Equal(
+            metadata.Deprecation.Message,
+            restored.RepositoryMetadata.Deprecation.Message);
+        Assert.Equal(
+            metadata.Deprecation.AlternatePackage,
+            restored.RepositoryMetadata.Deprecation.AlternatePackage);
+        Assert.Equal(symbols, restoredSymbols);
+        Assert.Equal(["Persistent.Package"], tools.Items.Select(item => item.Package.Identity.Id));
+    }
+
+    [Fact]
     public async Task Corrupted_metadata_database_has_an_actionable_diagnostic()
     {
         using var directory = TemporaryDirectory.Create();
@@ -288,10 +346,44 @@ public sealed class DurablePackageStoreTests
         var package = await second.FindAsync("Tampered.Package", "1.0.0");
 
         Assert.NotNull(package);
+        var contentError = Assert.Throws<PackageStorageCorruptionException>(
+            () => _ = package.Content);
+        Assert.Contains("Tampered.Package", contentError.Message, StringComparison.OrdinalIgnoreCase);
         var error = Assert.Throws<PackageStorageCorruptionException>(
             () => package.OpenReadStream());
         Assert.Contains("Tampered.Package", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("1.0.0", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Failed_symbol_staging_rolls_back_the_package_blob()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var symbols = TestPackageBuilder.Create("Rollback.Package", "1.0.0")
+            .WithFile("lib/net10.0/Rollback.Package.pdb", [1, 2, 3, 4])
+            .Build()
+            .Content;
+        await using var store = new DurablePackageStore(directory.Path);
+        await store.AddAsync(TestPackageBuilder.Create("Rollback.Package", "1.0.0").Build());
+        await store.AddSymbolAsync(symbols);
+        var symbolPath = Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "packages"),
+            "*.snupkg",
+            SearchOption.AllDirectories));
+        await using var symbolLock = new FileStream(
+            symbolPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.None);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => store.DeleteAsync("Rollback.Package", "1.0.0").AsTask());
+
+        Assert.NotNull(await store.FindAsync("Rollback.Package", "1.0.0"));
+        Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(directory.Path, "packages"),
+            "*.nupkg",
+            SearchOption.AllDirectories));
     }
 
     [Fact]
@@ -319,8 +411,20 @@ public sealed class DurablePackageStoreTests
             NuspecContent = [],
             NormalizedVersion = "1.0.0",
             Description = string.Empty,
+            Summary = string.Empty,
+            Title = string.Empty,
             Authors = string.Empty,
             Tags = string.Empty,
+            ProjectUrl = null,
+            Readme = string.Empty,
+            Icon = string.Empty,
+            LicenseExpression = string.Empty,
+            LicenseFile = string.Empty,
+            LicenseUrl = null,
+            PackageTypes = [],
+            Repository = null,
+            PackageHash = string.Empty,
+            RepositoryMetadata = new PackageRepositoryMetadata([], 0, false, null),
             DependencyGroups = [],
             Published = DateTimeOffset.UtcNow
         };

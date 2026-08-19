@@ -1,4 +1,6 @@
 using NuGet.TestServer.Authentication;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace NuGet.TestServer.Cli;
 
@@ -35,6 +37,15 @@ public sealed record AuthenticationCliOptions(
             getEnvironmentVariable,
             standardInput,
             warnings);
+        var identityJson = ResolveSecret(
+            arguments,
+            literalOption: "--identity-config",
+            environmentOption: "--identity-config-env",
+            stdinOption: "--identity-config-stdin",
+            getEnvironmentVariable,
+            standardInput,
+            warnings,
+            readEntireStandardInput: true);
 
         string? generatedApiKey = null;
         if (HasFlag(arguments, "--generate-api-key"))
@@ -62,6 +73,35 @@ public sealed record AuthenticationCliOptions(
 
         try
         {
+            if (identityJson is not null)
+            {
+                if (username is not null || password is not null || apiKey is not null)
+                {
+                    throw new CliConfigurationException(
+                        "Production identity configuration cannot be combined with legacy credentials.");
+                }
+
+                var document = JsonSerializer.Deserialize<ProductionIdentityDocument>(
+                    identityJson,
+                    new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                        Converters = { new JsonStringEnumConverter() }
+                    }) ?? throw new CliConfigurationException(
+                        "Production identity configuration is empty.");
+                if (document.Identities is null)
+                {
+                    throw new CliConfigurationException(
+                        "Production identity configuration must contain an identities array.");
+                }
+
+                return new AuthenticationCliOptions(
+                    AuthenticationConfiguration.CreateProduction(
+                        ProductionSecurityConfiguration.Create(document.Identities)),
+                    warnings,
+                    null);
+            }
+
             var configuration = AuthenticationConfiguration.Create(username, password, apiKey);
             return new AuthenticationCliOptions(configuration, warnings, generatedApiKey);
         }
@@ -69,7 +109,16 @@ public sealed record AuthenticationCliOptions(
         {
             throw new CliConfigurationException(exception.Message, exception);
         }
+        catch (JsonException exception)
+        {
+            throw new CliConfigurationException(
+                "Production identity configuration is not valid JSON.",
+                exception);
+        }
     }
+
+    private sealed record ProductionIdentityDocument(
+        IReadOnlyList<ProductionIdentityOptions>? Identities);
 
     private static string? ResolveSecret(
         IReadOnlyList<string> arguments,
@@ -78,7 +127,8 @@ public sealed record AuthenticationCliOptions(
         string stdinOption,
         Func<string, string?> getEnvironmentVariable,
         TextReader? standardInput,
-        ICollection<string> warnings)
+        ICollection<string> warnings,
+        bool readEntireStandardInput = false)
     {
         var literal = ReadOption(arguments, literalOption);
         var environmentName = ReadOption(arguments, environmentOption);
@@ -116,7 +166,9 @@ public sealed record AuthenticationCliOptions(
                     $"{stdinOption} requires standard input.");
             }
 
-            var value = standardInput.ReadLine();
+            var value = readEntireStandardInput
+                ? standardInput.ReadToEnd()
+                : standardInput.ReadLine();
             return string.IsNullOrEmpty(value)
                 ? throw new CliConfigurationException(
                     $"{stdinOption} received an empty secret.")

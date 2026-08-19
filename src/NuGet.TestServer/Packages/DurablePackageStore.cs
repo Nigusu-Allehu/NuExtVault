@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Xml.Linq;
 using Microsoft.Data.Sqlite;
 using NuGet.Versioning;
 
@@ -10,6 +13,8 @@ public sealed class DurablePackageStore : IPackageStore
     private readonly FileStream _rootLease;
     private readonly FilePackageBlobStore _blobs;
     private readonly SqlitePackageMetadataStore _metadata;
+    private readonly ConcurrentDictionary<string, byte[]> _symbols =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly PackageTransferLimits _limits;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -29,6 +34,7 @@ public sealed class DurablePackageStore : IPackageStore
             RecoverPendingDeletes();
             ImportUntrackedBlobs();
             ValidateTrackedBlobs();
+            LoadAndVerifySymbols();
         }
         catch
         {
@@ -79,6 +85,52 @@ public sealed class DurablePackageStore : IPackageStore
         return ValueTask.FromResult(metadata is null ? null : Project(metadata));
     }
 
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(
+            _symbols.GetValueOrDefault(SymbolKey(id, Normalize(version)))?.ToArray());
+    }
+
+    public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        token.ThrowIfCancellationRequested();
+        var package = InMemoryPackageStore.ParseSymbolPackage(content);
+        await _gate.WaitAsync(token);
+        string? relativePath = null;
+        try
+        {
+            var key = SymbolKey(package.Identity.Id, package.NormalizedVersion);
+            if (_symbols.ContainsKey(key))
+            {
+                throw new DuplicatePackageException(
+                    package.Identity.Id,
+                    package.NormalizedVersion);
+            }
+
+            relativePath = GetSymbolRelativePath(
+                package.Identity.Id,
+                package.NormalizedVersion);
+            await PublishBytesAsync(relativePath, content, token);
+            if (!_symbols.TryAdd(key, content.ToArray()))
+            {
+                _blobs.Delete(relativePath);
+                throw new DuplicatePackageException(
+                    package.Identity.Id,
+                    package.NormalizedVersion);
+            }
+        }
+        finally
+        {
+            package.Dispose();
+            _gate.Release();
+        }
+    }
+
     public ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
         string id,
         CancellationToken token = default)
@@ -98,10 +150,16 @@ public sealed class DurablePackageStore : IPackageStore
         bool includePrerelease,
         int skip,
         int take,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        string? packageType = null)
     {
         token.ThrowIfCancellationRequested();
-        var page = _metadata.Search(query ?? string.Empty, includePrerelease, skip, take);
+        var page = _metadata.Search(
+            query ?? string.Empty,
+            includePrerelease,
+            skip,
+            take,
+            packageType);
         IReadOnlyList<PackageSearchItem> items = page.Items
             .Select(item => new PackageSearchItem(
                 Project(item.Package),
@@ -133,6 +191,30 @@ public sealed class DurablePackageStore : IPackageStore
         }
     }
 
+    public async ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        await _gate.WaitAsync(token);
+        try
+        {
+            var normalizedVersion = Normalize(version);
+            if (!_metadata.SetRepositoryMetadata(id, normalizedVersion, metadata))
+            {
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async ValueTask<bool> DeleteAsync(
         string id,
         string version,
@@ -148,22 +230,38 @@ public sealed class DurablePackageStore : IPackageStore
                 return false;
             }
 
-            var pendingDelete = _blobs.StageDelete(metadata.BlobPath);
+            var pendingDeletes = new List<(string PendingPath, string BlobPath)>();
+
             try
             {
+                pendingDeletes.Add((
+                    _blobs.StageDelete(metadata.BlobPath),
+                    metadata.BlobPath));
+                var symbolPath = GetSymbolRelativePath(metadata.Id, metadata.NormalizedVersion);
+                if (File.Exists(_blobs.GetFullPath(symbolPath)))
+                {
+                    pendingDeletes.Add((_blobs.StageDelete(symbolPath), symbolPath));
+                }
+
                 if (!_metadata.Delete(id, normalizedVersion))
                 {
-                    _blobs.RollbackDelete(pendingDelete, metadata.BlobPath);
+                    RollbackDeletes(pendingDeletes);
                     return false;
                 }
             }
             catch
             {
-                _blobs.RollbackDelete(pendingDelete, metadata.BlobPath);
+                RollbackDeletes(pendingDeletes);
                 throw;
             }
 
-            _blobs.CompleteDelete(pendingDelete);
+            _symbols.TryRemove(SymbolKey(metadata.Id, metadata.NormalizedVersion), out _);
+
+            foreach (var pendingDelete in pendingDeletes)
+            {
+                _blobs.CompleteDelete(pendingDelete.PendingPath);
+            }
+
             return true;
         }
         finally
@@ -188,6 +286,14 @@ public sealed class DurablePackageStore : IPackageStore
                         metadata.BlobPath));
                 }
 
+                foreach (var symbolPath in GetSymbolPaths())
+                {
+                    token.ThrowIfCancellationRequested();
+                    pendingDeletes.Add((
+                        _blobs.StageDelete(symbolPath),
+                        symbolPath));
+                }
+
                 token.ThrowIfCancellationRequested();
                 _metadata.Clear();
             }
@@ -203,6 +309,7 @@ public sealed class DurablePackageStore : IPackageStore
                 throw;
             }
 
+            _symbols.Clear();
             foreach (var pendingDelete in pendingDeletes)
             {
                 _blobs.CompleteDelete(pendingDelete.PendingPath);
@@ -252,6 +359,11 @@ public sealed class DurablePackageStore : IPackageStore
         {
             var blobPath = _blobs.GetBlobPathForPendingDelete(pendingPath);
             if (_metadata.ContainsBlob(blobPath))
+            {
+                _blobs.RollbackDelete(pendingPath, blobPath);
+            }
+            else if (blobPath.EndsWith(".snupkg", StringComparison.OrdinalIgnoreCase) &&
+                     _metadata.ContainsBlob(Path.ChangeExtension(blobPath, ".nupkg")))
             {
                 _blobs.RollbackDelete(pendingPath, blobPath);
             }
@@ -309,6 +421,96 @@ public sealed class DurablePackageStore : IPackageStore
         }
     }
 
+    private void LoadAndVerifySymbols()
+    {
+        foreach (var relativePath in GetSymbolPaths())
+        {
+            var fullPath = _blobs.GetFullPath(relativePath);
+            try
+            {
+                var content = File.ReadAllBytes(fullPath);
+                using var package = InMemoryPackageStore.ParseSymbolPackage(content);
+                if (!_symbols.TryAdd(
+                        SymbolKey(package.Identity.Id, package.NormalizedVersion),
+                        content))
+                {
+                    throw new DuplicatePackageException(
+                        package.Identity.Id,
+                        package.NormalizedVersion);
+                }
+            }
+            catch (Exception exception) when (
+                exception is InvalidPackageException or DuplicatePackageException)
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Symbol package blob '{relativePath}' is invalid.",
+                    exception);
+            }
+        }
+    }
+
+    private async ValueTask PublishBytesAsync(
+        string relativePath,
+        byte[] content,
+        CancellationToken token)
+    {
+        var fullPath = _blobs.GetFullPath(relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await using (var stream = new FileStream(
+                             temporaryPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await stream.WriteAsync(content, token);
+                await stream.FlushAsync(token);
+                stream.Flush(flushToDisk: true);
+            }
+
+            token.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, fullPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private IEnumerable<string> GetSymbolPaths() =>
+        Directory.EnumerateFiles(
+                Path.Combine(_root, "packages"),
+                "*.snupkg",
+                SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(_root, path))
+            .ToArray();
+
+    private static string GetSymbolRelativePath(string id, string normalizedVersion)
+    {
+        var normalizedId = id.ToLowerInvariant();
+        return Path.Combine(
+            "packages",
+            normalizedId,
+            normalizedVersion,
+            $"{normalizedId}.{normalizedVersion}.snupkg");
+    }
+
+    private void RollbackDeletes(
+        IEnumerable<(string PendingPath, string BlobPath)> pendingDeletes)
+    {
+        foreach (var pendingDelete in pendingDeletes.Reverse())
+        {
+            _blobs.RollbackDelete(pendingDelete.PendingPath, pendingDelete.BlobPath);
+        }
+    }
+
     private static PackageStorageCorruptionException Corruption(
         string id,
         string normalizedVersion,
@@ -334,6 +536,9 @@ public sealed class DurablePackageStore : IPackageStore
         NuGetVersion.TryParse(version, out var parsed)
             ? TestPackage.NormalizeVersion(parsed)
             : version.ToLowerInvariant();
+
+    private static string SymbolKey(string id, string normalizedVersion) =>
+        $"{id.ToLowerInvariant()}\n{normalizedVersion}";
 }
 
 public interface IPackageBlobStore
@@ -351,6 +556,10 @@ public interface IPackageMetadataStore
     IReadOnlyList<PackageMetadata> FindById(string id);
     void Insert(PackageMetadata package);
     bool SetListed(string id, string normalizedVersion, bool listed);
+    bool SetRepositoryMetadata(
+        string id,
+        string normalizedVersion,
+        PackageRepositoryMetadata metadata);
     bool Delete(string id, string normalizedVersion);
 }
 
@@ -372,7 +581,9 @@ public sealed record PackageMetadata(
     bool IsListed,
     long ContentLength,
     string BlobPath,
-    byte[] Sha256)
+    byte[] Sha256,
+    PackageRepositoryMetadata? RepositoryMetadata,
+    string PackageHash)
 {
     internal static PackageMetadata FromPackage(TestPackage package, StoredPackageBlob blob) =>
         new(
@@ -387,7 +598,9 @@ public sealed record PackageMetadata(
             package.IsListed,
             blob.Length,
             blob.RelativePath,
-            blob.Sha256);
+            blob.Sha256,
+            package.RepositoryMetadata,
+            package.PackageHash);
 }
 
 internal sealed record PackageBlobReference(
@@ -517,7 +730,7 @@ internal sealed class FilePackageBlobStore : IPackageBlobStore
     }
 
     public IEnumerable<string> GetPendingDeletes() =>
-        Directory.EnumerateFiles(_trashDirectory, "*.nupkg", SearchOption.AllDirectories);
+        Directory.EnumerateFiles(_trashDirectory, "*.*nupkg", SearchOption.AllDirectories);
 
     public string GetBlobPathForPendingDelete(string pendingPath) =>
         Path.Combine("packages", Path.GetRelativePath(_trashDirectory, pendingPath));
@@ -566,24 +779,29 @@ internal sealed class FilePackageBlobStore : IPackageBlobStore
 
 internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
 {
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private const string Columns =
         """
         id, normalized_version, original_version, description, authors, tags,
-        nuspec, published_utc, is_listed, content_length, blob_path, sha256
+        nuspec, published_utc, is_listed, content_length, blob_path, sha256,
+        repository_metadata, package_hash
         """;
     private const string QualifiedColumns =
         """
         package.id, package.normalized_version, package.original_version,
         package.description, package.authors, package.tags, package.nuspec,
         package.published_utc, package.is_listed, package.content_length,
-        package.blob_path, package.sha256
+        package.blob_path, package.sha256, package.repository_metadata,
+        package.package_hash
         """;
     private readonly string _connectionString;
+    private readonly string _storageRoot;
 
     public SqlitePackageMetadataStore(string databasePath)
     {
         SqliteRuntime.Initialize();
+        _storageRoot = Path.GetDirectoryName(Path.GetFullPath(databasePath))
+            ?? throw new ArgumentException("The database path has no parent directory.", nameof(databasePath));
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
@@ -678,24 +896,39 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         string query,
         bool includePrerelease,
         int skip,
-        int take)
+        int take,
+        string? packageType)
     {
         take = Math.Clamp(take, 0, 1000);
         skip = Math.Max(skip, 0);
+        var normalizedPackageType = string.IsNullOrWhiteSpace(packageType)
+            ? string.Empty
+            : packageType.ToLowerInvariant();
         var pattern = $"%{EscapeLike(query.ToLowerInvariant())}%";
         var match = QuoteFtsPhrase(query.ToLowerInvariant());
+        const string packageTypeFilter =
+            """
+            AND ($packageType = '' OR EXISTS (
+                SELECT 1
+                FROM package_types AS type
+                WHERE type.normalized_id = package.normalized_id
+                  AND type.normalized_version = package.normalized_version
+                  AND type.normalized_type = $packageType
+            ))
+            """;
         var matchingIds = query.Length switch
         {
             0 =>
-                """
+                $"""
                 SELECT package.normalized_id
                 FROM packages AS package
                 WHERE package.is_listed = 1
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
+                  {packageTypeFilter}
                 GROUP BY package.normalized_id
                 """,
             >= 3 =>
-                """
+                $"""
                 SELECT package.normalized_id
                 FROM packages_search
                 JOIN packages AS package ON package.rowid = packages_search.rowid
@@ -703,15 +936,17 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND packages_search MATCH $match
                   AND package.search_text LIKE $pattern ESCAPE '\'
+                  {packageTypeFilter}
                 GROUP BY package.normalized_id
                 """,
             _ =>
-                """
+                $"""
                 SELECT package.normalized_id
                 FROM packages AS package
                 WHERE package.is_listed = 1
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND package.search_text LIKE $pattern ESCAPE '\'
+                  {packageTypeFilter}
                 GROUP BY package.normalized_id
                 """
         };
@@ -730,7 +965,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             match,
             includePrerelease,
             skip,
-            take);
+            take,
+            normalizedPackageType);
         var totalHits = Convert.ToInt32(countCommand.ExecuteScalar());
 
         using var pageCommand = CreateSearchCommand(
@@ -747,13 +983,15 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             JOIN matching_ids ON matching_ids.normalized_id = package.normalized_id
             WHERE package.is_listed = 1
               AND ($prerelease = 1 OR package.is_prerelease = 0)
+              {packageTypeFilter}
             ORDER BY package.normalized_id, package.version_sort_key;
             """,
             pattern,
             match,
             includePrerelease,
             skip,
-            take);
+            take,
+            normalizedPackageType);
         using var reader = pageCommand.ExecuteReader();
         var pagePackages = new List<PackageMetadata>();
         while (reader.Read())
@@ -786,16 +1024,19 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             INSERT INTO packages (
                 id, normalized_id, normalized_version, original_version, is_prerelease,
                 version_sort_key, description, authors, tags, search_text, nuspec,
-                published_utc, is_listed, content_length, blob_path, sha256)
+                published_utc, is_listed, content_length, blob_path, sha256,
+                repository_metadata, package_hash)
             VALUES (
                 $id, $normalizedId, $normalizedVersion, $originalVersion, $isPrerelease,
                 $versionSortKey, $description, $authors, $tags, $searchText, $nuspec,
-                $published, $listed, $length, $blobPath, $sha256);
+                $published, $listed, $length, $blobPath, $sha256,
+                $repositoryMetadata, $packageHash);
             """;
         AddParameters(command, package);
         try
         {
             command.ExecuteNonQuery();
+            InsertPackageTypes(connection, transaction, package);
             transaction.Commit();
         }
         catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
@@ -818,6 +1059,31 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             """;
         command.Parameters.AddWithValue("$listed", listed ? 1 : 0);
         command.Parameters.AddWithValue("$id", NormalizeId(id));
+        command.Parameters.AddWithValue("$version", normalizedVersion);
+        var changed = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return changed;
+    }
+
+    public bool SetRepositoryMetadata(
+        string id,
+        string normalizedVersion,
+        PackageRepositoryMetadata metadata)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE packages
+            SET repository_metadata = $metadata
+            WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
+            """;
+        command.Parameters.AddWithValue(
+            "$metadata",
+            JsonSerializer.Serialize(metadata));
+        command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$version", normalizedVersion);
         var changed = command.ExecuteNonQuery() == 1;
         transaction.Commit();
@@ -878,9 +1144,9 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             return;
         }
 
-        if (version == 1)
+        if (version < CurrentSchemaVersion)
         {
-            MigrateVersionOne(connection);
+            MigrateLegacySchema(connection);
         }
     }
 
@@ -908,6 +1174,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 content_length INTEGER NOT NULL CHECK (content_length >= 0),
                 blob_path TEXT NOT NULL UNIQUE,
                 sha256 BLOB NOT NULL CHECK (length(sha256) = 32),
+                repository_metadata TEXT NULL,
+                package_hash TEXT NOT NULL,
                 PRIMARY KEY (id, normalized_version)
             );
             CREATE TABLE storage_migrations (
@@ -921,44 +1189,73 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             """
             INSERT INTO storage_migrations(version, applied_utc)
             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-            PRAGMA user_version = 2;
+            INSERT INTO storage_migrations(version, applied_utc)
+            VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            PRAGMA user_version = 3;
             """;
         command.ExecuteNonQuery();
         transaction.Commit();
     }
 
-    private static void MigrateVersionOne(SqliteConnection connection)
+    private void MigrateLegacySchema(SqliteConnection connection)
     {
+        var hasIndexedColumns = HasColumn(connection, "normalized_id");
+        var hasRepositoryMetadata = HasColumn(connection, "repository_metadata");
+        var hasPackageHash = HasColumn(connection, "package_hash");
         using var transaction = connection.BeginTransaction();
         using (var alter = connection.CreateCommand())
         {
             alter.Transaction = transaction;
-            alter.CommandText =
-                """
-                ALTER TABLE packages ADD COLUMN normalized_id TEXT NOT NULL DEFAULT '';
-                ALTER TABLE packages ADD COLUMN is_prerelease INTEGER NOT NULL DEFAULT 0
-                    CHECK (is_prerelease IN (0, 1));
-                ALTER TABLE packages ADD COLUMN version_sort_key TEXT NOT NULL DEFAULT '';
-                ALTER TABLE packages ADD COLUMN search_text TEXT NOT NULL DEFAULT '';
-                """;
-            alter.ExecuteNonQuery();
+            if (!hasIndexedColumns)
+            {
+                alter.CommandText =
+                    """
+                    ALTER TABLE packages ADD COLUMN normalized_id TEXT NOT NULL DEFAULT '';
+                    ALTER TABLE packages ADD COLUMN is_prerelease INTEGER NOT NULL DEFAULT 0
+                        CHECK (is_prerelease IN (0, 1));
+                    ALTER TABLE packages ADD COLUMN version_sort_key TEXT NOT NULL DEFAULT '';
+                    ALTER TABLE packages ADD COLUMN search_text TEXT NOT NULL DEFAULT '';
+                    """;
+                alter.ExecuteNonQuery();
+            }
+
+            if (!hasRepositoryMetadata)
+            {
+                alter.CommandText = "ALTER TABLE packages ADD COLUMN repository_metadata TEXT NULL;";
+                alter.ExecuteNonQuery();
+            }
+
+            if (!hasPackageHash)
+            {
+                alter.CommandText =
+                    "ALTER TABLE packages ADD COLUMN package_hash TEXT NOT NULL DEFAULT '';";
+                alter.ExecuteNonQuery();
+            }
         }
 
         using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
             select.CommandText =
-                "SELECT rowid, id, original_version, description, tags FROM packages;";
+                """
+                SELECT rowid, id, normalized_version, original_version, description, tags, nuspec
+                     , blob_path, package_hash
+                FROM packages;
+                """;
             using var reader = select.ExecuteReader();
-            var updates = new List<(long RowId, string Id, string Version, string Description, string Tags)>();
+            var updates = new List<LegacyPackage>();
             while (reader.Read())
             {
-                updates.Add((
+                updates.Add(new LegacyPackage(
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.GetString(2),
                     reader.GetString(3),
-                    reader.GetString(4)));
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    (byte[])reader[6],
+                    reader.GetString(7),
+                    reader.GetString(8)));
             }
 
             reader.Close();
@@ -972,16 +1269,22 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                     SET normalized_id = $normalizedId,
                         is_prerelease = $isPrerelease,
                         version_sort_key = $versionSortKey,
-                        search_text = $searchText
+                        search_text = $searchText,
+                        package_hash = $packageHash
                     WHERE rowid = $rowId;
                     """;
-                var version = NuGetVersion.Parse(update.Version);
+                var version = NuGetVersion.Parse(update.OriginalVersion);
                 command.Parameters.AddWithValue("$normalizedId", NormalizeId(update.Id));
                 command.Parameters.AddWithValue("$isPrerelease", version.IsPrerelease ? 1 : 0);
                 command.Parameters.AddWithValue("$versionSortKey", VersionSortKey(version));
                 command.Parameters.AddWithValue(
                     "$searchText",
                     SearchText(update.Id, update.Description, update.Tags));
+                command.Parameters.AddWithValue(
+                    "$packageHash",
+                    string.IsNullOrEmpty(update.PackageHash)
+                        ? ComputePackageHash(update)
+                        : update.PackageHash);
                 command.Parameters.AddWithValue("$rowId", update.RowId);
                 command.ExecuteNonQuery();
             }
@@ -990,40 +1293,73 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         using var finalize = connection.CreateCommand();
         finalize.Transaction = transaction;
         finalize.CommandText =
+            """
+            DROP TRIGGER IF EXISTS packages_search_insert;
+            DROP TRIGGER IF EXISTS packages_search_delete;
+            DROP TRIGGER IF EXISTS packages_search_update;
+            """ +
             CreateIndexedSchemaSql +
             """
             INSERT INTO packages_search(packages_search) VALUES('rebuild');
-            INSERT INTO storage_migrations(version, applied_utc)
+            INSERT OR IGNORE INTO storage_migrations(version, applied_utc)
             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-            PRAGMA user_version = 2;
+            INSERT OR IGNORE INTO storage_migrations(version, applied_utc)
+            VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            PRAGMA user_version = 3;
             """;
         finalize.ExecuteNonQuery();
+
+        using var clearTypes = connection.CreateCommand();
+        clearTypes.Transaction = transaction;
+        clearTypes.CommandText = "DELETE FROM package_types;";
+        clearTypes.ExecuteNonQuery();
+        foreach (var package in ReadLegacyPackages(connection, transaction))
+        {
+            InsertPackageTypes(
+                connection,
+                transaction,
+                package.Id,
+                package.NormalizedVersion,
+                package.Nuspec);
+        }
+
         transaction.Commit();
     }
 
     private const string CreateIndexedSchemaSql =
         """
-        CREATE UNIQUE INDEX ix_packages_identity
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_packages_identity
             ON packages(normalized_id, normalized_version);
-        CREATE INDEX ix_packages_registration
+        CREATE INDEX IF NOT EXISTS ix_packages_registration
             ON packages(normalized_id, version_sort_key);
-        CREATE INDEX ix_packages_search_page
+        CREATE INDEX IF NOT EXISTS ix_packages_search_page
             ON packages(is_listed, is_prerelease, normalized_id);
-        CREATE VIRTUAL TABLE packages_search USING fts5(
+        CREATE VIRTUAL TABLE IF NOT EXISTS packages_search USING fts5(
             search_text,
             content='packages',
             content_rowid='rowid',
             tokenize='trigram'
         );
-        CREATE TRIGGER packages_search_insert AFTER INSERT ON packages BEGIN
+        CREATE TABLE IF NOT EXISTS package_types (
+            normalized_id TEXT NOT NULL,
+            normalized_version TEXT NOT NULL,
+            normalized_type TEXT NOT NULL,
+            PRIMARY KEY (normalized_id, normalized_version, normalized_type)
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS ix_package_types_query
+            ON package_types(normalized_type, normalized_id, normalized_version);
+        CREATE TRIGGER IF NOT EXISTS packages_search_insert AFTER INSERT ON packages BEGIN
             INSERT INTO packages_search(rowid, search_text)
             VALUES (new.rowid, new.search_text);
         END;
-        CREATE TRIGGER packages_search_delete AFTER DELETE ON packages BEGIN
+        CREATE TRIGGER IF NOT EXISTS packages_search_delete AFTER DELETE ON packages BEGIN
             INSERT INTO packages_search(packages_search, rowid, search_text)
             VALUES ('delete', old.rowid, old.search_text);
+            DELETE FROM package_types
+            WHERE normalized_id = old.normalized_id
+              AND normalized_version = old.normalized_version;
         END;
-        CREATE TRIGGER packages_search_update AFTER UPDATE ON packages BEGIN
+        CREATE TRIGGER IF NOT EXISTS packages_search_update AFTER UPDATE ON packages BEGIN
             INSERT INTO packages_search(packages_search, rowid, search_text)
             VALUES ('delete', old.rowid, old.search_text);
             INSERT INTO packages_search(rowid, search_text)
@@ -1062,7 +1398,13 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             reader.GetInt64(8) == 1,
             reader.GetInt64(9),
             reader.GetString(10),
-            (byte[])reader[11]);
+            (byte[])reader[11],
+            reader.IsDBNull(12)
+                ? null
+                : JsonSerializer.Deserialize<PackageRepositoryMetadata>(reader.GetString(12))
+                    ?? throw new PackageStorageCorruptionException(
+                        "Stored package repository metadata is invalid."),
+            reader.GetString(13));
 
     private static void AddParameters(SqliteCommand command, PackageMetadata package)
     {
@@ -1087,6 +1429,12 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.Parameters.AddWithValue("$length", package.ContentLength);
         command.Parameters.AddWithValue("$blobPath", package.BlobPath);
         command.Parameters.AddWithValue("$sha256", package.Sha256);
+        command.Parameters.AddWithValue(
+            "$repositoryMetadata",
+            package.RepositoryMetadata is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(package.RepositoryMetadata));
+        command.Parameters.AddWithValue("$packageHash", package.PackageHash);
     }
 
     private static SqliteCommand CreateSearchCommand(
@@ -1097,7 +1445,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         string match,
         bool includePrerelease,
         int skip,
-        int take)
+        int take,
+        string packageType)
     {
         var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -1107,10 +1456,134 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.Parameters.AddWithValue("$prerelease", includePrerelease ? 1 : 0);
         command.Parameters.AddWithValue("$skip", skip);
         command.Parameters.AddWithValue("$take", take);
+        command.Parameters.AddWithValue("$packageType", packageType);
         return command;
     }
 
+    private static bool HasColumn(SqliteConnection connection, string name)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM pragma_table_info('packages')
+                WHERE name = $name
+            );
+            """;
+        command.Parameters.AddWithValue("$name", name);
+        return Convert.ToInt64(command.ExecuteScalar()) == 1;
+    }
+
+    private static IReadOnlyList<LegacyPackage> ReadLegacyPackages(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT rowid, id, normalized_version, original_version, description, tags, nuspec,
+                   blob_path, package_hash
+            FROM packages;
+            """;
+        using var reader = command.ExecuteReader();
+        var packages = new List<LegacyPackage>();
+        while (reader.Read())
+        {
+            packages.Add(new LegacyPackage(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                (byte[])reader[6],
+                reader.GetString(7),
+                reader.GetString(8)));
+        }
+
+        return packages;
+    }
+
+    private static void InsertPackageTypes(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        PackageMetadata package) =>
+        InsertPackageTypes(
+            connection,
+            transaction,
+            package.Id,
+            package.NormalizedVersion,
+            package.Nuspec);
+
+    private static void InsertPackageTypes(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string id,
+        string normalizedVersion,
+        byte[] nuspec)
+    {
+        IReadOnlyList<string> types;
+        try
+        {
+            using var stream = new MemoryStream(nuspec, writable: false);
+            var document = XDocument.Load(stream);
+            types = document.Descendants()
+                .Where(element => element.Name.LocalName == "packageType")
+                .Select(element => element.Attribute("name")?.Value)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!.ToLowerInvariant())
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.Xml.XmlException)
+        {
+            throw new PackageStorageCorruptionException(
+                $"Stored package metadata for '{id} {normalizedVersion}' has an invalid nuspec.",
+                exception);
+        }
+
+        if (types.Count == 0)
+        {
+            types = ["dependency"];
+        }
+
+        foreach (var type in types)
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                INSERT OR IGNORE INTO package_types(
+                    normalized_id, normalized_version, normalized_type)
+                VALUES ($id, $version, $type);
+                """;
+            command.Parameters.AddWithValue("$id", NormalizeId(id));
+            command.Parameters.AddWithValue("$version", normalizedVersion);
+            command.Parameters.AddWithValue("$type", type);
+            command.ExecuteNonQuery();
+        }
+    }
+
     private static string NormalizeId(string id) => id.ToLowerInvariant();
+
+    private string ComputePackageHash(LegacyPackage package)
+    {
+        var path = Path.GetFullPath(Path.Combine(_storageRoot, package.BlobPath));
+        var rootPrefix = _storageRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? _storageRoot
+            : _storageRoot + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new PackageStorageCorruptionException(
+                $"Package blob path '{package.BlobPath}' escapes the storage root.");
+        }
+
+        using var stream = File.OpenRead(path);
+        return Convert.ToBase64String(SHA512.HashData(stream));
+    }
 
     private static string SearchText(string id, string description, string tags) =>
         $"{id}\n{description}\n{tags}".ToLowerInvariant();
@@ -1135,6 +1608,17 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             : "~";
         return $"{version.Major:D10}.{version.Minor:D10}.{version.Patch:D10}.{version.Revision:D10}{release}";
     }
+
+    private sealed record LegacyPackage(
+        long RowId,
+        string Id,
+        string NormalizedVersion,
+        string OriginalVersion,
+        string Description,
+        string Tags,
+        byte[] Nuspec,
+        string BlobPath,
+        string PackageHash);
 }
 
 internal static class SqliteRuntime

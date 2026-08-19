@@ -187,7 +187,12 @@ public sealed class PublishAndControlTests
     public async Task Durable_kestrel_server_serves_a_package_after_restart()
     {
         using var directory = TemporaryDirectory.Create();
-        var package = TestPackageBuilder.Create("Durable.Kestrel", "1.0.0").Build();
+        var package = TestPackageBuilder.Create("Durable.Kestrel", "1.0.0")
+            .WithPackageType("DotnetTool", "1.0.0")
+            .Build();
+        var symbols = TestPackageBuilder.Create("Durable.Kestrel", "1.0.0")
+            .WithFile("lib/net10.0/Durable.Kestrel.pdb", [1, 2, 3, 4])
+            .Build();
         await using (var first = await NuGetTestServerHost.StartAsync(
                          directory.Path,
                          CreateLimits()))
@@ -196,6 +201,29 @@ public sealed class PublishAndControlTests
                 "/package",
                 new ByteArrayContent(package.Content));
             upload.EnsureSuccessStatusCode();
+            using var symbolUpload = await first.HttpClient.PutAsync(
+                "/symbolpackage",
+                new ByteArrayContent(symbols.Content));
+            symbolUpload.EnsureSuccessStatusCode();
+            using var metadata = await first.HttpClient.PutAsJsonAsync(
+                "/__test/packages/Durable.Kestrel/1.0.0/metadata",
+                new
+                {
+                    owners = new[] { "Alice" },
+                    downloads = 42,
+                    verified = true,
+                    deprecation = new
+                    {
+                        reasons = new[] { "Legacy" },
+                        message = "Use the replacement.",
+                        alternatePackage = new
+                        {
+                            id = "Replacement.Package",
+                            range = "[2.0.0,)"
+                        }
+                    }
+                });
+            metadata.EnsureSuccessStatusCode();
         }
 
         await using var second = await NuGetTestServerHost.StartAsync(
@@ -203,9 +231,33 @@ public sealed class PublishAndControlTests
             CreateLimits());
         using var download = await second.HttpClient.GetAsync(
             "/flatcontainer/durable.kestrel/1.0.0/durable.kestrel.1.0.0.nupkg");
+        using var search = await second.HttpClient.GetAsync("/query?packageType=dotnettool");
+        using var registration = await second.HttpClient.GetAsync(
+            "/registration/durable.kestrel/1.0.0.json");
 
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
         Assert.Equal(package.Content, await download.Content.ReadAsByteArrayAsync());
+        search.EnsureSuccessStatusCode();
+        registration.EnsureSuccessStatusCode();
+        using var searchJson = JsonDocument.Parse(await search.Content.ReadAsStreamAsync());
+        using var registrationJson = JsonDocument.Parse(
+            await registration.Content.ReadAsStreamAsync());
+        Assert.Equal(
+            "Durable.Kestrel",
+            Assert.Single(searchJson.RootElement.GetProperty("data").EnumerateArray().ToArray())
+                .GetProperty("id")
+                .GetString());
+        Assert.Equal(
+            "Alice",
+            Assert.Single(registrationJson.RootElement
+                .GetProperty("catalogEntry")
+                .GetProperty("owners")
+                .EnumerateArray()
+                .ToArray())
+                .GetString());
+        Assert.Equal(
+            symbols.Content,
+            await second.Packages.FindSymbolAsync("Durable.Kestrel", "1.0.0"));
     }
 
     [Fact]

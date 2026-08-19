@@ -9,7 +9,8 @@ public enum AuthenticationProfile
     Anonymous,
     NuGetOrg,
     Private,
-    PrivateApiKey
+    PrivateApiKey,
+    Production
 }
 
 public sealed class AuthenticationConfiguration
@@ -25,19 +26,22 @@ public sealed class AuthenticationConfiguration
         string? username,
         byte[]? passwordSalt,
         byte[]? passwordDigest,
-        byte[]? apiKeyDigest)
+        byte[]? apiKeyDigest,
+        ProductionSecurityConfiguration? productionSecurity = null)
     {
         Profile = profile;
         _username = username;
         _passwordSalt = passwordSalt;
         _passwordDigest = passwordDigest;
         _apiKeyDigest = apiKeyDigest;
+        ProductionSecurity = productionSecurity;
     }
 
     public static AuthenticationConfiguration Anonymous { get; } =
         new(AuthenticationProfile.Anonymous, null, null, null, null);
 
     public AuthenticationProfile Profile { get; }
+    public ProductionSecurityConfiguration? ProductionSecurity { get; }
     public bool RequiresBasicAuthentication =>
         Profile is AuthenticationProfile.Private or AuthenticationProfile.PrivateApiKey;
     public bool RequiresApiKeyForWrites =>
@@ -93,6 +97,19 @@ public sealed class AuthenticationConfiguration
             passwordSalt,
             passwordDigest,
             hasApiKey ? HashSecret(apiKey!) : null);
+    }
+
+    public static AuthenticationConfiguration CreateProduction(
+        ProductionSecurityConfiguration security)
+    {
+        ArgumentNullException.ThrowIfNull(security);
+        return new AuthenticationConfiguration(
+            AuthenticationProfile.Production,
+            null,
+            null,
+            null,
+            null,
+            security);
     }
 
     public bool TryAuthenticateBasic(
