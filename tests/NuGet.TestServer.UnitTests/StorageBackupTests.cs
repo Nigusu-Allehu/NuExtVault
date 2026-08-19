@@ -95,6 +95,14 @@ public sealed class StorageBackupTests
         await File.WriteAllTextAsync(
             Path.Combine(securityDirectory, "package-owners.json"),
             """{"Durable.Backup":"publisher"}""");
+        var packageRelativePath = Path.Combine(
+            "durable.backup",
+            "1.0.0",
+            "durable.backup.1.0.0.nupkg");
+        var publishedPackage = Path.Combine(source.Path, "packages", packageRelativePath);
+        var pendingDelete = Path.Combine(source.Path, "trash", packageRelativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(pendingDelete)!);
+        File.Move(publishedPackage, pendingDelete);
         var backupPath = Path.Combine(source.Path, "backup.zip");
 
         var manifest = await StorageBackup.CreateAsync(source.Path, backupPath);
@@ -105,6 +113,9 @@ public sealed class StorageBackupTests
         Assert.Contains(
             manifest.Files,
             file => file.Path == "security/package-owners.json");
+        Assert.Contains(
+            manifest.Files,
+            file => file.Path == "trash/durable.backup/1.0.0/durable.backup.1.0.0.nupkg");
         await using var restoredStore = new DurablePackageStore(destination.Path);
         await using var restoredSupplyChain =
             new PackageSupplyChainService(restoredStore, destination.Path);
