@@ -371,11 +371,11 @@ public sealed class DurablePackageStoreTests
             Path.Combine(directory.Path, "packages"),
             "*.snupkg",
             SearchOption.AllDirectories));
-        await using var symbolLock = new FileStream(
-            symbolPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.None);
+        var pendingSymbolPath = Path.Combine(
+            directory.Path,
+            "trash",
+            Path.GetRelativePath(Path.Combine(directory.Path, "packages"), symbolPath));
+        Directory.CreateDirectory(pendingSymbolPath);
 
         await Assert.ThrowsAsync<IOException>(
             () => store.DeleteAsync("Rollback.Package", "1.0.0").AsTask());
