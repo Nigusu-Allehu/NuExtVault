@@ -56,4 +56,65 @@ public sealed class AuthenticationCliOptionsTests
         Assert.Equal(AuthenticationProfile.NuGetOrg, options.Configuration.Profile);
         Assert.Equal("generated-key", options.GeneratedApiKey);
     }
+
+    [Fact]
+    public void Production_identity_json_is_loaded_from_an_environment_provider()
+    {
+        const string json =
+            """
+            {
+              "identities": [
+                {
+                  "name": "publisher",
+                  "apiKeys": ["rotated-key"],
+                  "scopes": ["read", "publish"],
+                  "namespaces": ["Contoso."]
+                }
+              ]
+            }
+            """;
+
+        var options = AuthenticationCliOptions.Parse(
+            ["start", "--identity-config-env", "SERVER_IDENTITIES"],
+            name => name == "SERVER_IDENTITIES" ? json : null);
+
+        Assert.Equal(AuthenticationProfile.Production, options.Configuration.Profile);
+        Assert.True(options.Configuration.ProductionSecurity!
+            .TryAuthenticateApiKey("rotated-key", out var identity));
+        Assert.Equal("publisher", identity!.Name);
+    }
+
+    [Fact]
+    public void Production_identity_json_reads_the_complete_standard_input()
+    {
+        var options = AuthenticationCliOptions.Parse(
+            ["start", "--identity-config-stdin"],
+            _ => null,
+            standardInput: new StringReader(
+                """
+                {
+                  "identities": [
+                    {
+                      "name": "reader",
+                      "apiKeys": ["key"],
+                      "scopes": ["read"],
+                      "namespaces": ["*"]
+                    }
+                  ]
+                }
+                """));
+
+        Assert.Equal(AuthenticationProfile.Production, options.Configuration.Profile);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"identities":[{"name":"broken","apiKeys":["key"]}]}""")]
+    public void Incomplete_production_identity_json_is_a_configuration_error(string json)
+    {
+        Assert.Throws<CliConfigurationException>(() =>
+            AuthenticationCliOptions.Parse(
+                ["start", "--identity-config-env", "IDENTITIES"],
+                name => name == "IDENTITIES" ? json : null));
+    }
 }

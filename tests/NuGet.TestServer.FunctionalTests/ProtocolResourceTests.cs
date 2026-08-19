@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using NuGet.Common;
 using NuGet.Protocol;
@@ -242,5 +244,185 @@ public sealed class ProtocolResourceTests
         using var download = await server.HttpClient.GetAsync(
             "/flatcontainer/example/1.0.0/example.1.0.0.nupkg");
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+    }
+
+    [Fact]
+    public async Task Flat_container_serves_the_exact_package_sha512_for_get_and_head()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        var package = TestPackageBuilder.Create("Example.Hash", "1.0.0").Build();
+        await server.Packages.AddAsync(package);
+        const string path = "/flatcontainer/example.hash/1.0.0/example.hash.1.0.0.nupkg.sha512";
+
+        using var response = await server.HttpClient.GetAsync(path);
+        using var head = await server.HttpClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, path));
+
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(
+            Convert.ToBase64String(SHA512.HashData(package.Content)),
+            await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+        Assert.Empty(await head.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Registration_and_search_project_rich_package_metadata()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Example.Metadata", "1.0.0")
+                .WithAuthors("Alice, Bob")
+                .WithDescription("Description")
+                .WithSummary("Summary")
+                .WithTitle("Title")
+                .WithTags("one two")
+                .WithProjectUrl("https://example.test/project")
+                .WithReadme("README.md", "# Read me")
+                .WithIcon("icon.png", [1, 2, 3])
+                .WithLicenseExpression("MIT")
+                .WithPackageType("DotnetTool", "1.0.0")
+                .WithRepository("git", "https://example.test/repository.git", "abc123", "main")
+                .Build());
+
+        using var registration = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/registration/example.metadata/1.0.0.json"));
+        var catalog = registration.RootElement.GetProperty("catalogEntry");
+        Assert.Equal("Summary", catalog.GetProperty("summary").GetString());
+        Assert.Equal("Title", catalog.GetProperty("title").GetString());
+        Assert.Equal("https://example.test/project", catalog.GetProperty("projectUrl").GetString());
+        Assert.Equal("README.md", catalog.GetProperty("readme").GetString());
+        Assert.Equal("icon.png", catalog.GetProperty("icon").GetString());
+        Assert.Equal("MIT", catalog.GetProperty("licenseExpression").GetString());
+        Assert.Equal("DotnetTool", catalog.GetProperty("packageTypes")[0].GetProperty("name").GetString());
+        Assert.Equal("abc123", catalog.GetProperty("repository").GetProperty("commit").GetString());
+
+        using var search = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/query?q=metadata"));
+        var result = Assert.Single(search.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal("Summary", result.GetProperty("summary").GetString());
+        Assert.Equal("https://example.test/project", result.GetProperty("projectUrl").GetString());
+        Assert.Equal("DotnetTool", result.GetProperty("packageTypes")[0].GetProperty("name").GetString());
+
+        var repository = Repository.Factory.GetCoreV3(server.ServiceIndexUrl.ToString());
+        var metadataResource = await repository.GetResourceAsync<PackageMetadataResource>()
+            ?? throw new InvalidOperationException("RegistrationsBaseUrl was not discovered.");
+        using var cache = new SourceCacheContext { NoCache = true };
+        var metadata = Assert.Single(await metadataResource.GetMetadataAsync(
+            "Example.Metadata",
+            includePrerelease: false,
+            includeUnlisted: false,
+            cache,
+            NullLogger.Instance,
+            CancellationToken.None));
+        Assert.Equal(new Uri("https://example.test/project"), metadata.ProjectUrl);
+    }
+
+    [Fact]
+    public async Task Search_35_filters_package_types_and_emits_implicit_dependency()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Library", "1.0.0").Build());
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Tool", "1.0.0")
+                .WithPackageType("DotnetTool", "1.0.0")
+                .Build());
+
+        using var dependencySearch = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/query?packageType=Dependency"));
+        using var toolSearch = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/query?packageType=dotnettool"));
+
+        var dependency = Assert.Single(
+            dependencySearch.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal("Library", dependency.GetProperty("id").GetString());
+        Assert.Equal(
+            "Dependency",
+            dependency.GetProperty("packageTypes")[0].GetProperty("name").GetString());
+        var tool = Assert.Single(
+            toolSearch.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal("Tool", tool.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task Control_metadata_projects_owners_downloads_verification_and_deprecation()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Legacy.Package", "1.0.0")
+                .WithAuthors("Original Author")
+                .Build());
+        using var update = await server.HttpClient.PutAsJsonAsync(
+            "/__test/packages/Legacy.Package/1.0.0/metadata",
+            new
+            {
+                owners = new[] { "Alice", "Bob" },
+                downloads = 42,
+                verified = true,
+                deprecation = new
+                {
+                    reasons = new[] { "Legacy", "Other" },
+                    message = "Use the replacement.",
+                    alternatePackage = new
+                    {
+                        id = "Replacement.Package",
+                        range = "[2.0.0,)"
+                    }
+                }
+            });
+        update.EnsureSuccessStatusCode();
+
+        using var registration = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/registration/legacy.package/1.0.0.json"));
+        var catalog = registration.RootElement.GetProperty("catalogEntry");
+        Assert.Equal(["Alice", "Bob"], catalog.GetProperty("owners")
+            .EnumerateArray().Select(owner => owner.GetString()!).ToArray());
+        Assert.Equal(42, catalog.GetProperty("downloads").GetInt64());
+        Assert.Equal("Use the replacement.",
+            catalog.GetProperty("deprecation").GetProperty("message").GetString());
+        Assert.Equal("Replacement.Package",
+            catalog.GetProperty("deprecation").GetProperty("alternatePackage")
+                .GetProperty("id").GetString());
+
+        using var search = JsonDocument.Parse(
+            await server.HttpClient.GetStreamAsync("/query?q=legacy"));
+        var result = Assert.Single(search.RootElement.GetProperty("data").EnumerateArray().ToArray());
+        Assert.Equal(42, result.GetProperty("totalDownloads").GetInt64());
+        Assert.True(result.GetProperty("verified").GetBoolean());
+        Assert.Equal(42, result.GetProperty("versions")[0].GetProperty("downloads").GetInt64());
+
+        var repository = Repository.Factory.GetCoreV3(server.ServiceIndexUrl.ToString());
+        var metadataResource = await repository.GetResourceAsync<PackageMetadataResource>()
+            ?? throw new InvalidOperationException("RegistrationsBaseUrl was not discovered.");
+        using var cache = new SourceCacheContext { NoCache = true };
+        var metadata = Assert.Single(await metadataResource.GetMetadataAsync(
+            "Legacy.Package",
+            includePrerelease: false,
+            includeUnlisted: false,
+            cache,
+            NullLogger.Instance,
+            CancellationToken.None));
+        Assert.Equal("Alice, Bob", metadata.Owners);
+        var deprecation = await metadata.GetDeprecationMetadataAsync();
+        Assert.Equal("Use the replacement.", deprecation!.Message);
+    }
+
+    [Fact]
+    public async Task Control_metadata_rejects_null_collections()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Packages.AddAsync(TestPackageBuilder.Create("Example", "1.0.0").Build());
+        using var content = JsonContent.Create(new
+        {
+            owners = (string[]?)null,
+            downloads = 0,
+            verified = false,
+            deprecation = (object?)null
+        });
+
+        using var response = await server.HttpClient.PutAsync(
+            "/__test/packages/Example/1.0.0/metadata",
+            content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 }

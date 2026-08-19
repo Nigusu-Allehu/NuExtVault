@@ -35,11 +35,44 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public PackageControlClient Packages { get; }
     public FaultControlClient Faults { get; }
     public RequestControlClient Requests { get; }
+    public IReadOnlyList<SecurityAuditEvent> SecurityAudits =>
+        _application.Services.GetRequiredService<ISecurityAuditSink>().GetAll();
 
     public static async Task<NuGetTestServerHost> StartAsync(
         CancellationToken token = default)
     {
         return await StartAsync(AuthenticationConfiguration.Anonymous, token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartProductionAsync(
+        ProductionSecurityConfiguration security,
+        int maximumAuthenticationFailures = 5,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(security);
+        var application = ServerApplication.Build(
+            authentication: AuthenticationConfiguration.CreateProduction(security),
+            vulnerabilities: new VulnerabilitySnapshotProvider(
+                EmbeddedVulnerabilitySnapshot.Load()),
+            mode: ServerMode.Production,
+            trustedProxies: new TrustedProxyOptions(["127.0.0.1"]),
+            maximumAuthenticationFailures: maximumAuthenticationFailures);
+        try
+        {
+            await application.StartAsync(token);
+            var address = application.Services
+                .GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?
+                .Addresses.SingleOrDefault()
+                ?? throw new InvalidOperationException(
+                    "Kestrel did not publish a listening address.");
+            return new NuGetTestServerHost(application, new Uri(address));
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
+        }
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -251,6 +284,12 @@ public sealed class PackageControlClient(IPackageStore store)
         string version,
         CancellationToken token = default) =>
         store.FindAsync(id, version, token);
+
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        store.FindSymbolAsync(id, version, token);
 
     public ValueTask ResetAsync(CancellationToken token = default) => store.ResetAsync(token);
 }

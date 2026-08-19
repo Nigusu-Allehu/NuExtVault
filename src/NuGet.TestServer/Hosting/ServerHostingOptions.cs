@@ -12,15 +12,25 @@ public enum ServerMode
 public sealed record ServerHostingOptions(
     ServerMode Mode,
     string Url,
-    AuthenticationConfiguration Authentication)
+    AuthenticationConfiguration Authentication,
+    TransportSecurityOptions Transport)
 {
     public static ServerHostingOptions Create(
         ServerMode mode,
         string url,
-        AuthenticationConfiguration authentication)
+        AuthenticationConfiguration authentication,
+        TrustedProxyOptions? trustedProxies = null)
     {
         ArgumentNullException.ThrowIfNull(url);
         ArgumentNullException.ThrowIfNull(authentication);
+        var transport = new TransportSecurityOptions(trustedProxies);
+
+        if (authentication.Profile == AuthenticationProfile.Production &&
+            mode != ServerMode.Production)
+        {
+            throw new ServerHostingConfigurationException(
+                "Production identities require production server mode.");
+        }
 
         if (mode == ServerMode.Production)
         {
@@ -34,9 +44,18 @@ public sealed record ServerHostingOptions(
             {
                 ValidateProductionAddress(address);
             }
+
+            if (authentication.Profile == AuthenticationProfile.Production &&
+                url.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                    .Any(address => new Uri(address).Scheme != Uri.UriSchemeHttps) &&
+                transport.TrustedProxies.Count == 0)
+            {
+                throw new ServerHostingConfigurationException(
+                    "Production identity mode requires HTTPS or an explicit trusted reverse proxy.");
+            }
         }
 
-        return new ServerHostingOptions(mode, url, authentication);
+        return new ServerHostingOptions(mode, url, authentication, transport);
     }
 
     private static void ValidateProductionAddress(string address)

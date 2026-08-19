@@ -9,6 +9,13 @@ public interface IPackageStore : IAsyncDisposable
         string version,
         CancellationToken token = default);
 
+    ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default);
+
+    ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default);
+
     ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
         string id,
         CancellationToken token = default);
@@ -20,12 +27,19 @@ public interface IPackageStore : IAsyncDisposable
         bool includePrerelease,
         int skip,
         int take,
-        CancellationToken token = default);
+        CancellationToken token = default,
+        string? packageType = null);
 
     ValueTask<bool> SetListedAsync(
         string id,
         string version,
         bool listed,
+        CancellationToken token = default);
+
+    ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
         CancellationToken token = default);
 
     ValueTask<bool> DeleteAsync(
