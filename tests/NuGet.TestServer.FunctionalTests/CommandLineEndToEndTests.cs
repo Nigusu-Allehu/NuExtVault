@@ -170,6 +170,41 @@ public sealed class CommandLineEndToEndTests
     }
 
     [Fact]
+    public async Task Dotnet_nuget_push_publishes_a_symbol_package_to_the_advertised_resource()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        using var directory = TemporaryDirectory.Create();
+        var package = TestPackageBuilder.Create("Cli.Symbols", "1.0.0").Build();
+        var symbols = TestPackageBuilder.Create("Cli.Symbols", "1.0.0")
+            .WithFile("lib/net10.0/Cli.Symbols.pdb", [1, 2, 3, 4])
+            .Build();
+        var packagePath = Path.Combine(directory.Path, "Cli.Symbols.1.0.0.nupkg");
+        var symbolPath = Path.Combine(directory.Path, "Cli.Symbols.1.0.0.snupkg");
+        await File.WriteAllBytesAsync(packagePath, package.Content);
+        await File.WriteAllBytesAsync(symbolPath, symbols.Content);
+        var configPath = Path.Combine(directory.Path, "NuGet.config");
+        await File.WriteAllTextAsync(
+            configPath,
+            $"""
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="TestServer" value="{server.ServiceIndexUrl}" allowInsecureConnections="true" />
+              </packageSources>
+            </configuration>
+            """);
+
+        var result = await RunAsync(
+            "dotnet",
+            $"nuget push \"{packagePath}\" --source TestServer --api-key test --configfile \"{configPath}\"",
+            directory.Path);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.NotNull(await server.Packages.FindAsync("Cli.Symbols", "1.0.0"));
+        Assert.Equal(symbols.Content, await server.Packages.FindSymbolAsync("Cli.Symbols", "1.0.0"));
+    }
+
+    [Fact]
     public async Task Cli_start_exposes_a_healthy_server()
     {
         var port = GetAvailablePort();
@@ -217,12 +252,48 @@ public sealed class CommandLineEndToEndTests
                 Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             }
         }
+
         finally
         {
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
                 await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Cli_rejects_a_second_process_using_the_same_storage_root()
+    {
+        var firstPort = GetAvailablePort();
+        var secondPort = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        using var first = StartCli(cliPath, firstPort, storage.Path);
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{firstPort}")
+            };
+            await WaitUntilHealthyAsync(client);
+            var second = await RunAsync(
+                "dotnet",
+                $"\"{cliPath}\" start --port {secondPort} --storage \"{storage.Path}\"",
+                storage.Path);
+
+            Assert.Equal(2, second.ExitCode);
+            Assert.Contains("already in use", second.Output, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Unhandled exception", second.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (!first.HasExited)
+            {
+                first.Kill(entireProcessTree: true);
+                await first.WaitForExitAsync();
             }
         }
     }
@@ -280,6 +351,55 @@ public sealed class CommandLineEndToEndTests
                          await process.StandardError.ReadToEndAsync();
             Assert.Contains("Mode:        Production", output);
             Assert.DoesNotContain("Control API:", output);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Cli_loads_scoped_identities_from_environment_behind_a_trusted_proxy()
+    {
+        var port = GetAvailablePort();
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"\"{cliPath}\" start --production --port {port} --storage \"{storage.Path}\" " +
+                "--identity-config-env TEST_IDENTITIES --trusted-proxy 127.0.0.1",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.Environment["TEST_IDENTITIES"] =
+            """
+            {"identities":[{"name":"reader","apiKeys":["reader-key"],"scopes":["read"],"namespaces":["*"]}]}
+            """;
+        using var process = Process.Start(startInfo)!;
+
+        try
+        {
+            using var client = new HttpClient
+            {
+                BaseAddress = new Uri($"http://127.0.0.1:{port}")
+            };
+            client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+            client.DefaultRequestHeaders.Add("X-NuGet-ApiKey", "reader-key");
+            await WaitUntilHealthyAsync(client);
+
+            using var index = await client.GetAsync("/v3/index.json");
+            var body = await index.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.OK, index.StatusCode);
+            Assert.Contains($"https://127.0.0.1:{port}/", body);
         }
         finally
         {
@@ -391,6 +511,17 @@ public sealed class CommandLineEndToEndTests
         return (process.ExitCode, await outputTask + await errorTask);
     }
 
+    private static Process StartCli(string cliPath, int port, string storagePath) =>
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = $"\"{cliPath}\" start --port {port} --storage \"{storagePath}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
+
     private static int GetAvailablePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -439,9 +570,21 @@ public sealed class CommandLineEndToEndTests
 
         public void Dispose()
         {
-            if (Directory.Exists(Path))
+            const int maxAttempts = 20;
+            for (var attempt = 1; Directory.Exists(Path); attempt++)
             {
-                Directory.Delete(Path, recursive: true);
+                try
+                {
+                    Directory.Delete(Path, recursive: true);
+                }
+                catch (IOException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxAttempts)
+                {
+                    Thread.Sleep(100);
+                }
             }
         }
     }

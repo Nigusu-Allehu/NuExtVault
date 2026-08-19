@@ -6,6 +6,7 @@ using System.Text.Json;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.FunctionalTests;
 
@@ -61,7 +62,37 @@ public sealed class ProductionModeTests
     }
 
     [Fact]
-    public async Task Liveness_remains_healthy_when_storage_readiness_fails()
+    public async Task Legacy_production_api_key_protects_all_mutations()
+    {
+        var authentication = AuthenticationConfiguration.Create(
+            username: null,
+            password: null,
+            apiKey: "publish-key");
+        await using var server = await NuGetTestServerHost.StartAsync(
+            ServerMode.Production,
+            authentication);
+        var package = TestPackageBuilder.Create("Legacy.Production", "1.0.0").Build();
+
+        using var anonymous = await server.HttpClient.PutAsync(
+            "/package",
+            new ByteArrayContent(package.Content));
+        using var authenticatedRequest = new HttpRequestMessage(HttpMethod.Put, "/package")
+        {
+            Content = new ByteArrayContent(package.Content)
+        };
+        authenticatedRequest.Headers.Add("X-NuGet-ApiKey", "publish-key");
+        using var authenticated = await server.HttpClient.SendAsync(authenticatedRequest);
+        using var anonymousModeration = await server.HttpClient.PostAsync(
+            "/__admin/packages/Legacy.Production/1.0.0/quarantine?reason=test",
+            null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, authenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousModeration.StatusCode);
+    }
+
+    [Fact]
+    public async Task Production_health_reports_liveness_and_durable_storage_readiness()
     {
         var authentication = AuthenticationConfiguration.Create(
             username: null,
@@ -72,15 +103,14 @@ public sealed class ProductionModeTests
             ServerMode.Production,
             authentication,
             storage.Path);
-        Directory.Delete(storage.Path, recursive: true);
 
         using var live = await server.HttpClient.GetAsync("/health/live");
         using var ready = await server.HttpClient.GetAsync("/health/ready");
         var readiness = await ready.Content.ReadFromJsonAsync<JsonElement>();
 
         Assert.Equal(HttpStatusCode.OK, live.StatusCode);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, ready.StatusCode);
-        Assert.Equal("unhealthy", readiness.GetProperty("status").GetString());
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+        Assert.Equal("healthy", readiness.GetProperty("status").GetString());
         Assert.Equal("storage", readiness.GetProperty("dependency").GetString());
     }
 

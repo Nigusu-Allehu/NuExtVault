@@ -1,11 +1,15 @@
 using System.Collections.Concurrent;
+using System.IO.Compression;
+using System.Text.Json;
 using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore : IAsyncDisposable
+public sealed class InMemoryPackageStore : IPackageStore
 {
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte[]> _symbols =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _packagesDirectory;
     private readonly PackageTransferLimits _limits;
@@ -24,6 +28,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         _packagesDirectory = Path.Combine(Path.GetFullPath(storageDirectory), "packages");
         Directory.CreateDirectory(_packagesDirectory);
         LoadPersistedPackages();
+        LoadPersistedSymbols();
     }
 
     public int Count => _packages.Count;
@@ -31,6 +36,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
     public async ValueTask AddAsync(TestPackage package, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);
+        token.ThrowIfCancellationRequested();
         await _persistenceGate.WaitAsync(token);
         try
         {
@@ -79,7 +85,70 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        var package = _packages.GetValueOrDefault(Key(id, Normalize(version)));
+        return ValueTask.FromResult(
+            package?.ModerationState == PackageModerationState.Published ? package : null);
+    }
+
+    public ValueTask<TestPackage?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
         return ValueTask.FromResult(_packages.GetValueOrDefault(Key(id, Normalize(version))));
+    }
+
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        if (_packages.GetValueOrDefault(Key(id, Normalize(version)))?.ModerationState !=
+            PackageModerationState.Published)
+        {
+            return ValueTask.FromResult<byte[]?>(null);
+        }
+
+        return ValueTask.FromResult(
+            _symbols.GetValueOrDefault(Key(id, Normalize(version)))?.ToArray());
+    }
+
+    public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        token.ThrowIfCancellationRequested();
+        var package = ParseSymbolPackage(content);
+
+        var key = Key(package.Identity.Id, package.NormalizedVersion);
+        await _persistenceGate.WaitAsync(token);
+        try
+        {
+            if (!_symbols.TryAdd(key, content.ToArray()))
+            {
+                throw new DuplicatePackageException(package.Identity.Id, package.NormalizedVersion);
+            }
+
+            if (_packagesDirectory is null)
+            {
+                return;
+            }
+
+            try
+            {
+                await PersistSymbolAsync(package, content, token);
+            }
+            catch
+            {
+                _symbols.TryRemove(key, out _);
+                throw;
+            }
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
@@ -89,12 +158,25 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
             .Where(package => string.Equals(package.Identity.Id, id, StringComparison.OrdinalIgnoreCase))
+            .Where(package => package.ModerationState == PackageModerationState.Published)
             .OrderBy(package => package.Identity.Version)
             .ToArray();
         return ValueTask.FromResult(result);
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        IReadOnlyList<TestPackage> result = _packages.Values
+            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(package => package.Identity.Version)
+            .ToArray();
+        return ValueTask.FromResult(result);
+    }
+
+    public ValueTask<IReadOnlyList<TestPackage>> GetAllStoredAsync(
+        CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
@@ -109,7 +191,8 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         bool includePrerelease,
         int skip,
         int take,
-        CancellationToken token = default)
+        CancellationToken token = default,
+        string? packageType = null)
     {
         token.ThrowIfCancellationRequested();
         query ??= string.Empty;
@@ -117,8 +200,13 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         skip = Math.Max(skip, 0);
 
         var applicablePackages = _packages.Values
+            .Where(package => package.ModerationState == PackageModerationState.Published)
             .Where(package => package.IsListed)
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
+            .Where(package =>
+                string.IsNullOrWhiteSpace(packageType) ||
+                package.EffectivePackageTypes.Any(type =>
+                    string.Equals(type.Name, packageType, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         var matches = applicablePackages
             .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
@@ -171,6 +259,73 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         }
     }
 
+    public async ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        token.ThrowIfCancellationRequested();
+        var key = Key(id, Normalize(version));
+        await _persistenceGate.WaitAsync(token);
+        try
+        {
+            while (_packages.TryGetValue(key, out var package))
+            {
+                var updated = package with { RepositoryMetadata = metadata };
+                if (_packagesDirectory is not null)
+                {
+                    await PersistRepositoryMetadataAsync(updated, token);
+                }
+
+                if (_packages.TryUpdate(key, updated, package))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
+    }
+
+    public async ValueTask<bool> SetModerationStateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        var key = Key(id, Normalize(version));
+        await _persistenceGate.WaitAsync(token);
+        try
+        {
+            while (_packages.TryGetValue(key, out var package))
+            {
+                var updated = package with { ModerationState = state };
+                if (_packagesDirectory is not null)
+                {
+                    await PersistModerationStateAsync(updated, token);
+                }
+
+                if (_packages.TryUpdate(key, updated, package))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
+    }
+
     public async ValueTask<bool> DeleteAsync(
         string id,
         string version,
@@ -194,6 +349,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
                 }
 
                 _packages.TryRemove(key, out _);
+                _symbols.TryRemove(key, out _);
                 package.Dispose();
                 return true;
             }
@@ -203,6 +359,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
                 return false;
             }
 
+            _symbols.TryRemove(key, out _);
             package.Dispose();
             return true;
         }
@@ -228,6 +385,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
             }
 
             DisposePackages();
+            _symbols.Clear();
         }
         finally
         {
@@ -241,6 +399,7 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
         try
         {
             DisposePackages();
+            _symbols.Clear();
         }
         finally
         {
@@ -251,6 +410,31 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
 
     private static string Key(string id, string version) =>
         $"{id.ToLowerInvariant()}\n{version.ToLowerInvariant()}";
+
+    internal static TestPackage ParseSymbolPackage(byte[] content)
+    {
+        try
+        {
+            var package = TestPackage.FromContent(content);
+            using var archive = new ZipArchive(
+                new MemoryStream(content, writable: false),
+                ZipArchiveMode.Read);
+            if (!archive.Entries.Any(entry =>
+                    entry.FullName.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidDataException("A symbol package must contain a PDB.");
+            }
+
+            return package;
+        }
+        catch (Exception exception) when (
+            exception is InvalidPackageException or InvalidDataException)
+        {
+            throw new InvalidPackageException(
+                "The content is not a valid NuGet symbol package.",
+                exception);
+        }
+    }
 
     private static string Normalize(string version)
     {
@@ -272,10 +456,50 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
             var package = TestPackage.FromFile(packagePath, _limits);
             var markerPath = GetUnlistedMarkerPath(package);
             package = package with { IsListed = !File.Exists(markerPath) };
+            var metadataPath = GetRepositoryMetadataPath(package);
+            if (File.Exists(metadataPath))
+            {
+                package = package with
+                {
+                    RepositoryMetadata = JsonSerializer.Deserialize<PackageRepositoryMetadata>(
+                        File.ReadAllBytes(metadataPath))
+                        ?? throw new InvalidDataException(
+                            $"Storage metadata is invalid for '{package.Identity}'.")
+                };
+            }
+
+            var moderationPath = GetModerationStatePath(package);
+            if (File.Exists(moderationPath))
+            {
+                package = package with
+                {
+                    ModerationState = Enum.Parse<PackageModerationState>(
+                        File.ReadAllText(moderationPath),
+                        ignoreCase: true)
+                };
+            }
+
             if (!_packages.TryAdd(Key(package.Identity.Id, package.NormalizedVersion), package))
             {
                 throw new InvalidDataException(
                     $"Storage contains duplicate package '{package.Identity.Id} {package.NormalizedVersion}'.");
+            }
+        }
+    }
+
+    private void LoadPersistedSymbols()
+    {
+        foreach (var symbolPath in Directory.EnumerateFiles(
+                     _packagesDirectory!,
+                     "*.snupkg",
+                     SearchOption.AllDirectories))
+        {
+            var content = File.ReadAllBytes(symbolPath);
+            var package = TestPackage.FromContent(content);
+            if (!_symbols.TryAdd(Key(package.Identity.Id, package.NormalizedVersion), content))
+            {
+                throw new InvalidDataException(
+                    $"Storage contains duplicate symbols '{package.Identity.Id} {package.NormalizedVersion}'.");
             }
         }
     }
@@ -302,16 +526,31 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
 
             File.Move(temporary, destination, overwrite: false);
             SetUnlistedMarker(package, package.IsListed);
+            await PersistModerationStateAsync(package, token);
             return destination;
         }
-        catch
+        finally
         {
-            if (Directory.Exists(packageDirectory))
+            if (File.Exists(temporary))
             {
-                Directory.Delete(packageDirectory, recursive: true);
+                File.Delete(temporary);
             }
+        }
+    }
 
-            throw;
+    private async Task PersistSymbolAsync(
+        TestPackage package,
+        byte[] content,
+        CancellationToken token)
+    {
+        var directory = GetPackageDirectory(package);
+        Directory.CreateDirectory(directory);
+        var destination = GetSymbolPath(package);
+        var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(temporary, content, token);
+            File.Move(temporary, destination, overwrite: false);
         }
         finally
         {
@@ -331,10 +570,58 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
             {
                 File.Delete(markerPath);
             }
+
         }
         else
         {
             File.WriteAllText(markerPath, string.Empty);
+        }
+    }
+
+    private async Task PersistRepositoryMetadataAsync(
+        TestPackage package,
+        CancellationToken token)
+    {
+        var destination = GetRepositoryMetadataPath(package);
+        var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(
+                temporary,
+                JsonSerializer.SerializeToUtf8Bytes(package.RepositoryMetadata),
+                token);
+            File.Move(temporary, destination, overwrite: true);
+        }
+
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private async Task PersistModerationStateAsync(
+        TestPackage package,
+        CancellationToken token)
+    {
+        var destination = GetModerationStatePath(package);
+        var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporary,
+                package.ModerationState.ToString(),
+                token);
+            File.Move(temporary, destination, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
         }
     }
 
@@ -355,13 +642,27 @@ public sealed class InMemoryPackageStore : IAsyncDisposable
     private string GetUnlistedMarkerPath(TestPackage package) =>
         Path.Combine(GetPackageDirectory(package), ".unlisted");
 
+    private string GetRepositoryMetadataPath(TestPackage package) =>
+        Path.Combine(GetPackageDirectory(package), "metadata.json");
+
+    private string GetModerationStatePath(TestPackage package) =>
+        Path.Combine(GetPackageDirectory(package), "moderation.state");
+
+    private string GetSymbolPath(TestPackage package)
+    {
+        var id = package.Identity.Id.ToLowerInvariant();
+        return Path.Combine(
+            GetPackageDirectory(package),
+            $"{id}.{package.NormalizedVersion}.snupkg");
+    }
+
     private void DisposePackages()
     {
         foreach (var package in _packages.Values)
         {
             package.Dispose();
         }
-
+        _packages.Clear();
         _packages.Clear();
     }
 }

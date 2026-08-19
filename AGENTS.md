@@ -2,6 +2,15 @@
 
 These instructions apply to the entire repository.
 
+## Design documents
+
+- Create design documents in `.design/<topic>.md` by default, using a
+  descriptive topic filename.
+- Treat `.design/` as temporary, local storage. Keep a design there unless the
+  user explicitly asks to publish or move it into source control.
+- When the user asks to publish or move a design, move the file from `.design/`
+  to the tracked `design/` directory.
+
 ## Required development workflow
 
 For every feature, behavioral change, protocol change, or bug fix:

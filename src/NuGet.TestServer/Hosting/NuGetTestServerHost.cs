@@ -20,7 +20,8 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ControlUrl = new Uri(baseUrl, "/__test");
         HttpClient = new HttpClient { BaseAddress = baseUrl };
         Packages = new PackageControlClient(
-            application.Services.GetRequiredService<InMemoryPackageStore>());
+            application.Services.GetRequiredService<IPackageStore>(),
+            application.Services.GetRequiredService<PackageSupplyChainService>());
         Faults = new FaultControlClient(
             application.Services.GetRequiredService<FaultRuleStore>());
         Requests = new RequestControlClient(
@@ -35,11 +36,44 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public PackageControlClient Packages { get; }
     public FaultControlClient Faults { get; }
     public RequestControlClient Requests { get; }
+    public IReadOnlyList<SecurityAuditEvent> SecurityAudits =>
+        _application.Services.GetRequiredService<ISecurityAuditSink>().GetAll();
 
     public static async Task<NuGetTestServerHost> StartAsync(
         CancellationToken token = default)
     {
         return await StartAsync(AuthenticationConfiguration.Anonymous, token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartProductionAsync(
+        ProductionSecurityConfiguration security,
+        int maximumAuthenticationFailures = 5,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(security);
+        var application = ServerApplication.Build(
+            authentication: AuthenticationConfiguration.CreateProduction(security),
+            vulnerabilities: new VulnerabilitySnapshotProvider(
+                EmbeddedVulnerabilitySnapshot.Load()),
+            mode: ServerMode.Production,
+            trustedProxies: new TrustedProxyOptions(["127.0.0.1"]),
+            maximumAuthenticationFailures: maximumAuthenticationFailures);
+        try
+        {
+            await application.StartAsync(token);
+            var address = application.Services
+                .GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?
+                .Addresses.SingleOrDefault()
+                ?? throw new InvalidOperationException(
+                    "Kestrel did not publish a listening address.");
+            return new NuGetTestServerHost(application, new Uri(address));
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
+        }
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -60,6 +94,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         return await StartAsync(
+            ServerMode.Test,
             authentication,
             EmbeddedVulnerabilitySnapshot.Load(),
             PackageTransferLimits.Default,
@@ -72,6 +107,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         return await StartAsync(
+            ServerMode.Test,
             AuthenticationConfiguration.Anonymous,
             EmbeddedVulnerabilitySnapshot.Load(),
             packageLimits,
@@ -80,10 +116,69 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
+        SupplyChainOptions supplyChain,
+        IPackagePolicyScanner? scanner = null,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(supplyChain);
+        var application = ServerApplication.Build(
+            authentication: AuthenticationConfiguration.Anonymous,
+            vulnerabilities: new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()),
+            packageLimits: PackageTransferLimits.Default,
+            supplyChain: supplyChain,
+            packageScanner: scanner);
+        try
+        {
+            await application.StartAsync(token);
+            var address = application.Services
+                .GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?
+                .Addresses.SingleOrDefault()
+                ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
+            return new NuGetTestServerHost(application, new Uri(address));
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
+        }
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        string storageDirectory,
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        ArgumentNullException.ThrowIfNull(packageLimits);
+        var application = ServerApplication.Build(
+            storageDirectory: storageDirectory,
+            authentication: AuthenticationConfiguration.Anonymous,
+            vulnerabilities: new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()),
+            packageLimits: packageLimits);
+        try
+        {
+            await application.StartAsync(token);
+            var address = application.Services
+                .GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?
+                .Addresses.SingleOrDefault()
+                ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
+            return new NuGetTestServerHost(application, new Uri(address));
+        }
+        catch
+        {
+            await application.DisposeAsync();
+            throw;
+        }
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
         VulnerabilitySnapshot vulnerabilities,
         CancellationToken token = default)
     {
         return await StartAsync(
+            ServerMode.Test,
             AuthenticationConfiguration.Anonymous,
             vulnerabilities,
             PackageTransferLimits.Default,
@@ -97,6 +192,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         return await StartAsync(
+            ServerMode.Test,
             authentication,
             vulnerabilities,
             PackageTransferLimits.Default,
@@ -177,6 +273,22 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         AuthenticationConfiguration authentication,
         VulnerabilitySnapshot vulnerabilities,
         PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            mode,
+            authentication,
+            vulnerabilities,
+            packageLimits,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
         RuntimeStateConfiguration runtimeState,
         CancellationToken token = default)
     {
@@ -233,10 +345,12 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 }
 
-public sealed class PackageControlClient(InMemoryPackageStore store)
+public sealed class PackageControlClient(
+    IPackageStore store,
+    PackageSupplyChainService supplyChain)
 {
     public ValueTask AddAsync(TestPackage package, CancellationToken token = default) =>
-        store.AddAsync(package, token);
+        supplyChain.AddAsync(package, token);
 
     public ValueTask<TestPackage?> FindAsync(
         string id,
@@ -244,7 +358,14 @@ public sealed class PackageControlClient(InMemoryPackageStore store)
         CancellationToken token = default) =>
         store.FindAsync(id, version, token);
 
-    public ValueTask ResetAsync(CancellationToken token = default) => store.ResetAsync(token);
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        store.FindSymbolAsync(id, version, token);
+
+    public ValueTask ResetAsync(CancellationToken token = default) =>
+        supplyChain.ResetAsync(token);
 }
 
 public sealed class FaultControlClient(FaultRuleStore store)

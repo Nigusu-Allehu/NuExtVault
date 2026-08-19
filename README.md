@@ -94,7 +94,7 @@ Seed every `.nupkg` in a directory during startup:
 dotnet run --project .\src\NuGet.TestServer.Cli -- start --data .\packages
 ```
 
-CLI packages persist across restarts under:
+CLI packages persist transactionally across restarts under:
 
 ```text
 %LOCALAPPDATA%\nuget-test-server
@@ -108,12 +108,56 @@ development:
 nuget-test-server start --storage .\.nuget-test-server
 ```
 
+Package bodies remain streamed, file-backed blobs under `<storage>\packages`.
+SQLite metadata is stored in `<storage>\packages.db` with an explicit,
+automatically migrated schema version. Push, listing changes, deletion, and
+metadata publication are coordinated so interrupted operations are recovered on
+the next startup; control-API resets use the same recoverable deletion protocol.
+Existing filesystem-only package layouts are imported in place, including
+`.unlisted` markers.
+
+Persistent exact lookup, registration enumeration, and stable paged search run
+against normalized, indexed SQLite metadata. The schema stores normalized package
+identity, semantic version ordering, listing and prerelease state, package types,
+repository metadata, content hashes, and a trigram full-text projection of package
+ID, description, and tags. Search count, page selection, and version metadata share
+one read transaction, so `totalHits` and the returned page represent one snapshot
+while packages are being published. Metadata-only requests do not open `.nupkg`
+bodies; package content is opened only for downloads, one-time import of an
+untracked filesystem package, or a legacy hash migration. Downloads verify the
+recorded SHA-256 first.
+
+Only one server process may use a storage root at a time; a second process exits
+with a clear diagnostic. Startup validates that every tracked blob exists with
+the recorded length without reading package content, removes interrupted
+temporary publications, and recovers complete untracked blobs by validating and
+hashing them once. Programmatic servers created without a storage path continue
+to use the isolated in-memory implementation and the same `IPackageStore`
+semantics.
+
+### Indexed storage performance targets
+
+The deterministic Release-mode regression corpus contains 200 package versions
+with 16 KiB bodies. CI enforces these budgets on that corpus:
+
+| Area | Target |
+| --- | ---: |
+| Restart startup | under 5 seconds |
+| Restart allocations on the startup thread | under 12 MiB |
+| 100 indexed search page queries | under 5 seconds |
+| Concurrent consistency | 8 readers during 1 writer, with stable ordered pages |
+
+These are regression budgets for a local test server rather than production
+service-level guarantees. Package body size does not affect metadata-only startup
+or query allocations.
+
 Stop the server with Ctrl+C.
 
 ### Use production-safe mode
 
 Production-safe mode removes the test control surface while retaining the NuGet
-protocol endpoints:
+protocol endpoints. The legacy single-key form remains available for local
+loopback use:
 
 ```powershell
 $env:NUGET_TEST_SERVER_API_KEY = "<secret>"
@@ -132,11 +176,100 @@ is appropriate for a local tool and an API key or Basic credentials protect
 writes. `--url` can select another listener; a non-loopback production listener
 must use HTTPS with a Kestrel certificate.
 
-A reverse proxy can expose the loopback listener, but the server cannot verify
-the proxy's public TLS, network policy, forwarded-host handling, or identity
-controls. Operators are responsible for those boundaries. This mode provides
-endpoint reduction and rejects unsafe application defaults; it does not add the
-broader remote identity and transport features tracked separately.
+For remote production use, configure scoped identities through an environment
+configuration provider. Do not put the JSON or its credentials directly on the
+command line:
+
+```powershell
+$env:NUGET_TEST_SERVER_IDENTITIES = @'
+{
+  "identities": [
+    {
+      "name": "contoso-publisher",
+      "apiKeys": ["current-key", "previous-key-during-rotation"],
+      "passwords": [],
+      "scopes": ["read", "publish", "unlist"],
+      "namespaces": ["Contoso."]
+    },
+    {
+      "name": "feed-admin",
+      "apiKeys": ["admin-key"],
+      "passwords": [],
+      "scopes": ["admin"],
+      "namespaces": ["*"]
+    }
+  ]
+}
+'@
+
+nuget-test-server start --production `
+  --identity-config-env NUGET_TEST_SERVER_IDENTITIES `
+  --trusted-proxy 127.0.0.1
+```
+
+`--identity-config-stdin` is also supported. `--identity-config` emits the same
+process-listing warning as other literal secret options. Production identity
+configuration cannot be combined with the legacy username, password, or API-key
+options.
+
+Each identity may have multiple API keys and Basic-auth passwords so credentials
+can overlap during rotation. Secrets are immediately converted to individually
+salted PBKDF2-SHA256 digests and are never retained in clear text by the runtime.
+Identity names and credentials must be unique.
+
+The available scopes are `read`, `publish`, `unlist`, `delete`, and `admin`.
+`admin` grants every operation and namespace. A publisher must also match a
+configured package ID prefix. The first successful publisher claims ownership of
+the package ID; later versions, unlisting, and hard deletion are restricted to
+that owner or an administrator. Ownership and moderation history are persisted in
+`<storage>\supply-chain.db`, while package moderation state is also stored with
+the first-class package metadata.
+Hard deletion is available only with production identities at
+`DELETE /package/{id}/{version}/hard`.
+
+Production identities require end-to-end HTTPS or an explicitly trusted reverse
+proxy. For a proxy, bind the server to loopback, list the proxy's exact IP with
+`--trusted-proxy`, preserve the public `Host` header, and send exactly one
+`X-Forwarded-Proto: https` value. Forwarded transport and client-address headers
+are ignored unless the immediate peer is trusted. Requests that cannot prove a
+secure transport receive `426 Upgrade Required`.
+
+Authentication failures are atomically limited per validated client address, with
+bounded tracking for address churn. Authentication, authorization, throttling,
+and ownership events are emitted as structured records and appended to
+`<storage>\security\audit.jsonl` for CLI servers. In-memory retention is capped
+at 1,000 events; the audit file rotates at 10 MiB with one previous file retained.
+
+## Validate and moderate package publication
+
+Protocol pushes are quarantine-first. The server validates NuGet signatures and
+invokes the configured `IPackagePolicyScanner` before changing a package to
+`Published`. Invalid signatures and malicious scan results are rejected;
+inconclusive results and scanner failures remain quarantined. Only published
+packages are visible through flat-container content, versions, registration,
+search, rich metadata, or symbol retrieval. The same filtering is restored from
+durable state after restart.
+
+`SupplyChainOptions` configures required signatures, per-identity and
+per-repository package/byte quotas, and reserved package-ID namespaces.
+Identical retries are idempotent; a different archive for an existing ID/version
+conflicts because published versions are immutable. Trusted test-control seeds
+are recorded as published without protocol validation.
+
+Administrators can approve, reject, quarantine, or controlled-delete a version:
+
+```http
+POST /__admin/packages/{id}/{version}/approve?reason=reviewed
+POST /__admin/packages/{id}/{version}/reject?reason=policy
+POST /__admin/packages/{id}/{version}/quarantine?reason=investigation
+POST /__admin/packages/{id}/{version}/delete?reason=retention
+GET  /__admin/packages/{id}/{version}/validations
+GET  /__admin/supply-chain/audit
+```
+
+Moderation, validation records, ownership, tombstones, and audit history survive
+CLI restarts. Missing policy metadata fails closed by recovering durable package
+blobs as quarantined.
 
 ## Operate and deploy
 
@@ -684,9 +817,14 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
+- Base64 SHA-512 sidecars for package archives
 - Registration indexes, pages, and leaf metadata
+- Rich registration and search metadata from package archives and test state
 - Package search with stable pagination totals and complete listed-version metadata
-- Package push
+- Package and symbol-package push through standard NuGet clients
+- Quarantine-first signature/scanner validation and durable moderation
+- Published-only package, rich-metadata, search, registration, and symbol visibility
+- Immutable/idempotent publication, ownership, namespaces, and quotas
 - Package unlisting
 - Package seeding and hard deletion through the control API
 - Request recording
@@ -701,6 +839,62 @@ The current implementation supports:
 CLI package state is persisted in the Local AppData storage directory. Servers
 created with `NuGetTestServerHost.StartAsync()` remain isolated and in memory.
 Fault rules and request history are always runtime-only.
+
+### NuGet V3 capability matrix
+
+The service index advertises only resources implemented by the server.
+
+| Capability | Service-index type or route | Status | Client coverage |
+| --- | --- | --- | --- |
+| Service discovery | `GET/HEAD /v3/index.json` | Implemented | NuGet.Protocol and `dotnet` |
+| Package versions, archives, nuspecs | `PackageBaseAddress/3.0.0` | Implemented | NuGet.Protocol and `dotnet restore` |
+| Package hashes | `{id}.{version}.nupkg.sha512` | Implemented as Base64 SHA-512 of the exact archive | Raw Kestrel `GET`/`HEAD` |
+| Registration indexes, pages, and leaves | `RegistrationsBaseUrl/3.6.0` | Implemented | NuGet.Protocol |
+| Search | `SearchQueryService/3.0.0-beta` and `/3.5.0` | Implemented | NuGet.Protocol |
+| Package publishing and unlisting | `PackagePublish/2.0.0` | Implemented | `dotnet nuget push` |
+| Symbol-package publishing | `SymbolPackagePublish/4.9.0` | Implemented; `.snupkg` files are validated and persisted separately | `dotnet nuget push` automatic symbol upload |
+| Vulnerability data | `VulnerabilityInfo/6.7.0` | Implemented | NuGet restore audit |
+| Symbol download | No general NuGet V3 resource exists | Deferred and not advertised | N/A |
+| Repository signatures | `RepositorySignatures/4.7.0` and later | Deferred and not advertised | N/A |
+
+Registration metadata includes authors, owners, title, description, summary,
+tags, project URL, embedded readme and icon paths, license expression/file/URL,
+package types, repository details, dependencies, publication/listing state,
+download count, deprecation reasons/message/alternate package, and
+vulnerabilities. Search projects applicable fields plus per-version and total
+download counts and verification state.
+
+Tests can set repository-owned metadata without rewriting a package archive:
+
+```http
+PUT /__test/packages/{id}/{version}/metadata
+Content-Type: application/json
+
+{
+  "owners": ["Alice", "Bob"],
+  "downloads": 42,
+  "verified": true,
+  "deprecation": {
+    "reasons": ["Legacy"],
+    "message": "Use Replacement.Package.",
+    "alternatePackage": {
+      "id": "Replacement.Package",
+      "range": "[2.0.0,)"
+    }
+  }
+}
+```
+
+Downloads must be non-negative, deprecation reasons are limited to `Legacy`,
+`CriticalBugs`, and `Other`, and alternate-package ranges must be valid NuGet
+version ranges. This metadata persists with CLI package storage.
+
+Repository signatures are intentionally deferred. A correct
+`RepositorySignatures` resource requires HTTPS, X.509 signing certificates,
+repository-signing every claimed package, and trust metadata matching those
+actual signatures. This loopback test server can validate author/repository-signed package content
+but has no repository-signing-key pipeline, so advertising an empty or synthetic
+repository-signature resource would misrepresent package trust.
 
 ## Repository layout
 
@@ -731,6 +925,10 @@ Repository agents and contributors follow the workflow in
 - This is test infrastructure, not a production package feed.
 - Programmatic test-server storage is in memory; the CLI persists packages locally.
 - The server uses anonymous HTTP by default unless credentials are supplied.
-- Multi-user authorization, scoped keys, HTTPS, advanced network faults, symbols,
+- The default policy scanner performs structural policy checks, not antivirus;
+  real malware detection requires an injected `IPackagePolicyScanner`.
+- Signature validation checks NuGet signature/content integrity but does not
+  configure signer allow-lists or guarantee online revocation checks.
+- Automatic certificate provisioning, advanced network faults, symbol download,
   and repository signatures are not yet implemented.
 - The server binds to `127.0.0.1` unless its hosting configuration is changed.

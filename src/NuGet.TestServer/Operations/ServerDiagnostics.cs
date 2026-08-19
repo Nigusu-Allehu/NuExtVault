@@ -14,7 +14,7 @@ public sealed class ServerDiagnostics : IDisposable
     private readonly Counter<long> _packagesPublished;
     private readonly Counter<long> _storageFailures;
 
-    public ServerDiagnostics(InMemoryPackageStore packages)
+    public ServerDiagnostics(IPackageStore packages)
     {
         _requests = _meter.CreateCounter<long>("nuget.server.requests");
         _errors = _meter.CreateCounter<long>("nuget.server.errors");
@@ -25,7 +25,12 @@ public sealed class ServerDiagnostics : IDisposable
         _storageFailures = _meter.CreateCounter<long>("nuget.server.storage.failures");
         _meter.CreateObservableGauge(
             "nuget.server.packages",
-            () => packages.Count,
+            () => packages switch
+            {
+                InMemoryPackageStore memory => memory.Count,
+                DurablePackageStore durable => durable.Count,
+                _ => 0
+            },
             description: "Current package count.");
     }
 

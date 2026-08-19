@@ -35,7 +35,12 @@ public sealed class StorageBackupTests
                 "vulnerabilities",
                 "snapshot",
                 "metadata.json")));
-        Assert.Equal(2, manifest.Files.Count);
+        Assert.Contains(
+            manifest.Files,
+            file => file.Path == "packages/recovered.package/1.2.3/recovered.package.1.2.3.nupkg");
+        Assert.Contains(
+            manifest.Files,
+            file => file.Path == "vulnerabilities/snapshot/metadata.json");
     }
 
     [Fact]
@@ -65,6 +70,44 @@ public sealed class StorageBackupTests
 
         Assert.Contains("integrity", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(Directory.EnumerateFileSystemEntries(destination.Path));
+    }
+
+    [Fact]
+    public async Task Backup_restores_current_durable_database_and_security_state()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        await using (var store = new DurablePackageStore(source.Path))
+        await using (var supplyChain = new PackageSupplyChainService(store, source.Path))
+        {
+            var result = await supplyChain.PublishAsync(new PackagePublicationRequest(
+                TestPackageBuilder.Create("Durable.Backup", "1.0.0").Build(),
+                "publisher",
+                "default",
+                Administrator: false));
+            Assert.Equal(PackagePublicationOutcome.Published, result.Outcome);
+        }
+
+        var securityDirectory = Path.Combine(source.Path, "security");
+        Directory.CreateDirectory(securityDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(securityDirectory, "package-owners.json"),
+            """{"Durable.Backup":"publisher"}""");
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+
+        var manifest = await StorageBackup.CreateAsync(source.Path, backupPath);
+        await StorageBackup.RestoreAsync(backupPath, destination.Path);
+
+        Assert.Contains(manifest.Files, file => file.Path == "packages.db");
+        Assert.Contains(manifest.Files, file => file.Path == "supply-chain.db");
+        Assert.Contains(
+            manifest.Files,
+            file => file.Path == "security/package-owners.json");
+        await using var restoredStore = new DurablePackageStore(destination.Path);
+        await using var restoredSupplyChain =
+            new PackageSupplyChainService(restoredStore, destination.Path);
+        Assert.NotNull(await restoredStore.FindAsync("Durable.Backup", "1.0.0"));
+        Assert.NotNull(await restoredSupplyChain.GetStatusAsync("Durable.Backup", "1.0.0"));
     }
 
     private sealed class TemporaryDirectory : IDisposable

@@ -9,7 +9,17 @@ public static class StorageBackup
     private const string ManifestEntryName = "manifest.json";
     private const long MaximumManifestBytes = 10 * 1024 * 1024;
     private const long RestoreFreeSpaceReserveBytes = 256 * 1024 * 1024;
-    private static readonly string[] IncludedDirectories = ["packages", "vulnerabilities"];
+    private static readonly string[] IncludedDirectories =
+        ["packages", "security", "vulnerabilities"];
+    private static readonly string[] IncludedFiles =
+    [
+        "packages.db",
+        "packages.db-shm",
+        "packages.db-wal",
+        "supply-chain.db",
+        "supply-chain.db-shm",
+        "supply-chain.db-wal"
+    ];
 
     public static async Task<StorageBackupManifest> CreateAsync(
         string storageDirectory,
@@ -32,6 +42,7 @@ public static class StorageBackup
         }
 
         var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
+        using var storageLease = AcquireStorageLease(root);
         try
         {
             var files = new List<StorageBackupFile>();
@@ -72,6 +83,17 @@ public static class StorageBackup
                             length,
                             Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()));
                     }
+                }
+
+                foreach (var fileName in IncludedFiles)
+                {
+                    var file = Path.Combine(root, fileName);
+                    if (!File.Exists(file))
+                    {
+                        continue;
+                    }
+
+                    await AddFileAsync(archive, root, file, files, token);
                 }
 
                 var manifest = new StorageBackupManifest(
@@ -252,6 +274,15 @@ public static class StorageBackup
                 }
             }
 
+            foreach (var fileName in IncludedFiles)
+            {
+                var stagedFile = Path.Combine(staging, fileName);
+                if (File.Exists(stagedFile))
+                {
+                    File.Move(stagedFile, Path.Combine(destination, fileName));
+                }
+            }
+
             return manifest;
         }
         catch
@@ -262,6 +293,15 @@ public static class StorageBackup
                 if (Directory.Exists(restoredDirectory))
                 {
                     Directory.Delete(restoredDirectory, recursive: true);
+                }
+            }
+
+            foreach (var fileName in IncludedFiles)
+            {
+                var restoredFile = Path.Combine(destination, fileName);
+                if (File.Exists(restoredFile))
+                {
+                    File.Delete(restoredFile);
                 }
             }
 
@@ -300,6 +340,15 @@ public static class StorageBackup
                     $"Restore target '{destination}' already contains '{directoryName}'.");
             }
         }
+
+        foreach (var fileName in IncludedFiles)
+        {
+            if (File.Exists(Path.Combine(destination, fileName)))
+            {
+                throw new IOException(
+                    $"Restore target '{destination}' already contains '{fileName}'.");
+            }
+        }
     }
 
     private static void ValidateRelativePath(string path)
@@ -309,9 +358,65 @@ public static class StorageBackup
             path.Contains('\\', StringComparison.Ordinal) ||
             path.Split('/').Any(segment => segment is "" or "." or "..") ||
             !IncludedDirectories.Any(
-                directory => path.StartsWith(directory + "/", StringComparison.Ordinal)))
+                directory => path.StartsWith(directory + "/", StringComparison.Ordinal)) &&
+            !IncludedFiles.Contains(path, StringComparer.Ordinal))
         {
             throw new InvalidDataException($"Backup path '{path}' is invalid.");
+        }
+    }
+
+    private static async Task AddFileAsync(
+        ZipArchive archive,
+        string root,
+        string file,
+        List<StorageBackupFile> files,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var relativePath = Path.GetRelativePath(root, file).Replace('\\', '/');
+        var entry = archive.CreateEntry(relativePath, CompressionLevel.Optimal);
+        await using var input = File.OpenRead(file);
+        await using var output = entry.Open();
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[81920];
+        long length = 0;
+        int read;
+        while ((read = await input.ReadAsync(buffer, token)) > 0)
+        {
+            await output.WriteAsync(buffer.AsMemory(0, read), token);
+            hash.AppendData(buffer, 0, read);
+            length += read;
+        }
+
+        files.Add(new StorageBackupFile(
+            relativePath,
+            length,
+            Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()));
+    }
+
+    private static FileStream? AcquireStorageLease(string root)
+    {
+        var lockPath = Path.Combine(root, ".storage.lock");
+        if (!File.Exists(lockPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return new FileStream(
+                lockPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.None,
+                bufferSize: 1,
+                FileOptions.None);
+        }
+        catch (IOException exception)
+        {
+            throw new IOException(
+                $"Storage directory '{root}' is in use. Stop the server before creating a backup.",
+                exception);
         }
     }
 }
