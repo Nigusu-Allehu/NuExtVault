@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Packages;
@@ -12,19 +14,25 @@ namespace NuGet.TestServer.Hosting;
 
 public static class ServerApplication
 {
+    private const long LegacyJsonPackageLimit = 4L * 1024 * 1024;
+
     public static WebApplication Build(
         string[]? args = null,
         string? url = null,
         string? storageDirectory = null,
         AuthenticationConfiguration? authentication = null,
         VulnerabilitySnapshotProvider? vulnerabilities = null,
-        ServerMode mode = ServerMode.Test)
+        ServerMode mode = ServerMode.Test,
+        RuntimeStateConfiguration? runtimeState = null,
+        PackageTransferLimits? packageLimits = null)
     {
         var hosting = ServerHostingOptions.Create(
             mode,
             url ?? "http://127.0.0.1:0",
             authentication ?? AuthenticationConfiguration.Anonymous);
         var builder = WebApplication.CreateBuilder(args ?? []);
+        runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
+        packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
         builder.WebHost.UseUrls(hosting.Url);
         if (mode == ServerMode.Production)
         {
@@ -32,11 +40,21 @@ public static class ServerApplication
             builder.Logging.AddJsonConsole();
         }
 
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.Limits.MaxRequestBodySize = packageLimits.MaxRequestBodyBytes;
+        });
+        builder.Services.Configure<FormOptions>(options =>
+        {
+            options.MemoryBufferThreshold = 64 * 1024;
+            options.MultipartBodyLengthLimit = packageLimits.MaxRequestBodyBytes;
+        });
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
-        var packages = new InMemoryPackageStore(storageDirectory);
-        builder.Services.AddSingleton(packages);
+        builder.Services.AddSingleton(runtimeState);
+        builder.Services.AddSingleton(packageLimits);
+        builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory, packageLimits));
         builder.Services.AddSingleton(new StorageHealth(storageDirectory));
         builder.Services.AddSingleton<ServerDiagnostics>();
         builder.Services.AddSingleton<FaultRuleStore>();
@@ -126,15 +144,18 @@ public static class ServerApplication
                 }
                 finally
                 {
-                    recorder.Add(new RequestRecord(
-                        sequence,
-                        recorder.UtcNow,
-                        context.Request.Method,
-                        context.Request.Path,
-                        context.Response.StatusCode,
-                        (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                        faultRuleId,
-                        context.User.Identity?.Name));
+                    if (!ClearsRequestHistory(context.Request))
+                    {
+                        recorder.Add(new RequestRecord(
+                            sequence,
+                            recorder.UtcNow,
+                            context.Request.Method,
+                            context.Request.Path,
+                            context.Response.StatusCode,
+                            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                            faultRuleId,
+                            context.User.Identity?.Name));
+                    }
                 }
             });
         }
@@ -225,7 +246,7 @@ public static class ServerApplication
                         StringComparison.OrdinalIgnoreCase))
                 {
                     return Results.File(
-                        package.Content,
+                        package.OpenReadStream(),
                         "application/octet-stream",
                         enableRangeProcessing: true);
                 }
@@ -254,29 +275,35 @@ public static class ServerApplication
                     return Results.NotFound();
                 }
 
-                var first = packages[0];
-                var last = packages[^1];
                 var root = GetRoot(context);
-                var normalizedId = first.Identity.Id.ToLowerInvariant();
+                var normalizedId = packages[0].Identity.Id.ToLowerInvariant();
                 return Results.Json(new Dictionary<string, object?>
                 {
                     ["@id"] = $"{root}/registration/{normalizedId}/index.json",
                     ["count"] = 1,
                     ["items"] = new[]
                     {
-                        new Dictionary<string, object?>
-                        {
-                            ["@id"] =
-                                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
-                            ["@type"] = "catalog:CatalogPage",
-                            ["count"] = packages.Count,
-                            ["lower"] = first.NormalizedVersion,
-                            ["upper"] = last.NormalizedVersion,
-                            ["items"] = packages.Select(
-                                package => RegistrationLeaf(context, package, vulnerabilities))
-                        }
+                        RegistrationPage(context, packages, vulnerabilities)
                     }
                 });
+            }).WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/registration/{id}/page/{lower}/{upper}.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            async Task<IResult> (
+                HttpContext context,
+                string id,
+                string lower,
+                string upper,
+                InMemoryPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
+                CancellationToken token) =>
+            {
+                var packages = await store.FindByIdAsync(id, token);
+                return RegistrationPageBounds.Matches(packages, lower, upper)
+                    ? Results.Json(RegistrationPage(context, packages, vulnerabilities))
+                    : Results.NotFound();
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
@@ -308,7 +335,7 @@ public static class ServerApplication
                 bool? prerelease,
                 CancellationToken token) =>
             {
-                var packages = await store.SearchAsync(
+                var page = await store.SearchAsync(
                     q ?? string.Empty,
                     prerelease ?? false,
                     skip ?? 0,
@@ -317,8 +344,11 @@ public static class ServerApplication
 
                 return Results.Json(new
                 {
-                    totalHits = packages.Count,
-                    data = packages.Select(package => SearchResult(context, package))
+                    totalHits = page.TotalHits,
+                    data = page.Items.Select(item => SearchResult(
+                        context,
+                        item.Package,
+                        item.Versions))
                 });
             }).WithMetadata(NuGetAccessRequirement.Read);
 
@@ -377,7 +407,10 @@ public static class ServerApplication
                 {
                     packageCount = (await packages.GetAllAsync()).Count,
                     faultCount = faults.GetAll().Count,
-                    requestCount = requests.GetAll().Count
+                    faultCapacity = faults.Capacity,
+                    requestCount = requests.GetAll().Count,
+                    requestCapacity = requests.Capacity,
+                    evictedRequestCount = requests.EvictedCount
                 }))
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -401,24 +434,86 @@ public static class ServerApplication
         app.MapPost(
             "/__test/packages",
             async Task<IResult> (
-                PackageContentRequest request,
+                HttpRequest request,
                 InMemoryPackageStore store,
                 ServerDiagnostics diagnostics,
+                PackageTransferLimits limits,
                 CancellationToken token) =>
             {
-                byte[] content;
-                try
+                if (request.ContentType?.StartsWith(
+                        "application/json",
+                        StringComparison.OrdinalIgnoreCase) == true)
                 {
-                    content = Convert.FromBase64String(request.Content);
-                }
-                catch (FormatException)
-                {
-                    return Results.Problem(
-                        "Package content must be valid base64.",
-                        statusCode: StatusCodes.Status400BadRequest);
+                    var legacyPackageLimit = Math.Min(
+                        limits.MaxPackageBytes,
+                        LegacyJsonPackageLimit);
+                    var maximumBase64Length = checked(
+                        ((legacyPackageLimit + 2) / 3) * 4);
+                    var legacyRequestLimit = Math.Min(
+                        limits.MaxRequestBodyBytes,
+                        checked(maximumBase64Length + 1024));
+                    if (request.ContentLength > legacyRequestLimit)
+                    {
+                        return Results.Problem(
+                            $"Legacy JSON control uploads are limited to " +
+                            $"{legacyPackageLimit} decoded bytes. Use " +
+                            "'application/octet-stream' for larger packages.",
+                            statusCode: StatusCodes.Status413PayloadTooLarge);
+                    }
+
+                    var requestSize = request.HttpContext.Features
+                        .Get<IHttpMaxRequestBodySizeFeature>();
+                    if (requestSize is { IsReadOnly: false })
+                    {
+                        requestSize.MaxRequestBodySize = legacyRequestLimit;
+                    }
+
+                    PackageContentRequest? packageRequest;
+                    try
+                    {
+                        packageRequest = await request.ReadFromJsonAsync<PackageContentRequest>(
+                            cancellationToken: token);
+                    }
+                    catch (JsonException)
+                    {
+                        return Results.Problem(
+                            "The package request must contain valid JSON and base64 content.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    if (packageRequest?.Content is null)
+                    {
+                        return Results.Problem(
+                            "The package request must contain valid JSON and base64 content.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    if (packageRequest.Content.Length > maximumBase64Length)
+                    {
+                        return Results.Problem(
+                            $"Legacy JSON control uploads are limited to " +
+                            $"{legacyPackageLimit} decoded bytes. Use " +
+                            "'application/octet-stream' for larger packages.",
+                            statusCode: StatusCodes.Status413PayloadTooLarge);
+                    }
+
+                    byte[] content;
+                    try
+                    {
+                        content = Convert.FromBase64String(packageRequest.Content);
+                    }
+                    catch (FormatException)
+                    {
+                        return Results.Problem(
+                            "Package content must be valid base64.",
+                            statusCode: StatusCodes.Status400BadRequest);
+                    }
+
+                    await using var contentStream = new MemoryStream(content, writable: false);
+                    return await AddPackageAsync(contentStream, store, diagnostics, limits, token);
                 }
 
-                return await AddPackageAsync(content, store, diagnostics, token);
+                return await AddPackageAsync(request.Body, store, diagnostics, limits, token);
             })
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -468,10 +563,19 @@ public static class ServerApplication
 
         app.MapGet("/__test/faults", (FaultRuleStore faults) => Results.Json(faults.GetAll()))
             .WithMetadata(NuGetAccessRequirement.Control);
-        app.MapPost("/__test/faults", (FaultRule rule, FaultRuleStore faults) =>
+        app.MapPost("/__test/faults", IResult (FaultRule rule, FaultRuleStore faults) =>
         {
-            faults.Add(rule);
-            return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            try
+            {
+                faults.Add(rule);
+                return Results.Created($"/__test/faults/{Uri.EscapeDataString(rule.Id)}", rule);
+            }
+            catch (FaultRuleStore.FaultRuleConflictException exception)
+            {
+                return Results.Problem(
+                    exception.Message,
+                    statusCode: StatusCodes.Status409Conflict);
+            }
         }).WithMetadata(NuGetAccessRequirement.Control);
         app.MapDelete("/__test/faults", (FaultRuleStore faults) =>
         {
@@ -484,12 +588,23 @@ public static class ServerApplication
         HttpRequest request,
         InMemoryPackageStore store,
         ServerDiagnostics diagnostics,
+        PackageTransferLimits limits,
         CancellationToken token)
     {
-        byte[] content;
         if (request.HasFormContentType)
         {
-            var form = await request.ReadFormAsync(token);
+            IFormCollection form;
+            try
+            {
+                form = await request.ReadFormAsync(token);
+            }
+            catch (InvalidDataException exception)
+            {
+                return Results.Problem(
+                    exception.Message,
+                    statusCode: StatusCodes.Status413PayloadTooLarge);
+            }
+
             var file = form.Files.FirstOrDefault();
             if (file is null)
             {
@@ -497,34 +612,39 @@ public static class ServerApplication
             }
 
             await using var stream = file.OpenReadStream();
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer, token);
-            content = buffer.ToArray();
-        }
-        else
-        {
-            using var buffer = new MemoryStream();
-            await request.Body.CopyToAsync(buffer, token);
-            content = buffer.ToArray();
+            return await AddPackageAsync(stream, store, diagnostics, limits, token);
         }
 
-        return await AddPackageAsync(content, store, diagnostics, token);
+        return await AddPackageAsync(request.Body, store, diagnostics, limits, token);
     }
 
     private static async Task<IResult> AddPackageAsync(
-        byte[] content,
+        Stream content,
         InMemoryPackageStore store,
         ServerDiagnostics diagnostics,
+        PackageTransferLimits limits,
         CancellationToken token)
     {
+        TestPackage? package = null;
         try
         {
-            var package = TestPackage.FromContent(content);
+            package = await TestPackage.FromStreamAsync(
+                content,
+                limits,
+                cancellationToken: token);
             await store.AddAsync(package, token);
             diagnostics.RecordPackagePublished();
-            return Results.Created(
+            var result = Results.Created(
                 $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
                 PackageSummary(package));
+            package = null;
+            return result;
+        }
+        catch (PackageLimitExceededException exception)
+        {
+            return Results.Problem(
+                exception.Message,
+                statusCode: StatusCodes.Status413PayloadTooLarge);
         }
         catch (InvalidPackageException exception)
         {
@@ -539,6 +659,10 @@ public static class ServerApplication
         {
             diagnostics.RecordStorageFailure();
             throw;
+        }
+        finally
+        {
+            package?.Dispose();
         }
     }
 
@@ -598,7 +722,34 @@ public static class ServerApplication
         };
     }
 
-    private static object SearchResult(HttpContext context, TestPackage package)
+    private static Dictionary<string, object?> RegistrationPage(
+        HttpContext context,
+        IReadOnlyList<TestPackage> packages,
+        VulnerabilitySnapshotProvider vulnerabilities)
+    {
+        var first = packages[0];
+        var last = packages[^1];
+        var root = GetRoot(context);
+        var normalizedId = first.Identity.Id.ToLowerInvariant();
+        var parent = $"{root}/registration/{normalizedId}/index.json";
+        return new Dictionary<string, object?>
+        {
+            ["@id"] =
+                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
+            ["@type"] = "catalog:CatalogPage",
+            ["parent"] = parent,
+            ["count"] = packages.Count,
+            ["lower"] = first.NormalizedVersion,
+            ["upper"] = last.NormalizedVersion,
+            ["items"] = packages.Select(
+                package => RegistrationLeaf(context, package, vulnerabilities))
+        };
+    }
+
+    private static object SearchResult(
+        HttpContext context,
+        TestPackage package,
+        IReadOnlyList<TestPackage> versions)
     {
         var root = GetRoot(context);
         var id = package.Identity.Id.ToLowerInvariant();
@@ -619,15 +770,13 @@ public static class ServerApplication
             ["totalDownloads"] = 0,
             ["verified"] = false,
             ["packageTypes"] = Array.Empty<object>(),
-            ["versions"] = new[]
-            {
+            ["versions"] = versions.Select(item =>
                 new Dictionary<string, object?>
                 {
-                    ["version"] = version,
+                    ["version"] = item.NormalizedVersion,
                     ["downloads"] = 0,
-                    ["@id"] = $"{root}/registration/{id}/{version}.json"
-                }
-            }
+                    ["@id"] = $"{root}/registration/{id}/{item.NormalizedVersion}.json"
+                })
         };
     }
 
@@ -640,5 +789,11 @@ public static class ServerApplication
     private static string GetRoot(HttpContext context) =>
         $"{context.Request.Scheme}://{context.Request.Host}";
 
-    public sealed record PackageContentRequest(string Content);
+    public sealed record PackageContentRequest(string? Content);
+
+    private static bool ClearsRequestHistory(HttpRequest request) =>
+        (HttpMethods.IsPost(request.Method) &&
+         request.Path.Equals("/__test/reset", StringComparison.OrdinalIgnoreCase)) ||
+        (HttpMethods.IsDelete(request.Method) &&
+         request.Path.Equals("/__test/requests", StringComparison.OrdinalIgnoreCase));
 }

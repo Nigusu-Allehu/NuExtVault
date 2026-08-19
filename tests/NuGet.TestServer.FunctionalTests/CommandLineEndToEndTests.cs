@@ -180,7 +180,11 @@ public sealed class CommandLineEndToEndTests
         using var process = Process.Start(new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = $"\"{cliPath}\" start --port {port} --storage \"{storage.Path}\"",
+            Arguments =
+                $"\"{cliPath}\" start --port {port} --storage \"{storage.Path}\" " +
+                "--max-request-bytes 1048576 --max-package-bytes 524288 " +
+                "--max-archive-entries 100 --max-entry-bytes 262144 " +
+                "--max-expanded-bytes 524288",
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

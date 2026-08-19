@@ -3,15 +3,19 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore
+public sealed class InMemoryPackageStore : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _packagesDirectory;
+    private readonly PackageTransferLimits _limits;
     private readonly SemaphoreSlim _persistenceGate = new(1, 1);
 
-    public InMemoryPackageStore(string? storageDirectory = null)
+    public InMemoryPackageStore(
+        string? storageDirectory = null,
+        PackageTransferLimits? limits = null)
     {
+        _limits = (limits ?? PackageTransferLimits.Default).Validate();
         if (storageDirectory is null)
         {
             return;
@@ -27,33 +31,45 @@ public sealed class InMemoryPackageStore
     public async ValueTask AddAsync(TestPackage package, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);
-        token.ThrowIfCancellationRequested();
-        if (!_packages.TryAdd(Key(package.Identity.Id, package.NormalizedVersion), package))
-        {
-            throw new DuplicatePackageException(package.Identity.Id, package.NormalizedVersion);
-        }
-
-        if (_packagesDirectory is null)
-        {
-            return;
-        }
-
+        await _persistenceGate.WaitAsync(token);
         try
         {
-            await _persistenceGate.WaitAsync(token);
+            var key = Key(package.Identity.Id, package.NormalizedVersion);
+            if (!_packages.TryAdd(key, package))
+            {
+                throw new DuplicatePackageException(package.Identity.Id, package.NormalizedVersion);
+            }
+
+            if (_packagesDirectory is null)
+            {
+                return;
+            }
+
             try
             {
-                await PersistPackageAsync(package, token);
+                var persistedPath = await PersistPackageAsync(package, token);
+                var persistedPackage = package.WithContentFile(persistedPath, ownsPath: false);
+                if (!_packages.TryUpdate(
+                        key,
+                        persistedPackage,
+                        package))
+                {
+                    throw new InvalidOperationException(
+                        "The package changed while it was being persisted.");
+                }
+
+                package.Dispose();
             }
-            finally
+            catch
             {
-                _persistenceGate.Release();
+                _packages.TryRemove(key, out _);
+                package.Dispose();
+                throw;
             }
         }
-        catch
+        finally
         {
-            _packages.TryRemove(Key(package.Identity.Id, package.NormalizedVersion), out _);
-            throw;
+            _persistenceGate.Release();
         }
     }
 
@@ -88,7 +104,7 @@ public sealed class InMemoryPackageStore
         return ValueTask.FromResult(result);
     }
 
-    public ValueTask<IReadOnlyList<TestPackage>> SearchAsync(
+    public ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,
@@ -100,20 +116,27 @@ public sealed class InMemoryPackageStore
         take = Math.Clamp(take, 0, 1000);
         skip = Math.Max(skip, 0);
 
-        IReadOnlyList<TestPackage> result = _packages.Values
+        var applicablePackages = _packages.Values
             .Where(package => package.IsListed)
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
-            .Where(package =>
+            .ToArray();
+        var matches = applicablePackages
+            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Any(package =>
                 package.Identity.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
                 package.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.MaxBy(package => package.Identity.Version)!)
-            .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase)))
+            .Select(group => new PackageSearchItem(
+                group.MaxBy(package => package.Identity.Version)!,
+                group.OrderBy(package => package.Identity.Version).ToArray()))
+            .OrderBy(item => item.Package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(item => item.Package.Identity.Id, StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyList<PackageSearchItem> items = matches
             .Skip(skip)
             .Take(take)
             .ToArray();
-        return ValueTask.FromResult(result);
+        return ValueTask.FromResult(new PackageSearchPage(matches.Length, items));
     }
 
     public async ValueTask<bool> SetListedAsync(
@@ -124,11 +147,7 @@ public sealed class InMemoryPackageStore
     {
         token.ThrowIfCancellationRequested();
         var key = Key(id, Normalize(version));
-        if (_packagesDirectory is not null)
-        {
-            await _persistenceGate.WaitAsync(token);
-        }
-
+        await _persistenceGate.WaitAsync(token);
         try
         {
             while (_packages.TryGetValue(key, out var package))
@@ -148,10 +167,7 @@ public sealed class InMemoryPackageStore
         }
         finally
         {
-            if (_packagesDirectory is not null)
-            {
-                _persistenceGate.Release();
-            }
+            _persistenceGate.Release();
         }
     }
 
@@ -160,17 +176,16 @@ public sealed class InMemoryPackageStore
         string version,
         CancellationToken token = default)
     {
-        token.ThrowIfCancellationRequested();
+        await _persistenceGate.WaitAsync(token);
         var key = Key(id, Normalize(version));
-        if (!_packages.TryGetValue(key, out var package))
+        try
         {
-            return false;
-        }
+            if (!_packages.TryGetValue(key, out var package))
+            {
+                return false;
+            }
 
-        if (_packagesDirectory is not null)
-        {
-            await _persistenceGate.WaitAsync(token);
-            try
+            if (_packagesDirectory is not null)
             {
                 var packageDirectory = GetPackageDirectory(package);
                 if (Directory.Exists(packageDirectory))
@@ -179,24 +194,30 @@ public sealed class InMemoryPackageStore
                 }
 
                 _packages.TryRemove(key, out _);
+                package.Dispose();
                 return true;
             }
-            finally
-            {
-                _persistenceGate.Release();
-            }
-        }
 
-        return _packages.TryRemove(key, out _);
+            if (!_packages.TryRemove(key, out package))
+            {
+                return false;
+            }
+
+            package.Dispose();
+            return true;
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
     }
 
     public async ValueTask ResetAsync(CancellationToken token = default)
     {
-        token.ThrowIfCancellationRequested();
-        if (_packagesDirectory is not null)
+        await _persistenceGate.WaitAsync(token);
+        try
         {
-            await _persistenceGate.WaitAsync(token);
-            try
+            if (_packagesDirectory is not null)
             {
                 if (Directory.Exists(_packagesDirectory))
                 {
@@ -204,16 +225,28 @@ public sealed class InMemoryPackageStore
                 }
 
                 Directory.CreateDirectory(_packagesDirectory);
-                _packages.Clear();
-                return;
             }
-            finally
-            {
-                _persistenceGate.Release();
-            }
-        }
 
-        _packages.Clear();
+            DisposePackages();
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _persistenceGate.WaitAsync();
+        try
+        {
+            DisposePackages();
+        }
+        finally
+        {
+            _persistenceGate.Release();
+            _persistenceGate.Dispose();
+        }
     }
 
     private static string Key(string id, string version) =>
@@ -236,7 +269,7 @@ public sealed class InMemoryPackageStore
                      "*.nupkg",
                      SearchOption.AllDirectories))
         {
-            var package = TestPackage.FromContent(File.ReadAllBytes(packagePath));
+            var package = TestPackage.FromFile(packagePath, _limits);
             var markerPath = GetUnlistedMarkerPath(package);
             package = package with { IsListed = !File.Exists(markerPath) };
             if (!_packages.TryAdd(Key(package.Identity.Id, package.NormalizedVersion), package))
@@ -247,7 +280,7 @@ public sealed class InMemoryPackageStore
         }
     }
 
-    private async Task PersistPackageAsync(TestPackage package, CancellationToken token)
+    private async Task<string> PersistPackageAsync(TestPackage package, CancellationToken token)
     {
         var packageDirectory = GetPackageDirectory(package);
         Directory.CreateDirectory(packageDirectory);
@@ -255,9 +288,21 @@ public sealed class InMemoryPackageStore
         var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await File.WriteAllBytesAsync(temporary, package.Content, token);
+            await using (var source = package.OpenReadStream())
+            await using (var destinationStream = new FileStream(
+                             temporary,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await source.CopyToAsync(destinationStream, token);
+            }
+
             File.Move(temporary, destination, overwrite: false);
             SetUnlistedMarker(package, package.IsListed);
+            return destination;
         }
         catch
         {
@@ -309,4 +354,22 @@ public sealed class InMemoryPackageStore
 
     private string GetUnlistedMarkerPath(TestPackage package) =>
         Path.Combine(GetPackageDirectory(package), ".unlisted");
+
+    private void DisposePackages()
+    {
+        foreach (var package in _packages.Values)
+        {
+            package.Dispose();
+        }
+
+        _packages.Clear();
+    }
 }
+
+public sealed record PackageSearchPage(
+    int TotalHits,
+    IReadOnlyList<PackageSearchItem> Items);
+
+public sealed record PackageSearchItem(
+    TestPackage Package,
+    IReadOnlyList<TestPackage> Versions);
