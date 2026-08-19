@@ -18,11 +18,23 @@ public sealed record TestPackage : IDisposable
     private string? ContentPath { get; init; }
     private bool OwnsContentPath { get; init; }
     private long StoredContentLength { get; init; }
+    private byte[]? ExpectedContentSha256 { get; init; }
 
     public required PackageIdentity Identity { get; init; }
     public byte[] Content
     {
-        get => MemoryContent ?? File.ReadAllBytes(ContentPath!);
+        get
+        {
+            if (MemoryContent is not null)
+            {
+                return MemoryContent;
+            }
+
+            using var stream = OpenReadStream();
+            using var buffer = new MemoryStream(capacity: checked((int)StoredContentLength));
+            stream.CopyTo(buffer);
+            return buffer.ToArray();
+        }
         init
         {
             MemoryContent = value ?? throw new ArgumentNullException(nameof(value));
@@ -149,11 +161,77 @@ public sealed record TestPackage : IDisposable
         }
     }
 
+    internal static TestPackage FromMetadata(
+        PackageMetadata metadata,
+        string contentPath)
+    {
+        using var documentStream = new MemoryStream(metadata.Nuspec, writable: false);
+        var document = XDocument.Load(documentStream);
+        using var dependencyStream = new MemoryStream(metadata.Nuspec, writable: false);
+        var dependencyGroups = new NuspecReader(dependencyStream).GetDependencyGroups().ToArray();
+        var packageMetadata = document.Root?.Elements().SingleOrDefault(element =>
+            element.Name.LocalName == "metadata")
+            ?? throw new PackageStorageCorruptionException(
+                $"Stored package metadata for '{metadata.Id} {metadata.NormalizedVersion}' has no metadata element.");
+        return new TestPackage
+        {
+            Identity = new PackageIdentity(
+                metadata.Id,
+                NuGetVersion.Parse(metadata.OriginalVersion)),
+            ContentPath = Path.GetFullPath(contentPath),
+            StoredContentLength = metadata.ContentLength,
+            ExpectedContentSha256 = metadata.Sha256,
+            NuspecContent = metadata.Nuspec,
+            NormalizedVersion = metadata.NormalizedVersion,
+            Description = metadata.Description,
+            Summary = Value(packageMetadata, "summary"),
+            Title = Value(packageMetadata, "title"),
+            Authors = metadata.Authors,
+            Tags = metadata.Tags,
+            ProjectUrl = OptionalUri(packageMetadata, "projectUrl"),
+            Readme = Value(packageMetadata, "readme"),
+            Icon = Value(packageMetadata, "icon"),
+            LicenseExpression = LicenseValue(packageMetadata, "expression"),
+            LicenseFile = LicenseValue(packageMetadata, "file"),
+            LicenseUrl = OptionalUri(packageMetadata, "licenseUrl"),
+            PackageTypes = packageMetadata.Descendants()
+                .Where(element => element.Name.LocalName == "packageType")
+                .Select(element => new PackageTypeMetadata(
+                    element.Attribute("name")?.Value ?? string.Empty,
+                    element.Attribute("version")?.Value ?? string.Empty))
+                .Where(packageType => !string.IsNullOrWhiteSpace(packageType.Name))
+                .ToArray(),
+            Repository = ParseRepository(packageMetadata),
+            PackageHash = metadata.PackageHash,
+            RepositoryMetadata = metadata.RepositoryMetadata ??
+                new PackageRepositoryMetadata(
+                    SplitOwners(metadata.Authors),
+                    Downloads: 0,
+                    Verified: false,
+                    Deprecation: null),
+            DependencyGroups = dependencyGroups,
+            Published = metadata.Published,
+            IsListed = metadata.IsListed
+        };
+    }
+
     public Stream OpenReadStream()
     {
         if (MemoryContent is not null)
         {
             return new MemoryStream(MemoryContent, writable: false);
+        }
+
+        if (ExpectedContentSha256 is not null)
+        {
+            using var verificationStream = OpenFile(ContentPath!);
+            var actualHash = SHA256.HashData(verificationStream);
+            if (!CryptographicOperations.FixedTimeEquals(actualHash, ExpectedContentSha256))
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Package storage is corrupt for '{Identity.Id} {NormalizedVersion}': " +
+                    "blob SHA-256 does not match durable metadata.");
+            }
         }
 
         return OpenFile(ContentPath!);
