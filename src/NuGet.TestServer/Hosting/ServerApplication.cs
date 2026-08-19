@@ -194,29 +194,35 @@ public static class ServerApplication
                     return Results.NotFound();
                 }
 
-                var first = packages[0];
-                var last = packages[^1];
                 var root = GetRoot(context);
-                var normalizedId = first.Identity.Id.ToLowerInvariant();
+                var normalizedId = packages[0].Identity.Id.ToLowerInvariant();
                 return Results.Json(new Dictionary<string, object?>
                 {
                     ["@id"] = $"{root}/registration/{normalizedId}/index.json",
                     ["count"] = 1,
                     ["items"] = new[]
                     {
-                        new Dictionary<string, object?>
-                        {
-                            ["@id"] =
-                                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
-                            ["@type"] = "catalog:CatalogPage",
-                            ["count"] = packages.Count,
-                            ["lower"] = first.NormalizedVersion,
-                            ["upper"] = last.NormalizedVersion,
-                            ["items"] = packages.Select(
-                                package => RegistrationLeaf(context, package, vulnerabilities))
-                        }
+                        RegistrationPage(context, packages, vulnerabilities)
                     }
                 });
+            }).WithMetadata(NuGetAccessRequirement.Read);
+
+        app.MapMethods(
+            "/registration/{id}/page/{lower}/{upper}.json",
+            [HttpMethods.Get, HttpMethods.Head],
+            async Task<IResult> (
+                HttpContext context,
+                string id,
+                string lower,
+                string upper,
+                InMemoryPackageStore store,
+                VulnerabilitySnapshotProvider vulnerabilities,
+                CancellationToken token) =>
+            {
+                var packages = await store.FindByIdAsync(id, token);
+                return RegistrationPageBounds.Matches(packages, lower, upper)
+                    ? Results.Json(RegistrationPage(context, packages, vulnerabilities))
+                    : Results.NotFound();
             }).WithMetadata(NuGetAccessRequirement.Read);
 
         app.MapMethods(
@@ -501,6 +507,30 @@ public static class ServerApplication
             ["catalogEntry"] = catalogEntry,
             ["packageContent"] = $"{root}/flatcontainer/{id}/{version}/{id}.{version}.nupkg",
             ["registration"] = $"{root}/registration/{id}/index.json"
+        };
+    }
+
+    private static Dictionary<string, object?> RegistrationPage(
+        HttpContext context,
+        IReadOnlyList<TestPackage> packages,
+        VulnerabilitySnapshotProvider vulnerabilities)
+    {
+        var first = packages[0];
+        var last = packages[^1];
+        var root = GetRoot(context);
+        var normalizedId = first.Identity.Id.ToLowerInvariant();
+        var parent = $"{root}/registration/{normalizedId}/index.json";
+        return new Dictionary<string, object?>
+        {
+            ["@id"] =
+                $"{root}/registration/{normalizedId}/page/{first.NormalizedVersion}/{last.NormalizedVersion}.json",
+            ["@type"] = "catalog:CatalogPage",
+            ["parent"] = parent,
+            ["count"] = packages.Count,
+            ["lower"] = first.NormalizedVersion,
+            ["upper"] = last.NormalizedVersion,
+            ["items"] = packages.Select(
+                package => RegistrationLeaf(context, package, vulnerabilities))
         };
     }
 
