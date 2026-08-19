@@ -532,9 +532,11 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
+- Base64 SHA-512 sidecars for package archives
 - Registration indexes, pages, and leaf metadata
+- Rich registration and search metadata from package archives and test state
 - Package search with stable pagination totals and complete listed-version metadata
-- Package push
+- Package and symbol-package push through standard NuGet clients
 - Package unlisting
 - Package seeding and hard deletion through the control API
 - Request recording
@@ -549,6 +551,62 @@ The current implementation supports:
 CLI package state is persisted in the Local AppData storage directory. Servers
 created with `NuGetTestServerHost.StartAsync()` remain isolated and in memory.
 Fault rules and request history are always runtime-only.
+
+### NuGet V3 capability matrix
+
+The service index advertises only resources implemented by the server.
+
+| Capability | Service-index type or route | Status | Client coverage |
+| --- | --- | --- | --- |
+| Service discovery | `GET/HEAD /v3/index.json` | Implemented | NuGet.Protocol and `dotnet` |
+| Package versions, archives, nuspecs | `PackageBaseAddress/3.0.0` | Implemented | NuGet.Protocol and `dotnet restore` |
+| Package hashes | `{id}.{version}.nupkg.sha512` | Implemented as Base64 SHA-512 of the exact archive | Raw Kestrel `GET`/`HEAD` |
+| Registration indexes, pages, and leaves | `RegistrationsBaseUrl/3.6.0` | Implemented | NuGet.Protocol |
+| Search | `SearchQueryService/3.0.0-beta` and `/3.5.0` | Implemented | NuGet.Protocol |
+| Package publishing and unlisting | `PackagePublish/2.0.0` | Implemented | `dotnet nuget push` |
+| Symbol-package publishing | `SymbolPackagePublish/4.9.0` | Implemented; `.snupkg` files are validated and persisted separately | `dotnet nuget push` automatic symbol upload |
+| Vulnerability data | `VulnerabilityInfo/6.7.0` | Implemented | NuGet restore audit |
+| Symbol download | No general NuGet V3 resource exists | Deferred and not advertised | N/A |
+| Repository signatures | `RepositorySignatures/4.7.0` and later | Deferred and not advertised | N/A |
+
+Registration metadata includes authors, owners, title, description, summary,
+tags, project URL, embedded readme and icon paths, license expression/file/URL,
+package types, repository details, dependencies, publication/listing state,
+download count, deprecation reasons/message/alternate package, and
+vulnerabilities. Search projects applicable fields plus per-version and total
+download counts and verification state.
+
+Tests can set repository-owned metadata without rewriting a package archive:
+
+```http
+PUT /__test/packages/{id}/{version}/metadata
+Content-Type: application/json
+
+{
+  "owners": ["Alice", "Bob"],
+  "downloads": 42,
+  "verified": true,
+  "deprecation": {
+    "reasons": ["Legacy"],
+    "message": "Use Replacement.Package.",
+    "alternatePackage": {
+      "id": "Replacement.Package",
+      "range": "[2.0.0,)"
+    }
+  }
+}
+```
+
+Downloads must be non-negative, deprecation reasons are limited to `Legacy`,
+`CriticalBugs`, and `Other`, and alternate-package ranges must be valid NuGet
+version ranges. This metadata persists with CLI package storage.
+
+Repository signatures are intentionally deferred. A correct
+`RepositorySignatures` resource requires HTTPS, X.509 signing certificates,
+repository-signing every claimed package, and trust metadata matching those
+actual signatures. This loopback HTTP test server accepts unsigned packages and
+has no signing-key pipeline, so advertising an empty or synthetic signature
+resource would misrepresent package trust.
 
 ## Repository layout
 
@@ -579,6 +637,6 @@ Repository agents and contributors follow the workflow in
 - This is test infrastructure, not a production package feed.
 - Programmatic test-server storage is in memory; the CLI persists packages locally.
 - The server uses anonymous HTTP by default unless credentials are supplied.
-- Multi-user authorization, scoped keys, HTTPS, advanced network faults, symbols,
-  and repository signatures are not yet implemented.
+- Multi-user authorization, scoped keys, HTTPS, advanced network faults, symbol
+  download, and repository signatures are not yet implemented.
 - The server binds to `127.0.0.1` unless its hosting configuration is changed.

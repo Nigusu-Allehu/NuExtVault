@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Linq;
 using NuGet.Frameworks;
@@ -11,6 +12,8 @@ namespace NuGet.TestServer.Packages;
 
 public sealed record TestPackage : IDisposable
 {
+    private static readonly IReadOnlyList<PackageTypeMetadata> DefaultPackageTypes =
+        [new("Dependency", string.Empty)];
     private byte[]? MemoryContent { get; init; }
     private string? ContentPath { get; init; }
     private bool OwnsContentPath { get; init; }
@@ -31,8 +34,22 @@ public sealed record TestPackage : IDisposable
     public required byte[] NuspecContent { get; init; }
     public required string NormalizedVersion { get; init; }
     public required string Description { get; init; }
+    public required string Summary { get; init; }
+    public required string Title { get; init; }
     public required string Authors { get; init; }
     public required string Tags { get; init; }
+    public required Uri? ProjectUrl { get; init; }
+    public required string Readme { get; init; }
+    public required string Icon { get; init; }
+    public required string LicenseExpression { get; init; }
+    public required string LicenseFile { get; init; }
+    public required Uri? LicenseUrl { get; init; }
+    public required IReadOnlyList<PackageTypeMetadata> PackageTypes { get; init; }
+    public IReadOnlyList<PackageTypeMetadata> EffectivePackageTypes =>
+        PackageTypes.Count == 0 ? DefaultPackageTypes : PackageTypes;
+    public required RepositoryMetadata? Repository { get; init; }
+    public required string PackageHash { get; init; }
+    public required PackageRepositoryMetadata RepositoryMetadata { get; init; }
     public required IReadOnlyList<PackageDependencyGroup> DependencyGroups { get; init; }
     public required DateTimeOffset Published { get; init; }
     public bool IsListed { get; init; } = true;
@@ -171,6 +188,9 @@ public sealed record TestPackage : IDisposable
         string? contentPath,
         bool ownsContentPath)
     {
+        stream.Position = 0;
+        var packageHash = Convert.ToBase64String(SHA512.HashData(stream));
+        stream.Position = 0;
         using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
         if (archive.Entries.Count > limits.MaxArchiveEntries)
         {
@@ -245,8 +265,30 @@ public sealed record TestPackage : IDisposable
             NuspecContent = nuspecBuffer.ToArray(),
             NormalizedVersion = NormalizeVersion(identity.Version),
             Description = Value(metadata, "description"),
+            Summary = Value(metadata, "summary"),
+            Title = Value(metadata, "title"),
             Authors = Value(metadata, "authors"),
             Tags = Value(metadata, "tags"),
+            ProjectUrl = OptionalUri(metadata, "projectUrl"),
+            Readme = Value(metadata, "readme"),
+            Icon = Value(metadata, "icon"),
+            LicenseExpression = LicenseValue(metadata, "expression"),
+            LicenseFile = LicenseValue(metadata, "file"),
+            LicenseUrl = OptionalUri(metadata, "licenseUrl"),
+            PackageTypes = metadata.Descendants()
+                .Where(element => element.Name.LocalName == "packageType")
+                .Select(element => new PackageTypeMetadata(
+                    element.Attribute("name")?.Value ?? string.Empty,
+                    element.Attribute("version")?.Value ?? string.Empty))
+                .Where(packageType => !string.IsNullOrWhiteSpace(packageType.Name))
+                .ToArray(),
+            Repository = ParseRepository(metadata),
+            PackageHash = packageHash,
+            RepositoryMetadata = new PackageRepositoryMetadata(
+                SplitOwners(Value(metadata, "authors")),
+                Downloads: 0,
+                Verified: false,
+                Deprecation: null),
             DependencyGroups = dependencies.Length == 0
                 ? []
                 : [new PackageDependencyGroup(NuGetFramework.AnyFramework, dependencies)],
@@ -371,7 +413,54 @@ public sealed record TestPackage : IDisposable
     private static string Value(XElement metadata, string name) =>
         metadata.Elements().SingleOrDefault(element => element.Name.LocalName == name)?.Value
         ?? string.Empty;
+
+    private static Uri? OptionalUri(XElement metadata, string name)
+    {
+        var value = Value(metadata, name);
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) ? uri : null;
+    }
+
+    private static string LicenseValue(XElement metadata, string type)
+    {
+        var license = metadata.Elements().SingleOrDefault(element =>
+            element.Name.LocalName == "license" &&
+            string.Equals(element.Attribute("type")?.Value, type, StringComparison.OrdinalIgnoreCase));
+        return license?.Value ?? string.Empty;
+    }
+
+    private static RepositoryMetadata? ParseRepository(XElement metadata)
+    {
+        var repository = metadata.Elements().SingleOrDefault(element =>
+            element.Name.LocalName == "repository");
+        return repository is null
+            ? null
+            : new RepositoryMetadata(
+                repository.Attribute("type")?.Value ?? string.Empty,
+                repository.Attribute("url")?.Value ?? string.Empty,
+                repository.Attribute("commit")?.Value ?? string.Empty,
+                repository.Attribute("branch")?.Value ?? string.Empty);
+    }
+
+    private static IReadOnlyList<string> SplitOwners(string authors) =>
+        authors.Split([',', ';'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 }
+
+public sealed record PackageTypeMetadata(string Name, string Version);
+
+public sealed record RepositoryMetadata(string Type, string Url, string Commit, string Branch);
+
+public sealed record PackageRepositoryMetadata(
+    IReadOnlyList<string> Owners,
+    long Downloads,
+    bool Verified,
+    PackageDeprecation? Deprecation);
+
+public sealed record PackageDeprecation(
+    IReadOnlyList<string> Reasons,
+    string Message,
+    AlternatePackage? AlternatePackage);
+
+public sealed record AlternatePackage(string Id, string Range);
 
 public sealed class InvalidPackageException(string message, Exception? innerException = null)
     : Exception(message, innerException);
