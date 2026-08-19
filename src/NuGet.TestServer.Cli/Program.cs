@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
@@ -13,7 +14,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0 || !string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server start [--port <port>] [--data <directory>] [--storage <directory>] [authentication options]");
+        "Usage: nuget-test-server start [--production] [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
     return 2;
 }
 
@@ -25,6 +26,41 @@ if (!int.TryParse(port, out var parsedPort) || parsedPort is < 0 or > 65535)
 }
 
 var storageDirectory = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+PackageTransferLimits packageLimits;
+try
+{
+    packageLimits = new PackageTransferLimits
+    {
+        MaxRequestBodyBytes = ReadPositiveLongOption(
+            arguments,
+            "--max-request-bytes",
+            PackageTransferLimits.DefaultMaxRequestBodyBytes),
+        MaxPackageBytes = ReadPositiveLongOption(
+            arguments,
+            "--max-package-bytes",
+            PackageTransferLimits.DefaultMaxPackageBytes),
+        MaxArchiveEntries = checked((int)ReadPositiveLongOption(
+            arguments,
+            "--max-archive-entries",
+            PackageTransferLimits.DefaultMaxArchiveEntries)),
+        MaxArchiveEntryBytes = ReadPositiveLongOption(
+            arguments,
+            "--max-entry-bytes",
+            PackageTransferLimits.DefaultMaxArchiveEntryBytes),
+        MaxExpandedArchiveBytes = ReadPositiveLongOption(
+            arguments,
+            "--max-expanded-bytes",
+            PackageTransferLimits.DefaultMaxExpandedArchiveBytes),
+        TemporaryDirectory = Path.Combine(storageDirectory, "tmp")
+    }.Validate();
+}
+catch (Exception exception) when (
+    exception is ArgumentException or OverflowException or CliConfigurationException)
+{
+    Console.Error.WriteLine(exception.Message);
+    return 2;
+}
+
 var vulnerabilityCache = new VulnerabilitySnapshotCache(
     Path.Combine(storageDirectory, "vulnerabilities"));
 var vulnerabilitySnapshot = await vulnerabilityCache.LoadBestAsync(
@@ -57,11 +93,26 @@ if (authentication.GeneratedApiKey is not null)
     authentication = authentication with { GeneratedApiKey = null };
 }
 
-var app = ServerApplication.Build(
-    url: $"http://127.0.0.1:{parsedPort}",
-    storageDirectory: storageDirectory,
-    authentication: authentication.Configuration,
-    vulnerabilities: vulnerabilityProvider);
+var mode = arguments.Any(argument =>
+    string.Equals(argument, "--production", StringComparison.OrdinalIgnoreCase))
+    ? ServerMode.Production
+    : ServerMode.Test;
+WebApplication app;
+try
+{
+    app = ServerApplication.Build(
+        url: $"http://127.0.0.1:{parsedPort}",
+        storageDirectory: storageDirectory,
+        authentication: authentication.Configuration,
+        vulnerabilities: vulnerabilityProvider,
+        mode: mode,
+        packageLimits: packageLimits);
+}
+catch (ServerHostingConfigurationException exception)
+{
+    Console.Error.WriteLine(exception.Message);
+    return 2;
+}
 await app.StartAsync();
 
 var dataDirectory = ReadOption(arguments, "--data");
@@ -77,10 +128,15 @@ if (dataDirectory is not null)
     var store = app.Services.GetRequiredService<InMemoryPackageStore>();
     foreach (var packagePath in Directory.EnumerateFiles(dataDirectory, "*.nupkg"))
     {
-        var package = TestPackage.FromContent(await File.ReadAllBytesAsync(packagePath));
+        await using var packageStream = File.OpenRead(packagePath);
+        var package = await TestPackage.FromStreamAsync(packageStream, packageLimits);
         if (await store.FindAsync(package.Identity.Id, package.NormalizedVersion) is null)
         {
             await store.AddAsync(package);
+        }
+        else
+        {
+            package.Dispose();
         }
     }
 }
@@ -91,7 +147,13 @@ var address = app.Services
     .Addresses.Single()
     ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
 Console.WriteLine($"Source:      {address}/v3/index.json");
-Console.WriteLine($"Control API: {address}/__test");
+Console.WriteLine($"Mode:        {mode}");
+if (mode == ServerMode.Test)
+{
+    Console.WriteLine($"Control API: {address}/__test");
+}
+
+Console.WriteLine($"Health:      {address}/__test/health");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
 Console.WriteLine(
     $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
@@ -126,6 +188,25 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
     }
 
     return null;
+}
+
+static long ReadPositiveLongOption(
+    IReadOnlyList<string> arguments,
+    string name,
+    long defaultValue)
+{
+    var value = ReadOption(arguments, name);
+    if (value is null)
+    {
+        return defaultValue;
+    }
+
+    if (!long.TryParse(value, out var parsed) || parsed <= 0)
+    {
+        throw new CliConfigurationException($"{name} must be a positive integer.");
+    }
+
+    return parsed;
 }
 
 static string GenerateApiKey()
