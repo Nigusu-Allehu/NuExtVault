@@ -57,6 +57,35 @@ Use a fixed port when needed:
 dotnet run --project .\src\NuGet.TestServer.Cli -- start --port 5000
 ```
 
+### Configure package resource limits
+
+Package uploads are streamed through bounded temporary files and validated before
+they become visible. Package downloads are streamed from the active package
+content. The defaults are:
+
+| Limit | CLI option | Default |
+| --- | --- | ---: |
+| HTTP request body | `--max-request-bytes` | 128 MiB |
+| Compressed package | `--max-package-bytes` | 100 MiB |
+| Archive entries | `--max-archive-entries` | 10,000 |
+| One expanded archive entry | `--max-entry-bytes` | 64 MiB |
+| Total expanded archive content | `--max-expanded-bytes` | 512 MiB |
+
+For example:
+
+```powershell
+nuget-test-server start `
+  --max-request-bytes 67108864 `
+  --max-package-bytes 52428800 `
+  --max-archive-entries 5000 `
+  --max-entry-bytes 16777216 `
+  --max-expanded-bytes 268435456
+```
+
+Malformed packages return `400 Bad Request`. Request, package, entry-count,
+entry-size, and expanded-size violations return `413 Payload Too Large`.
+Canceled and rejected uploads remove their partial temporary files.
+
 Seed every `.nupkg` in a directory during startup:
 
 ```powershell
@@ -416,11 +445,59 @@ Uri source = server.ServiceIndexUrl;
 
 Each in-process server binds to a random loopback port and owns isolated package, fault, and request state.
 
+Pass `PackageTransferLimits` to configure an in-process server:
+
+```csharp
+var limits = new PackageTransferLimits
+{
+    MaxRequestBodyBytes = 16 * 1024 * 1024,
+    MaxPackageBytes = 12 * 1024 * 1024,
+    MaxArchiveEntries = 1000,
+    MaxArchiveEntryBytes = 8 * 1024 * 1024,
+    MaxExpandedArchiveBytes = 64 * 1024 * 1024
+};
+
+await using var server = await NuGetTestServerHost.StartAsync(limits);
+```
+
+### Bound runtime request and fault state
+
+Request history retains the newest 10,000 requests by sequence, and a server
+accepts at most 100 fault rules by default. Old request records are evicted
+deterministically; adding a fault rule at capacity returns HTTP 409.
+
+Override the CLI defaults through standard ASP.NET Core configuration:
+
+```powershell
+$env:RuntimeState__RequestHistoryCapacity = "2000"
+$env:RuntimeState__FaultRuleCapacity = "25"
+nuget-test-server start
+```
+
+Configure an in-process server directly:
+
+```csharp
+await using var server = await NuGetTestServerHost.StartAsync(
+    new RuntimeStateConfiguration(
+        requestHistoryCapacity: 2000,
+        faultRuleCapacity: 25));
+```
+
+`GET /__test/state` reports `requestCount`, `requestCapacity`,
+`evictedRequestCount`, `faultCount`, and `faultCapacity`. Resetting the server
+or deleting request history clears retained requests and the eviction count;
+the reset request itself is not retained.
+
 ## Use the control API
 
 The `/__test` control endpoints are test-only and are never advertised in the
 NuGet service index. Production-safe mode maps only `/__test/health`; all
 control endpoints below are absent.
+
+`POST /__test/packages` accepts `application/octet-stream` for memory-safe
+package uploads. The existing JSON `{ "content": "<base64>" }` format remains
+available for compatibility and is limited to 4 MiB of decoded package content;
+use the binary format for larger packages.
 
 When authentication is configured, the control API uses the same write policy:
 
@@ -513,8 +590,8 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
-- Inline registration metadata
-- Package search
+- Registration indexes, pages, and leaf metadata
+- Package search with stable pagination totals and complete listed-version metadata
 - Package push
 - Package unlisting
 - Package seeding and hard deletion through the control API
