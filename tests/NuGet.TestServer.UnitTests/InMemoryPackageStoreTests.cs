@@ -111,4 +111,36 @@ public sealed class InMemoryPackageStoreTests
             }
         }
     }
+
+    [Fact]
+    public async Task Reset_removes_staged_streamed_package_files()
+    {
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            "NuGet.TestServer.UnitTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var built = TestPackageBuilder.Create("Staged.Package", "1.0.0").Build();
+            await using var content = new MemoryStream(built.Content);
+            var limits = new PackageTransferLimits { TemporaryDirectory = directory };
+            var package = await TestPackage.FromStreamAsync(content, limits);
+            var store = new InMemoryPackageStore(limits: limits);
+            await store.AddAsync(package);
+            Assert.Single(Directory.EnumerateFiles(directory, "*.tmp"));
+
+            await store.ResetAsync();
+
+            Assert.Empty(Directory.EnumerateFiles(directory));
+            await store.DisposeAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
 }

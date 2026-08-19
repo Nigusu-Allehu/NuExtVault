@@ -50,6 +50,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             AuthenticationConfiguration.Anonymous,
             EmbeddedVulnerabilitySnapshot.Load(),
+            PackageTransferLimits.Default,
             runtimeState,
             token);
     }
@@ -61,6 +62,20 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             authentication,
             EmbeddedVulnerabilitySnapshot.Load(),
+            PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            AuthenticationConfiguration.Anonymous,
+            EmbeddedVulnerabilitySnapshot.Load(),
+            packageLimits,
+            new RuntimeStateConfiguration(),
             token);
     }
 
@@ -71,6 +86,8 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             AuthenticationConfiguration.Anonymous,
             vulnerabilities,
+            PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
             token);
     }
 
@@ -82,6 +99,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartAsync(
             authentication,
             vulnerabilities,
+            PackageTransferLimits.Default,
             new RuntimeStateConfiguration(),
             token);
     }
@@ -89,10 +107,32 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public static async Task<NuGetTestServerHost> StartAsync(
         AuthenticationConfiguration authentication,
         VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
         RuntimeStateConfiguration runtimeState,
         CancellationToken token = default)
     {
-        return await StartAsync(ServerMode.Test, authentication, vulnerabilities, runtimeState, token);
+        return await StartAsync(
+            ServerMode.Test,
+            authentication,
+            vulnerabilities,
+            packageLimits,
+            runtimeState,
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            ServerMode.Test,
+            authentication,
+            vulnerabilities,
+            packageLimits,
+            new RuntimeStateConfiguration(),
+            token);
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -113,6 +153,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             mode,
             authentication,
             vulnerabilities,
+            PackageTransferLimits.Default,
             new RuntimeStateConfiguration(),
             token);
     }
@@ -121,17 +162,20 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ServerMode mode,
         AuthenticationConfiguration authentication,
         VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
         RuntimeStateConfiguration runtimeState,
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(authentication);
         ArgumentNullException.ThrowIfNull(vulnerabilities);
+        ArgumentNullException.ThrowIfNull(packageLimits);
         ArgumentNullException.ThrowIfNull(runtimeState);
         var application = ServerApplication.Build(
             authentication: authentication,
             vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
             mode: mode,
-            runtimeState: runtimeState);
+            runtimeState: runtimeState,
+            packageLimits: packageLimits);
         try
         {
             await application.StartAsync(token);
