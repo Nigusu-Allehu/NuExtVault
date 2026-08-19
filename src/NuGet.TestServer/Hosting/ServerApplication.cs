@@ -70,6 +70,7 @@ public static class ServerApplication
             new PackageOwnershipStore(storageDirectory));
         builder.Services.AddSingleton(runtimeState);
         builder.Services.AddSingleton(packageLimits);
+        builder.Services.AddSingleton(PackageVisibilityPolicy.Instance);
         builder.Services.AddSingleton<IPackageStore>(_ =>
             storageDirectory is null
                 ? new InMemoryPackageStore(limits: packageLimits)
@@ -252,10 +253,18 @@ public static class ServerApplication
         app.MapMethods(
             "/flatcontainer/{id}/index.json",
             [HttpMethods.Get, HttpMethods.Head],
-            async Task<IResult> (string id, IPackageStore store, CancellationToken token) =>
+            async Task<IResult> (
+                string id,
+                IPackageStore store,
+                PackageVisibilityPolicy visibility,
+                CancellationToken token) =>
             {
-                var packages = await store.FindByIdAsync(id, token);
-                return packages.Count == 0
+                var packages = (await store.FindByIdAsync(id, token))
+                    .Where(package => visibility.CanRead(
+                        package,
+                        PackageResourceClass.VersionEnumeration))
+                    .ToArray();
+                return packages.Length == 0
                     ? Results.NotFound()
                     : Results.Json(new
                     {
@@ -271,10 +280,12 @@ public static class ServerApplication
                 string version,
                 string fileName,
                 IPackageStore store,
+                PackageVisibilityPolicy visibility,
                 CancellationToken token) =>
             {
                 var package = await store.FindAsync(id, version, token);
-                if (package is null)
+                if (package is null ||
+                    !visibility.CanRead(package, PackageResourceClass.ExactContent))
                 {
                     return Results.NotFound();
                 }
@@ -318,11 +329,16 @@ public static class ServerApplication
                 HttpContext context,
                 string id,
                 IPackageStore store,
+                PackageVisibilityPolicy visibility,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
-                var packages = await store.FindByIdAsync(id, token);
-                if (packages.Count == 0)
+                var packages = (await store.FindByIdAsync(id, token))
+                    .Where(package => visibility.CanRead(
+                        package,
+                        PackageResourceClass.Registration))
+                    .ToArray();
+                if (packages.Length == 0)
                 {
                     return Results.NotFound();
                 }
@@ -349,10 +365,15 @@ public static class ServerApplication
                 string lower,
                 string upper,
                 IPackageStore store,
+                PackageVisibilityPolicy visibility,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
-                var packages = await store.FindByIdAsync(id, token);
+                var packages = (await store.FindByIdAsync(id, token))
+                    .Where(package => visibility.CanRead(
+                        package,
+                        PackageResourceClass.Registration))
+                    .ToArray();
                 return RegistrationPageBounds.Matches(packages, lower, upper)
                     ? Results.Json(RegistrationPage(context, packages, vulnerabilities))
                     : Results.NotFound();
@@ -366,11 +387,13 @@ public static class ServerApplication
                 string id,
                 string version,
                 IPackageStore store,
+                PackageVisibilityPolicy visibility,
                 VulnerabilitySnapshotProvider vulnerabilities,
                 CancellationToken token) =>
             {
                 var package = await store.FindAsync(id, version, token);
-                return package is null
+                return package is null ||
+                       !visibility.CanRead(package, PackageResourceClass.Registration)
                     ? Results.NotFound()
                     : Results.Json(RegistrationLeaf(context, package, vulnerabilities));
             }).WithMetadata(NuGetAccessRequirement.Read);

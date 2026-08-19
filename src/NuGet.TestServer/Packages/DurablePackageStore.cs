@@ -9,6 +9,7 @@ namespace NuGet.TestServer.Packages;
 
 public sealed class DurablePackageStore : IPackageStore
 {
+    private static readonly PackageVisibilityPolicy Visibility = PackageVisibilityPolicy.Instance;
     private readonly string _root;
     private readonly FileStream _rootLease;
     private readonly FilePackageBlobStore _blobs;
@@ -30,7 +31,9 @@ public sealed class DurablePackageStore : IPackageStore
         try
         {
             _blobs = new FilePackageBlobStore(_root);
-            _metadata = new SqlitePackageMetadataStore(Path.Combine(_root, "packages.db"));
+            _metadata = new SqlitePackageMetadataStore(
+                Path.Combine(_root, "packages.db"),
+                Visibility);
             RecoverPendingDeletes();
             ImportUntrackedBlobs();
             ValidateTrackedBlobs();
@@ -85,7 +88,11 @@ public sealed class DurablePackageStore : IPackageStore
         token.ThrowIfCancellationRequested();
         var metadata = _metadata.Find(id, Normalize(version));
         return ValueTask.FromResult(
-            metadata?.ModerationState == PackageModerationState.Published
+            metadata is not null &&
+            Visibility.CanRead(
+                metadata.ModerationState,
+                metadata.IsListed,
+                PackageResourceClass.ExactContent)
                 ? Project(metadata)
                 : null);
     }
@@ -97,7 +104,14 @@ public sealed class DurablePackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         var metadata = _metadata.Find(id, Normalize(version));
-        return ValueTask.FromResult(metadata is null ? null : Project(metadata));
+        return ValueTask.FromResult(
+            metadata is not null &&
+            Visibility.CanRead(
+                metadata.ModerationState,
+                metadata.IsListed,
+                PackageResourceClass.Administrative)
+                ? Project(metadata)
+                : null);
     }
 
     public ValueTask<byte[]?> FindSymbolAsync(
@@ -106,8 +120,12 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        if (_metadata.Find(id, Normalize(version))?.ModerationState !=
-            PackageModerationState.Published)
+        var metadata = _metadata.Find(id, Normalize(version));
+        if (metadata is null ||
+            !Visibility.CanRead(
+                metadata.ModerationState,
+                metadata.IsListed,
+                PackageResourceClass.Symbols))
         {
             return ValueTask.FromResult<byte[]?>(null);
         }
@@ -158,7 +176,10 @@ public sealed class DurablePackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         return ValueTask.FromResult(Project(_metadata.FindById(id)
-            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .Where(package => Visibility.CanRead(
+                package.ModerationState,
+                package.IsListed,
+                PackageResourceClass.VersionEnumeration))
             .ToArray()));
     }
 
@@ -166,7 +187,10 @@ public sealed class DurablePackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         return ValueTask.FromResult(Project(_metadata.GetAll()
-            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .Where(package => Visibility.CanRead(
+                package.ModerationState,
+                package.IsListed,
+                PackageResourceClass.VersionEnumeration))
             .ToArray()));
     }
 
@@ -174,7 +198,12 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(Project(_metadata.GetAll()));
+        return ValueTask.FromResult(Project(_metadata.GetAll()
+            .Where(package => Visibility.CanRead(
+                package.ModerationState,
+                package.IsListed,
+                PackageResourceClass.Administrative))
+            .ToArray()));
     }
 
     public ValueTask<PackageSearchPage> SearchAsync(
@@ -857,10 +886,14 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         """;
     private readonly string _connectionString;
     private readonly string _storageRoot;
+    private readonly PackageVisibilityPolicy _visibility;
 
-    public SqlitePackageMetadataStore(string databasePath)
+    public SqlitePackageMetadataStore(
+        string databasePath,
+        PackageVisibilityPolicy? visibility = null)
     {
         SqliteRuntime.Initialize();
+        _visibility = visibility ?? PackageVisibilityPolicy.Instance;
         _storageRoot = Path.GetDirectoryName(Path.GetFullPath(databasePath))
             ?? throw new ArgumentException("The database path has no parent directory.", nameof(databasePath));
         _connectionString = new SqliteConnectionStringBuilder
@@ -983,8 +1016,10 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 $"""
                 SELECT package.normalized_id
                 FROM packages AS package
-                WHERE package.is_listed = 1
-                  AND package.moderation_state = 'Published'
+                WHERE package_can_read(
+                          package.moderation_state,
+                          package.is_listed,
+                          $resourceClass) = 1
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   {packageTypeFilter}
                 GROUP BY package.normalized_id
@@ -994,8 +1029,10 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 SELECT package.normalized_id
                 FROM packages_search
                 JOIN packages AS package ON package.rowid = packages_search.rowid
-                WHERE package.is_listed = 1
-                  AND package.moderation_state = 'Published'
+                WHERE package_can_read(
+                          package.moderation_state,
+                          package.is_listed,
+                          $resourceClass) = 1
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND packages_search MATCH $match
                   AND package.search_text LIKE $pattern ESCAPE '\'
@@ -1006,8 +1043,10 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 $"""
                 SELECT package.normalized_id
                 FROM packages AS package
-                WHERE package.is_listed = 1
-                  AND package.moderation_state = 'Published'
+                WHERE package_can_read(
+                          package.moderation_state,
+                          package.is_listed,
+                          $resourceClass) = 1
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND package.search_text LIKE $pattern ESCAPE '\'
                   {packageTypeFilter}
@@ -1045,8 +1084,10 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             SELECT {QualifiedColumns}
             FROM packages AS package
             JOIN matching_ids ON matching_ids.normalized_id = package.normalized_id
-            WHERE package.is_listed = 1
-              AND package.moderation_state = 'Published'
+            WHERE package_can_read(
+                      package.moderation_state,
+                      package.is_listed,
+                      $resourceClass) = 1
               AND ($prerelease = 1 OR package.is_prerelease = 0)
               {packageTypeFilter}
             ORDER BY package.normalized_id, package.version_sort_key;
@@ -1474,6 +1515,21 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         try
         {
             connection.Open();
+            connection.CreateFunction<string, long, long, long>(
+                "package_can_read",
+                (state, listed, resourceClass) =>
+                    Enum.TryParse<PackageModerationState>(
+                        state,
+                        ignoreCase: true,
+                        out var moderation) &&
+                    Enum.IsDefined((PackageResourceClass)resourceClass) &&
+                    _visibility.CanRead(
+                        moderation,
+                        listed == 1,
+                        (PackageResourceClass)resourceClass)
+                        ? 1L
+                        : 0L,
+                isDeterministic: true);
             using var command = connection.CreateCommand();
             command.CommandText = "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;";
             command.ExecuteNonQuery();
@@ -1560,6 +1616,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.Parameters.AddWithValue("$skip", skip);
         command.Parameters.AddWithValue("$take", take);
         command.Parameters.AddWithValue("$packageType", packageType);
+        command.Parameters.AddWithValue("$resourceClass", (int)PackageResourceClass.Search);
         return command;
     }
 
