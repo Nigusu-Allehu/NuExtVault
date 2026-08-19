@@ -47,6 +47,8 @@ Source:      http://127.0.0.1:54321/v3/index.json
 Mode:        Test
 Control API: http://127.0.0.1:54321/__test
 Health:      http://127.0.0.1:54321/__test/health
+Liveness:    http://127.0.0.1:54321/health/live
+Readiness:   http://127.0.0.1:54321/health/ready
 Storage:     C:\Users\<user>\AppData\Local\nuget-test-server
 Vulnerabilities: 2026-08-18T17:36:11.6736167+00:00 (<snapshot-id>)
 ```
@@ -162,16 +164,17 @@ $env:NUGET_TEST_SERVER_API_KEY = "<secret>"
 nuget-test-server start --production --api-key-env NUGET_TEST_SERVER_API_KEY
 ```
 
-`GET /__test/health` remains available and reports `"mode":"production"`.
+`GET /__test/health` remains available for compatibility and reports
+`"mode":"production"`.
 Other `/__test` routes are not mapped, including state and package controls,
 reset, hard deletion, request inspection, and fault injection. Test mode remains
 the default and retains all existing test controls.
 
 Production mode refuses anonymous write configuration. It also refuses cleartext
-HTTP on non-loopback listeners. The CLI always binds to loopback, where HTTP is
-appropriate for a local tool and an API key or Basic credentials protect writes.
-Library hosts may use HTTPS on a non-loopback listener when Kestrel certificates
-are configured separately.
+HTTP on non-loopback listeners. The CLI binds to loopback by default, where HTTP
+is appropriate for a local tool and an API key or Basic credentials protect
+writes. `--url` can select another listener; a non-loopback production listener
+must use HTTPS with a Kestrel certificate.
 
 For remote production use, configure scoped identities through an environment
 configuration provider. Do not put the JSON or its credentials directly on the
@@ -267,6 +270,155 @@ GET  /__admin/supply-chain/audit
 Moderation, validation records, ownership, tombstones, and audit history survive
 CLI restarts. Missing policy metadata fails closed by recovering durable package
 blobs as quarantined.
+
+## Operate and deploy
+
+### Health, logs, metrics, and tracing
+
+Use separate probes so a failed storage dependency does not look like a crashed
+process:
+
+| Endpoint | Authentication | Meaning |
+| --- | --- | --- |
+| `GET /health/live` | Anonymous | The process is running. |
+| `GET /health/ready` | Anonymous | Configured storage exists and is writable. Returns HTTP 503 when it is not. |
+| `GET /health/storage` | Write/control credential | Package count, storage bytes, available disk bytes, cached snapshot count, and the snapshot retention limit. |
+
+Production mode writes JSON console logs. Request completion and failures use
+structured fields for method, path, status, elapsed time, and exceptions. Do not
+log API keys, Basic credentials, or certificate passwords.
+
+The server publishes built-in .NET `Meter` and `ActivitySource` data under
+`NuGet.TestServer`. This is OpenTelemetry-compatible without requiring an
+exporter in the application:
+
+- `nuget.server.requests`, `nuget.server.errors`, and
+  `nuget.server.request.duration`
+- `nuget.server.packages` and `nuget.server.packages.published`
+- `nuget.server.storage.failures`
+- `nuget.request` server activities
+
+An operator can attach the OpenTelemetry .NET automatic instrumentation and
+configure its normal OTLP exporter. Include `NuGet.TestServer` in
+`OTEL_DOTNET_AUTO_METRICS_ADDITIONAL_SOURCES` and
+`OTEL_DOTNET_AUTO_TRACES_ADDITIONAL_SOURCES`. ASP.NET Core's built-in request
+instrumentation remains available alongside these package and storage signals.
+
+Cached vulnerability snapshots retain the three newest valid entries. Packages
+have no automatic retention policy; unlisting does not reclaim their files, and
+hard deletion is intentionally unavailable in production mode. Monitor
+`FreeBytes`, define an alert threshold appropriate for the volume, and manage
+package retention through a reviewed offline storage procedure.
+
+### Run the supported container image
+
+The repository `Dockerfile` builds a non-root ASP.NET Core image, stores state
+under `/data`, and listens on HTTPS port 8080. Supply a PKCS#12 certificate,
+writable persistent storage, and the publishing key:
+
+```powershell
+docker build -t nuget-test-server .
+
+docker run --rm `
+  --publish 8443:8080 `
+  --volume nuget-test-server-data:/data `
+  --volume "${PWD}\https:/https:ro" `
+  --env NUGET_TEST_SERVER_API_KEY="<secret>" `
+  --env ASPNETCORE_Kestrel__Certificates__Default__Password="<certificate-password>" `
+  nuget-test-server
+```
+
+The certificate must be mounted as `/https/server.pfx`; use a CA-issued
+certificate for shared environments. Ensure the persistent volume is writable by
+the image's non-root `APP_UID`. Keep secrets in the orchestrator's secret store,
+not in an image, compose file, or source control. Probe
+`https://<host>:8443/health/live` and `/health/ready`.
+
+### Run as a service
+
+Install the packed tool or published CLI under `/opt/nuget-test-server`, create a
+dedicated unprivileged account, and make `/var/lib/nuget-test-server` writable by
+that account. A minimal systemd unit for a TLS-terminating reverse proxy on the
+same host is:
+
+```ini
+[Unit]
+Description=NuGet Test Server
+After=network.target
+
+[Service]
+User=nuget-test-server
+Group=nuget-test-server
+EnvironmentFile=/etc/nuget-test-server.env
+ExecStart=/opt/nuget-test-server/NuGet.TestServer.Cli start --production --port 5000 --storage /var/lib/nuget-test-server --api-key-env NUGET_TEST_SERVER_API_KEY
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/nuget-test-server
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Restrict `/etc/nuget-test-server.env` to the service account. Bind the reverse
+proxy only to this loopback listener, enforce public TLS and network policy at
+the proxy, and forward a fixed host. Windows services should follow the same
+model: dedicated identity, loopback or HTTPS listener, protected environment
+secrets, writable data directory, and restart-on-failure.
+
+### Back up and restore
+
+Backup and restore are offline commands. Stop the server first so package writes
+and vulnerability refreshes cannot race the archive:
+
+```powershell
+nuget-test-server backup `
+  --storage C:\NuGetTestServer\data `
+  --output C:\Backups\nuget-test-server-2026-08-18.zip
+```
+
+The archive contains the persisted `packages` and `vulnerabilities` trees plus a
+versioned manifest with every file's length and SHA-256 hash. Credentials,
+runtime request history, and fault rules are not stored. Copy backups to
+separate durable storage and apply the organization's encryption, access, and
+retention policy.
+
+Restore only into storage that does not already contain `packages` or
+`vulnerabilities`:
+
+```powershell
+nuget-test-server restore `
+  --input C:\Backups\nuget-test-server-2026-08-18.zip `
+  --storage C:\NuGetTestServer\recovered
+```
+
+Restore rejects unsafe paths, missing files, unsupported manifests, and any
+length or SHA-256 mismatch before activating recovered data. After restore,
+start against the recovered directory, wait for `/health/ready`, fetch the
+service index, and restore a known package through a real NuGet client.
+
+### Upgrade, rollback, and disaster recovery
+
+1. Stop publishing, stop the service, create a backup, copy it off-host, and run
+   a test restore into an empty directory.
+2. Keep the previous binary or container digest. Upgrade only the executable or
+   image; reuse the persistent data volume.
+3. Start the new version, require successful liveness and readiness probes, then
+   verify service-index discovery, a known package restore, publishing, and
+   vulnerability audit before reopening traffic.
+4. To roll back application code, stop the new version and restart the previous
+   binary or image against the unchanged data. If storage was damaged or
+   intentionally changed, restore the pre-upgrade archive into a clean directory
+   instead of overlaying files.
+5. For host or volume loss, provision a clean instance, restore the newest
+   validated off-host archive, restore secrets and TLS configuration from their
+   separate stores, start the service, run the same probes and NuGet checks, then
+   switch traffic.
+
+Record backup age, restore-test results, binary/container version, certificate
+expiry, free space, and recovery time. This baseline deliberately does not add a
+metadata database or migration system; durable metadata redesign remains a
+separate concern.
 
 ## Install the CLI as a local .NET tool
 

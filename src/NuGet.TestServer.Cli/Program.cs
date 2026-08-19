@@ -6,15 +6,72 @@ using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
 using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Storage;
 using NuGet.TestServer.Vulnerabilities;
 
 var arguments = args.ToList();
-if (arguments.Count == 0 || !string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
+if (arguments.Count == 0)
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server start [--production] [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
+        "Usage: nuget-test-server <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
+    return 2;
+}
+
+if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
+{
+    var backupStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+    var output = ReadOption(arguments, "--output");
+    if (output is null)
+    {
+        Console.Error.WriteLine("backup requires --output <archive.zip>.");
+        return 2;
+    }
+
+    try
+    {
+        var manifest = await StorageBackup.CreateAsync(backupStorage, output);
+        Console.WriteLine(
+            $"Created backup '{Path.GetFullPath(output)}' with {manifest.Files.Count} files.");
+        return 0;
+    }
+    catch (Exception exception) when (
+        exception is IOException or UnauthorizedAccessException or ArgumentException)
+    {
+        Console.Error.WriteLine($"Backup failed: {exception.Message}");
+        return 1;
+    }
+}
+
+if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
+{
+    var restoreStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+    var input = ReadOption(arguments, "--input");
+    if (input is null)
+    {
+        Console.Error.WriteLine("restore requires --input <archive.zip>.");
+        return 2;
+    }
+
+    try
+    {
+        var manifest = await StorageBackup.RestoreAsync(input, restoreStorage);
+        Console.WriteLine(
+            $"Restored {manifest.Files.Count} files into '{Path.GetFullPath(restoreStorage)}'.");
+        return 0;
+    }
+    catch (Exception exception) when (
+        exception is IOException or UnauthorizedAccessException or ArgumentException)
+    {
+        Console.Error.WriteLine($"Restore failed: {exception.Message}");
+        return 1;
+    }
+}
+
+if (!string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
+{
+    Console.Error.WriteLine($"Unknown command '{arguments[0]}'.");
     return 2;
 }
 
@@ -101,7 +158,7 @@ WebApplication app;
 try
 {
     app = ServerApplication.Build(
-        url: $"http://127.0.0.1:{parsedPort}",
+        url: ReadOption(arguments, "--url") ?? $"http://127.0.0.1:{parsedPort}",
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
         vulnerabilities: vulnerabilityProvider,
@@ -145,12 +202,22 @@ if (dataDirectory is not null)
     }
 }
 
-var address = app.Services
+var addresses = app.Services
     .GetRequiredService<IServer>()
     .Features.Get<IServerAddressesFeature>()?
-    .Addresses.Single()
+    .Addresses.ToArray()
     ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
+if (addresses.Length == 0)
+{
+    throw new InvalidOperationException("Kestrel did not publish a listening address.");
+}
+
+var address = addresses[0];
 Console.WriteLine($"Source:      {address}/v3/index.json");
+foreach (var additionalAddress in addresses.Skip(1))
+{
+    Console.WriteLine($"Source:      {additionalAddress}/v3/index.json");
+}
 Console.WriteLine($"Mode:        {mode}");
 if (mode == ServerMode.Test)
 {
@@ -158,6 +225,8 @@ if (mode == ServerMode.Test)
 }
 
 Console.WriteLine($"Health:      {address}/__test/health");
+Console.WriteLine($"Liveness:    {address}/health/live");
+Console.WriteLine($"Readiness:   {address}/health/ready");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
 Console.WriteLine(
     $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");

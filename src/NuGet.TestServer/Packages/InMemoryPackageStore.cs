@@ -31,6 +31,8 @@ public sealed class InMemoryPackageStore : IPackageStore
         LoadPersistedSymbols();
     }
 
+    public int Count => _packages.Count;
+
     public async ValueTask AddAsync(TestPackage package, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);

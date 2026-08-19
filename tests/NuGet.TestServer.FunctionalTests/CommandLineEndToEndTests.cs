@@ -464,6 +464,32 @@ public sealed class CommandLineEndToEndTests
         }
     }
 
+    [Fact]
+    public async Task Cli_backup_and_restore_recovers_a_package_into_clean_storage()
+    {
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuGet.TestServer.Cli.dll");
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var store = new InMemoryPackageStore(source.Path);
+        await store.AddAsync(
+            TestPackageBuilder.Create("Cli.Recovered.Package", "3.0.0").Build());
+        var backupPath = Path.Combine(source.Path, "repository-backup.zip");
+
+        var backup = await RunAsync(
+            "dotnet",
+            $"\"{cliPath}\" backup --storage \"{source.Path}\" --output \"{backupPath}\"",
+            AppContext.BaseDirectory);
+        var restore = await RunAsync(
+            "dotnet",
+            $"\"{cliPath}\" restore --storage \"{destination.Path}\" --input \"{backupPath}\"",
+            AppContext.BaseDirectory);
+
+        Assert.True(backup.ExitCode == 0, backup.Output);
+        Assert.True(restore.ExitCode == 0, restore.Output);
+        var recoveredStore = new InMemoryPackageStore(destination.Path);
+        Assert.NotNull(await recoveredStore.FindAsync("Cli.Recovered.Package", "3.0.0"));
+    }
+
     private static async Task<(int ExitCode, string Output)> RunAsync(
         string fileName,
         string arguments,

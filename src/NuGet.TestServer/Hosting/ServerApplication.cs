@@ -3,8 +3,10 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Data.Sqlite;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
+using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
 using NuGet.TestServer.Vulnerabilities;
@@ -39,6 +41,12 @@ public static class ServerApplication
         runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
         builder.WebHost.UseUrls(hosting.Url);
+        if (mode == ServerMode.Production)
+        {
+            builder.Logging.ClearProviders();
+            builder.Logging.AddJsonConsole();
+        }
+
         builder.WebHost.ConfigureKestrel(options =>
         {
             options.Limits.MaxRequestBodySize = packageLimits.MaxRequestBodyBytes;
@@ -72,6 +80,8 @@ public static class ServerApplication
             supplyChain,
             packageScanner,
             provider.GetRequiredService<TimeProvider>()));
+        builder.Services.AddSingleton(new StorageHealth(storageDirectory));
+        builder.Services.AddSingleton<ServerDiagnostics>();
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
         builder.Services.AddSingleton(
@@ -93,7 +103,7 @@ public static class ServerApplication
         MapMiddleware(app, mode);
         MapProtocolEndpoints(app);
         MapModerationEndpoints(app);
-        MapHealthEndpoint(app, mode);
+        MapHealthEndpoints(app, mode);
         if (mode == ServerMode.Test)
         {
             MapControlEndpoints(app);
@@ -104,6 +114,42 @@ public static class ServerApplication
 
     private static void MapMiddleware(WebApplication app, ServerMode mode)
     {
+        app.Use(async (context, next) =>
+        {
+            var diagnostics = context.RequestServices.GetRequiredService<ServerDiagnostics>();
+            var logger = context.RequestServices
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("NuGet.TestServer.Requests");
+            var started = Stopwatch.GetTimestamp();
+            using var activity = diagnostics.StartRequest(context);
+            try
+            {
+                await next(context);
+                activity?.SetTag("http.response.status_code", context.Response.StatusCode);
+                logger.LogInformation(
+                    "Handled {Method} {Path} with {StatusCode} in {ElapsedMilliseconds} ms",
+                    context.Request.Method,
+                    context.Request.Path,
+                    context.Response.StatusCode,
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            }
+            catch (Exception exception)
+            {
+                diagnostics.RecordException(context);
+                activity?.SetStatus(ActivityStatusCode.Error, exception.Message);
+                logger.LogError(
+                    exception,
+                    "Request {Method} {Path} failed",
+                    context.Request.Method,
+                    context.Request.Path);
+                throw;
+            }
+            finally
+            {
+                diagnostics.RecordRequest(context, Stopwatch.GetElapsedTime(started));
+            }
+        });
+
         if (mode == ServerMode.Test)
         {
             app.Use(async (context, next) =>
@@ -512,14 +558,34 @@ public static class ServerApplication
             .WithMetadata(NuGetAccessRequirement.Admin);
     }
 
-    private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
+    private static void MapHealthEndpoints(WebApplication app, ServerMode mode)
     {
-        app.MapGet("/__test/health", () => Results.Json(new
+        object Liveness() => new
         {
             status = "healthy",
             mode = mode.ToString().ToLowerInvariant()
-        }))
+        };
+
+        app.MapGet("/health/live", () => Results.Json(Liveness()))
             .WithMetadata(NuGetAccessRequirement.Anonymous);
+        app.MapGet("/__test/health", () => Results.Json(Liveness()))
+            .WithMetadata(NuGetAccessRequirement.Anonymous);
+        app.MapGet("/health/ready", (StorageHealth storage) =>
+        {
+            var report = storage.GetReadiness();
+            return Results.Json(
+                new
+                {
+                    status = report.Status,
+                    dependency = report.Dependency
+                },
+                statusCode: report.Ready
+                    ? StatusCodes.Status200OK
+                    : StatusCodes.Status503ServiceUnavailable);
+        }).WithMetadata(NuGetAccessRequirement.Anonymous);
+        app.MapGet("/health/storage", (StorageHealth storage) =>
+                Results.Json(storage.GetReport()))
+            .WithMetadata(NuGetAccessRequirement.Control);
     }
 
     private static void MapControlEndpoints(WebApplication app)
@@ -563,6 +629,7 @@ public static class ServerApplication
             async Task<IResult> (
                 HttpRequest request,
                 PackageSupplyChainService supplyChainService,
+                ServerDiagnostics diagnostics,
                 PackageTransferLimits limits,
                 CancellationToken token) =>
             {
@@ -636,10 +703,20 @@ public static class ServerApplication
                     }
 
                     await using var contentStream = new MemoryStream(content, writable: false);
-                    return await AddPackageAsync(contentStream, supplyChainService, limits, token);
+                    return await AddPackageAsync(
+                        contentStream,
+                        supplyChainService,
+                        diagnostics,
+                        limits,
+                        token);
                 }
 
-                return await AddPackageAsync(request.Body, supplyChainService, limits, token);
+                return await AddPackageAsync(
+                    request.Body,
+                    supplyChainService,
+                    diagnostics,
+                    limits,
+                    token);
             })
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -738,6 +815,7 @@ public static class ServerApplication
         IPackageStore store,
         PackageSupplyChainService supplyChainService,
         ISecurityAuditSink audits,
+        ServerDiagnostics diagnostics,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -768,6 +846,7 @@ public static class ServerApplication
                 store,
                 supplyChainService,
                 audits,
+                diagnostics,
                 limits,
                 token);
         }
@@ -778,6 +857,7 @@ public static class ServerApplication
             store,
             supplyChainService,
             audits,
+            diagnostics,
             limits,
             token);
     }
@@ -788,6 +868,7 @@ public static class ServerApplication
         IPackageStore store,
         PackageSupplyChainService supplyChainService,
         ISecurityAuditSink audits,
+        ServerDiagnostics diagnostics,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -819,6 +900,11 @@ public static class ServerApplication
                     identity?.HasScope(SecurityScope.Admin) ?? false),
                 token);
             package = null;
+            if (publication.Outcome == PackagePublicationOutcome.Published)
+            {
+                diagnostics.RecordPackagePublished();
+            }
+
             return publication.Outcome switch
             {
                 PackagePublicationOutcome.Published => Results.Created(
@@ -849,6 +935,12 @@ public static class ServerApplication
         catch (DuplicatePackageException exception)
         {
             return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            diagnostics.RecordStorageFailure();
+            throw;
         }
         finally
         {
@@ -904,6 +996,7 @@ public static class ServerApplication
     private static async Task<IResult> AddPackageAsync(
         Stream content,
         PackageSupplyChainService supplyChainService,
+        ServerDiagnostics diagnostics,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -915,6 +1008,7 @@ public static class ServerApplication
                 limits,
                 cancellationToken: token);
             await supplyChainService.AddAsync(package, token);
+            diagnostics.RecordPackagePublished();
             var result = Results.Created(
                 $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
                 PackageSummary(package));
@@ -934,6 +1028,12 @@ public static class ServerApplication
         catch (DuplicatePackageException exception)
         {
             return Results.Problem(exception.Message, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            diagnostics.RecordStorageFailure();
+            throw;
         }
         finally
         {

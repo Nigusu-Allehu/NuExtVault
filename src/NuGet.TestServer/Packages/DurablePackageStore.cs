@@ -43,6 +43,8 @@ public sealed class DurablePackageStore : IPackageStore
         }
     }
 
+    public int Count => _metadata.GetAll().Count;
+
     public async ValueTask AddAsync(TestPackage package, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(package);
