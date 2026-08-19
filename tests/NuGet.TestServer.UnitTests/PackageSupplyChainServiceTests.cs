@@ -2,40 +2,100 @@ using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.UnitTests;
 
-public sealed class SupplyChainPackageStoreTests
+public sealed class PackageSupplyChainServiceTests
 {
+    [Fact]
+    public async Task Quarantine_filters_rich_metadata_and_symbols_and_publication_survives_restart()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var scanner = new BlockingScanner();
+        var package = TestPackageBuilder.Create("Integrated.Package", "1.0.0")
+            .WithDescription("durable rich metadata")
+            .WithSummary("published summary")
+            .WithPackageType("DotnetTool", "1.0.0")
+            .WithRepository("git", "https://example.test/repository.git", "abc123", "main")
+            .Build();
+        var symbolPackage = TestPackageBuilder.Create("Integrated.Package", "1.0.0")
+            .WithFile("lib/net10.0/Integrated.Package.pdb", [1, 2, 3, 4])
+            .Build();
+
+        await using (var store = new DurablePackageStore(directory.Path))
+        await using (var supplyChain = new PackageSupplyChainService(
+                         store,
+                         directory.Path,
+                         new SupplyChainOptions(),
+                         scanner))
+        {
+            var publication = supplyChain.PublishAsync(new(
+                package,
+                "publisher",
+                "repository")).AsTask();
+            await scanner.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await store.AddSymbolAsync(symbolPackage.Content);
+
+            Assert.Null(await store.FindAsync("Integrated.Package", "1.0.0"));
+            Assert.Empty(await store.FindByIdAsync("Integrated.Package"));
+            Assert.Empty((await store.SearchAsync(
+                "Integrated.Package",
+                includePrerelease: false,
+                skip: 0,
+                take: 20)).Items);
+            Assert.Null(await store.FindSymbolAsync("Integrated.Package", "1.0.0"));
+
+            scanner.Release.SetResult();
+            Assert.Equal(
+                PackagePublicationOutcome.Published,
+                (await publication).Outcome);
+        }
+
+        await using var restartedStore = new DurablePackageStore(directory.Path);
+        await using var restartedSupplyChain = new PackageSupplyChainService(
+            restartedStore,
+            directory.Path);
+        var restarted = await restartedStore.FindAsync("Integrated.Package", "1.0.0");
+
+        Assert.NotNull(restarted);
+        Assert.Equal("published summary", restarted.Summary);
+        Assert.Equal("DotnetTool", Assert.Single(restarted.PackageTypes).Name);
+        Assert.Equal("abc123", restarted.Repository?.Commit);
+        Assert.NotNull(await restartedStore.FindSymbolAsync("Integrated.Package", "1.0.0"));
+        Assert.Equal(
+            PackageModerationState.Published,
+            (await restartedSupplyChain.GetStatusAsync("Integrated.Package", "1.0.0"))!.State);
+    }
+
     [Fact]
     public async Task Quarantine_is_hidden_until_clean_validation_publishes()
     {
         var inner = new InMemoryPackageStore();
         var scanner = new BlockingScanner();
-        await using var store = new SupplyChainPackageStore(
+        await using var supplyChain = new PackageSupplyChainService(
             inner,
             options: new SupplyChainOptions(),
             scanner: scanner);
         var package = TestPackageBuilder.Create("Validated.Package", "1.0.0").Build();
 
-        var publication = store.PublishAsync(
+        var publication = supplyChain.PublishAsync(
             new PackagePublicationRequest(package, "publisher", "repository")).AsTask();
         await scanner.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.Null(await store.FindAsync("Validated.Package", "1.0.0"));
+        Assert.Null(await inner.FindAsync("Validated.Package", "1.0.0"));
         Assert.Equal(
             PackageModerationState.Quarantined,
-            (await store.GetStatusAsync("Validated.Package", "1.0.0"))!.State);
+            (await supplyChain.GetStatusAsync("Validated.Package", "1.0.0"))!.State);
 
         scanner.Release.SetResult();
         var result = await publication;
 
         Assert.Equal(PackagePublicationOutcome.Published, result.Outcome);
-        Assert.NotNull(await store.FindAsync("Validated.Package", "1.0.0"));
+        Assert.NotNull(await inner.FindAsync("Validated.Package", "1.0.0"));
     }
 
     [Fact]
     public async Task Malicious_and_unsigned_packages_fail_closed()
     {
         var inner = new InMemoryPackageStore();
-        await using var maliciousStore = new SupplyChainPackageStore(
+        await using var maliciousStore = new PackageSupplyChainService(
             inner,
             options: new SupplyChainOptions(),
             scanner: new FixedScanner(PackageScanOutcome.Malicious));
@@ -51,9 +111,9 @@ public sealed class SupplyChainPackageStoreTests
 
         Assert.Equal(PackagePublicationOutcome.Rejected, malicious.Outcome);
         Assert.Equal(PackagePublicationOutcome.Rejected, maliciousRetry.Outcome);
-        Assert.Null(await maliciousStore.FindAsync("Malicious.Package", "1.0.0"));
+        Assert.Null(await inner.FindAsync("Malicious.Package", "1.0.0"));
 
-        await using var unsignedStore = new SupplyChainPackageStore(
+        await using var unsignedStore = new PackageSupplyChainService(
             new InMemoryPackageStore(),
             options: new SupplyChainOptions { RequireSignedPackages = true },
             scanner: new FixedScanner(PackageScanOutcome.Clean));
@@ -69,7 +129,7 @@ public sealed class SupplyChainPackageStoreTests
     [Fact]
     public async Task Ownership_quota_and_immutable_duplicate_rules_are_atomic()
     {
-        await using var store = new SupplyChainPackageStore(
+        await using var store = new PackageSupplyChainService(
             new InMemoryPackageStore(),
             options: new SupplyChainOptions
             {
@@ -105,7 +165,7 @@ public sealed class SupplyChainPackageStoreTests
     [Fact]
     public async Task Concurrent_first_publish_has_one_owner_and_cannot_exceed_quota()
     {
-        await using var store = new SupplyChainPackageStore(
+        await using var store = new PackageSupplyChainService(
             new InMemoryPackageStore(),
             options: new SupplyChainOptions { MaximumPackagesPerRepository = 1 },
             scanner: new FixedScanner(PackageScanOutcome.Clean));
@@ -130,8 +190,9 @@ public sealed class SupplyChainPackageStoreTests
     public async Task Moderation_validation_and_audit_survive_restart()
     {
         using var directory = TemporaryDirectory.Create();
-        await using (var first = new SupplyChainPackageStore(
-                         new DurablePackageStore(directory.Path),
+        await using (var firstStore = new DurablePackageStore(directory.Path))
+        await using (var first = new PackageSupplyChainService(
+                         firstStore,
                          directory.Path,
                          new SupplyChainOptions(),
                          new FixedScanner(PackageScanOutcome.Malicious)))
@@ -143,13 +204,14 @@ public sealed class SupplyChainPackageStoreTests
             Assert.Equal(PackagePublicationOutcome.Rejected, result.Outcome);
         }
 
-        await using var second = new SupplyChainPackageStore(
-            new DurablePackageStore(directory.Path),
+        await using var secondStore = new DurablePackageStore(directory.Path);
+        await using var second = new PackageSupplyChainService(
+            secondStore,
             directory.Path,
             new SupplyChainOptions(),
             new FixedScanner(PackageScanOutcome.Clean));
 
-        Assert.Null(await second.FindAsync("Rejected.Package", "1.0.0"));
+        Assert.Null(await secondStore.FindAsync("Rejected.Package", "1.0.0"));
         Assert.Equal(
             PackageModerationState.Rejected,
             (await second.GetStatusAsync("Rejected.Package", "1.0.0"))!.State);
@@ -162,21 +224,22 @@ public sealed class SupplyChainPackageStoreTests
             PackageModerationState.Published,
             "administrator",
             "false positive"));
-        Assert.NotNull(await second.FindAsync("Rejected.Package", "1.0.0"));
+        Assert.NotNull(await secondStore.FindAsync("Rejected.Package", "1.0.0"));
         Assert.True(await second.DeleteControlledAsync(
             "Rejected.Package",
             "1.0.0",
             "administrator",
             "retention exception"));
-        Assert.Null(await second.FindAsync("Rejected.Package", "1.0.0"));
+        Assert.Null(await secondStore.FindAsync("Rejected.Package", "1.0.0"));
     }
 
     [Fact]
     public async Task Untracked_blob_after_interrupted_publication_recovers_quarantined()
     {
         using var directory = TemporaryDirectory.Create();
-        await using (var initialized = new SupplyChainPackageStore(
-                         new DurablePackageStore(directory.Path),
+        await using (var initializedStore = new DurablePackageStore(directory.Path))
+        await using (var initialized = new PackageSupplyChainService(
+                         initializedStore,
                          directory.Path))
         {
         }
@@ -187,11 +250,12 @@ public sealed class SupplyChainPackageStoreTests
                 TestPackageBuilder.Create("Interrupted.Package", "1.0.0").Build());
         }
 
-        await using var recovered = new SupplyChainPackageStore(
-            new DurablePackageStore(directory.Path),
+        await using var recoveredStore = new DurablePackageStore(directory.Path);
+        await using var recovered = new PackageSupplyChainService(
+            recoveredStore,
             directory.Path);
 
-        Assert.Null(await recovered.FindAsync("Interrupted.Package", "1.0.0"));
+        Assert.Null(await recoveredStore.FindAsync("Interrupted.Package", "1.0.0"));
         Assert.Equal(
             PackageModerationState.Quarantined,
             (await recovered.GetStatusAsync("Interrupted.Package", "1.0.0"))!.State);
@@ -201,8 +265,9 @@ public sealed class SupplyChainPackageStoreTests
     public async Task Missing_policy_database_recovers_durable_packages_quarantined()
     {
         using var directory = TemporaryDirectory.Create();
-        await using (var first = new SupplyChainPackageStore(
-                         new DurablePackageStore(directory.Path),
+        await using (var firstStore = new DurablePackageStore(directory.Path))
+        await using (var first = new PackageSupplyChainService(
+                         firstStore,
                          directory.Path,
                          scanner: new FixedScanner(PackageScanOutcome.Malicious)))
         {
@@ -215,11 +280,12 @@ public sealed class SupplyChainPackageStoreTests
 
         File.Delete(Path.Combine(directory.Path, "supply-chain.db"));
 
-        await using var recovered = new SupplyChainPackageStore(
-            new DurablePackageStore(directory.Path),
+        await using var recoveredStore = new DurablePackageStore(directory.Path);
+        await using var recovered = new PackageSupplyChainService(
+            recoveredStore,
             directory.Path);
 
-        Assert.Null(await recovered.FindAsync("Rejected.Recovery", "1.0.0"));
+        Assert.Null(await recoveredStore.FindAsync("Rejected.Recovery", "1.0.0"));
         Assert.Equal(
             PackageModerationState.Quarantined,
             (await recovered.GetStatusAsync("Rejected.Recovery", "1.0.0"))!.State);
@@ -228,8 +294,9 @@ public sealed class SupplyChainPackageStoreTests
     [Fact]
     public async Task Search_uses_latest_published_version_and_deleted_tombstones_cannot_republish()
     {
-        await using var store = new SupplyChainPackageStore(
-            new InMemoryPackageStore(),
+        await using var packageStore = new InMemoryPackageStore();
+        await using var store = new PackageSupplyChainService(
+            packageStore,
             scanner: new FixedScanner(PackageScanOutcome.Clean));
         await store.PublishAsync(new(
             TestPackageBuilder.Create("Visible.Package", "1.0.0").Build(),
@@ -242,8 +309,9 @@ public sealed class SupplyChainPackageStoreTests
             "administrator",
             "approved"));
 
-        await using var quarantinedStore = new SupplyChainPackageStore(
-            new InMemoryPackageStore(),
+        await using var quarantinedPackageStore = new InMemoryPackageStore();
+        await using var quarantinedStore = new PackageSupplyChainService(
+            quarantinedPackageStore,
             scanner: new FixedScanner(PackageScanOutcome.Inconclusive));
         await quarantinedStore.AddAsync(
             TestPackageBuilder.Create("Search.Package", "1.0.0").Build());
@@ -253,7 +321,7 @@ public sealed class SupplyChainPackageStoreTests
             "repository",
             Administrator: true));
 
-        var search = await quarantinedStore.SearchAsync(
+        var search = await quarantinedPackageStore.SearchAsync(
             "Search.Package",
             includePrerelease: false,
             skip: 0,

@@ -6,7 +6,7 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class SupplyChainPackageStore : IPackageStore
+public sealed class PackageSupplyChainService : IAsyncDisposable
 {
     private readonly IPackageStore _inner;
     private readonly SupplyChainOptions _options;
@@ -15,7 +15,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
     private readonly SqliteConnection _connection;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public SupplyChainPackageStore(
+    public PackageSupplyChainService(
         IPackageStore inner,
         string? storageDirectory = null,
         SupplyChainOptions? options = null,
@@ -48,12 +48,12 @@ public sealed class SupplyChainPackageStore : IPackageStore
             _connection.Open();
             Migrate();
             ImportUntrackedPackages(trustUntrackedPackages);
+            SynchronizeModerationStates();
             RecoverDeletedPackages();
         }
         catch
         {
             _connection.Dispose();
-            _inner.DisposeAsync().AsTask().GetAwaiter().GetResult();
             throw;
         }
     }
@@ -143,6 +143,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
                 return new(PackagePublicationOutcome.QuotaExceeded, "Publication quota exceeded.");
             }
 
+            package = package with { ModerationState = PackageModerationState.Quarantined };
             await _inner.AddAsync(package, token);
             try
             {
@@ -186,7 +187,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
                 throw;
             }
 
-            var stored = await _inner.FindAsync(id, version, token)
+            var stored = await _inner.FindStoredAsync(id, version, token)
                 ?? throw new PackageStorageCorruptionException(
                     $"Quarantined package '{id} {version}' is absent from blob storage.");
             var validations = new List<PackageValidationRecord>();
@@ -315,81 +316,6 @@ public sealed class SupplyChainPackageStore : IPackageStore
         }
     }
 
-    public async ValueTask<TestPackage?> FindAsync(
-        string id,
-        string version,
-        CancellationToken token = default) =>
-        IsPublished(id, Normalize(version))
-            ? await _inner.FindAsync(id, version, token)
-            : null;
-
-    public async ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
-        string id,
-        CancellationToken token = default)
-    {
-        var packages = await _inner.FindByIdAsync(id, token);
-        return packages.Where(package => IsPublished(id, package.NormalizedVersion)).ToArray();
-    }
-
-    public async ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(
-        CancellationToken token = default)
-    {
-        var packages = await _inner.GetAllAsync(token);
-        return packages.Where(package =>
-            IsPublished(package.Identity.Id, package.NormalizedVersion)).ToArray();
-    }
-
-    public async ValueTask<PackageSearchPage> SearchAsync(
-        string query,
-        bool includePrerelease,
-        int skip,
-        int take,
-        CancellationToken token = default)
-    {
-        query ??= string.Empty;
-        var packages = await _inner.GetAllAsync(token);
-        var matches = packages
-            .Where(package => IsPublished(package.Identity.Id, package.NormalizedVersion))
-            .Where(package => package.IsListed)
-            .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
-            .GroupBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
-            .Where(group => group.Any(package =>
-                package.Identity.Id.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                package.Description.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                package.Tags.Contains(query, StringComparison.OrdinalIgnoreCase)))
-            .Select(group => new PackageSearchItem(
-                group.MaxBy(package => package.Identity.Version)!,
-                group.OrderBy(package => package.Identity.Version).ToArray()))
-            .OrderBy(item => item.Package.Identity.Id, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.Package.Identity.Id, StringComparer.Ordinal)
-            .ToArray();
-        IReadOnlyList<PackageSearchItem> items = matches
-            .Skip(Math.Max(0, skip))
-            .Take(Math.Clamp(take, 0, 1000))
-            .ToArray();
-        return new PackageSearchPage(matches.Length, items);
-    }
-
-    public async ValueTask<bool> SetListedAsync(
-        string id,
-        string version,
-        bool listed,
-        CancellationToken token = default)
-    {
-        if (!IsPublished(id, Normalize(version)))
-        {
-            return false;
-        }
-
-        return await _inner.SetListedAsync(id, version, listed, token);
-    }
-
-    public ValueTask<bool> DeleteAsync(
-        string id,
-        string version,
-        CancellationToken token = default) =>
-        DeleteControlledAsync(id, version, "system", "IPackageStore delete", token);
-
     public async ValueTask<bool> DeleteControlledAsync(
         string id,
         string version,
@@ -475,6 +401,12 @@ public sealed class SupplyChainPackageStore : IPackageStore
                 state.ToString().ToLowerInvariant(),
                 reason);
             transaction.Commit();
+            if (!await _inner.SetModerationStateAsync(id, normalized, state, token))
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Supply-chain metadata exists for package '{id} {normalized}', but its package metadata is absent.");
+            }
+
             return true;
         }
         finally
@@ -584,7 +516,6 @@ public sealed class SupplyChainPackageStore : IPackageStore
         await _gate.WaitAsync();
         try
         {
-            await _inner.DisposeAsync();
             await _connection.DisposeAsync();
         }
         finally
@@ -634,7 +565,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
 
     private void ImportUntrackedPackages(bool trustAsLegacy)
     {
-        var packages = _inner.GetAllAsync().AsTask().GetAwaiter().GetResult();
+        var packages = _inner.GetAllStoredAsync().AsTask().GetAwaiter().GetResult();
         foreach (var package in packages)
         {
             if (ReadStatus(package.Identity.Id, package.NormalizedVersion) is not null)
@@ -671,6 +602,17 @@ public sealed class SupplyChainPackageStore : IPackageStore
                     ? "Existing durable package imported as published."
                     : "Untracked durable package recovered as quarantined after interrupted publication.");
             transaction.Commit();
+            if (!_inner.SetModerationStateAsync(
+                    package.Identity.Id,
+                    package.NormalizedVersion,
+                    trustAsLegacy
+                        ? PackageModerationState.Published
+                        : PackageModerationState.Quarantined)
+                .AsTask().GetAwaiter().GetResult())
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Recovered supply-chain package '{package.Identity.Id} {package.NormalizedVersion}' is absent.");
+            }
         }
     }
 
@@ -691,6 +633,7 @@ public sealed class SupplyChainPackageStore : IPackageStore
             {
                 deleted.Add((reader.GetString(0), reader.GetString(1)));
             }
+
         }
 
         foreach (var package in deleted)
@@ -705,6 +648,37 @@ public sealed class SupplyChainPackageStore : IPackageStore
                     "delete-recovery",
                     "deleted",
                     "Completed interrupted controlled deletion.");
+            }
+        }
+    }
+
+    private void SynchronizeModerationStates()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, normalized_version, state
+            FROM package_supply_chain
+            WHERE state <> $deleted;
+            """;
+        command.Parameters.AddWithValue("$deleted", PackageModerationState.Deleted.ToString());
+        using var reader = command.ExecuteReader();
+        var states = new List<(string Id, string Version, PackageModerationState State)>();
+        while (reader.Read())
+        {
+            states.Add((
+                reader.GetString(0),
+                reader.GetString(1),
+                Enum.Parse<PackageModerationState>(reader.GetString(2), ignoreCase: true)));
+        }
+
+        foreach (var package in states)
+        {
+            if (!_inner.SetModerationStateAsync(package.Id, package.Version, package.State)
+                .AsTask().GetAwaiter().GetResult())
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Supply-chain metadata exists for missing package '{package.Id} {package.Version}'.");
             }
         }
     }
@@ -801,6 +775,12 @@ public sealed class SupplyChainPackageStore : IPackageStore
             state.ToString().ToLowerInvariant(),
             detail);
         transaction.Commit();
+        if (!_inner.SetModerationStateAsync(id, version, state)
+            .AsTask().GetAwaiter().GetResult())
+        {
+            throw new PackageStorageCorruptionException(
+                $"Supply-chain metadata exists for package '{id} {version}', but its package metadata is absent.");
+        }
     }
 
     private bool AllowsReservedNamespace(string id, string identity) =>
@@ -833,9 +813,6 @@ public sealed class SupplyChainPackageStore : IPackageStore
         reader.Read();
         return (reader.GetInt64(0), reader.GetInt64(1));
     }
-
-    private bool IsPublished(string id, string version) =>
-        ReadStatus(id, version)?.State == PackageModerationState.Published;
 
     private PackageSupplyChainStatus? ReadStatus(string id, string version)
     {

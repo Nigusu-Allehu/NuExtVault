@@ -40,11 +40,66 @@ public sealed class DurablePackageStoreTests
         connection.Open();
         using var versionCommand = connection.CreateCommand();
         versionCommand.CommandText = "PRAGMA user_version;";
-        using var migrationCommand = connection.CreateCommand();
-        migrationCommand.CommandText = "SELECT version FROM storage_migrations;";
 
-        Assert.Equal(1L, versionCommand.ExecuteScalar());
-        Assert.Equal(1L, migrationCommand.ExecuteScalar());
+        Assert.Equal(3L, versionCommand.ExecuteScalar());
+        Assert.Equal([1L, 2L, 3L], ReadMigrationVersions(connection));
+    }
+
+    [Fact]
+    public async Task Repository_metadata_and_symbols_survive_restart()
+    {
+        using var directory = TemporaryDirectory.Create();
+        var metadata = new PackageRepositoryMetadata(
+            ["Alice", "Bob"],
+            Downloads: 42,
+            Verified: true,
+            new PackageDeprecation(
+                ["Legacy", "Other"],
+                "Use the replacement.",
+                new AlternatePackage("Replacement.Package", "[2.0.0,)")));
+        var symbols = TestPackageBuilder.Create("Persistent.Package", "1.2.3")
+            .WithFile("lib/net10.0/Persistent.Package.pdb", [1, 2, 3, 4])
+            .Build()
+            .Content;
+
+        await using (var first = new DurablePackageStore(directory.Path))
+        {
+            await first.AddAsync(
+                TestPackageBuilder.Create("Persistent.Package", "1.2.3")
+                    .WithPackageType("DotnetTool", "1.0.0")
+                    .Build());
+            Assert.True(await first.SetRepositoryMetadataAsync(
+                "Persistent.Package",
+                "1.2.3",
+                metadata));
+            await first.AddSymbolAsync(symbols);
+        }
+
+        await using var second = new DurablePackageStore(directory.Path);
+        var restored = await second.FindAsync("persistent.package", "1.2.3");
+        var restoredSymbols = await second.FindSymbolAsync("persistent.package", "1.2.3");
+        var tools = await second.SearchAsync(
+            string.Empty,
+            includePrerelease: false,
+            skip: 0,
+            take: 20,
+            packageType: "dotnettool");
+
+        Assert.NotNull(restored);
+        Assert.Equal(metadata.Owners, restored.RepositoryMetadata.Owners);
+        Assert.Equal(metadata.Downloads, restored.RepositoryMetadata.Downloads);
+        Assert.Equal(metadata.Verified, restored.RepositoryMetadata.Verified);
+        Assert.Equal(
+            metadata.Deprecation!.Reasons,
+            restored.RepositoryMetadata.Deprecation!.Reasons);
+        Assert.Equal(
+            metadata.Deprecation.Message,
+            restored.RepositoryMetadata.Deprecation.Message);
+        Assert.Equal(
+            metadata.Deprecation.AlternatePackage,
+            restored.RepositoryMetadata.Deprecation.AlternatePackage);
+        Assert.Equal(symbols, restoredSymbols);
+        Assert.Equal(["Persistent.Package"], tools.Items.Select(item => item.Package.Identity.Id));
     }
 
     [Fact]
@@ -125,8 +180,20 @@ public sealed class DurablePackageStoreTests
             NuspecContent = [],
             NormalizedVersion = "1.0.0",
             Description = string.Empty,
+            Summary = string.Empty,
+            Title = string.Empty,
             Authors = string.Empty,
             Tags = string.Empty,
+            ProjectUrl = null,
+            Readme = string.Empty,
+            Icon = string.Empty,
+            LicenseExpression = string.Empty,
+            LicenseFile = string.Empty,
+            LicenseUrl = null,
+            PackageTypes = [],
+            Repository = null,
+            PackageHash = string.Empty,
+            RepositoryMetadata = new PackageRepositoryMetadata([], 0, false, null),
             DependencyGroups = [],
             Published = DateTimeOffset.UtcNow
         };
@@ -232,5 +299,19 @@ public sealed class DurablePackageStoreTests
         {
             await Task.Delay(1, cancellation.Token);
         }
+    }
+
+    private static long[] ReadMigrationVersions(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT version FROM storage_migrations ORDER BY version;";
+        using var reader = command.ExecuteReader();
+        var versions = new List<long>();
+        while (reader.Read())
+        {
+            versions.Add(reader.GetInt64(0));
+        }
+
+        return versions.ToArray();
     }
 }

@@ -29,8 +29,6 @@ The test suite includes:
 - Functional tests against a real loopback Kestrel server.
 - End-to-end tests using NuGet.Protocol, `dotnet restore`, and `dotnet nuget push`.
 - Authentication tests for API-key publishing and private Basic-authenticated feeds.
-- Supply-chain tests for signature policy, scanning, quarantine visibility,
-  ownership, quotas, moderation, concurrency, and restart persistence.
 - Vulnerability schema, cache-integrity, registration, and real restore-audit tests.
 - Functional tests that start and probe the packaged CLI.
 
@@ -116,15 +114,6 @@ the next startup; control-API resets use the same recoverable deletion protocol.
 Existing filesystem-only package layouts are imported in place, including
 `.unlisted` markers.
 
-Supply-chain state, package-ID ownership, quota accounting, validation results,
-and moderation audit history are stored in `<storage>\supply-chain.db`.
-If that policy database is missing, existing durable packages are recovered as
-quarantined rather than trusted as published and require explicit moderation.
-Quarantined, rejected, and deleted packages remain absent from flat-container,
-registration, and search responses.
-Quota accounting includes every retained blob, including rejected and
-quarantined content, and releases usage only after controlled deletion.
-
 Only one server process may use a storage root at a time; a second process exits
 with a clear diagnostic. Startup also verifies each tracked blob's identity and
 SHA-256 digest, removes interrupted temporary publications, recovers complete
@@ -133,72 +122,6 @@ serving inconsistent state. Programmatic servers created without a storage path
 continue to use the isolated in-memory implementation.
 
 Stop the server with Ctrl+C.
-
-### Configure supply-chain validation
-
-Every protocol push is quarantined before required validation runs. The default
-policy permits unsigned packages and uses `SafePackagePolicyScanner`, which
-reports structural policy success after bounded package parsing. It is **not an
-antivirus or malware engine**. Inject an actual scanner through
-`IPackagePolicyScanner` when malware detection is required.
-
-Configure signature requirements, namespace reservations, and per-identity or
-per-repository quotas for an in-process host:
-
-```csharp
-var policy = new SupplyChainOptions
-{
-    RequireSignedPackages = true,
-    MaximumPackagesPerIdentity = 100,
-    MaximumBytesPerIdentity = 2L * 1024 * 1024 * 1024,
-    MaximumPackagesPerRepository = 1_000,
-    MaximumBytesPerRepository = 20L * 1024 * 1024 * 1024,
-    NamespaceReservations = new Dictionary<string, string>
-    {
-        ["Contoso."] = "contoso-publisher"
-    }
-};
-
-IPackagePolicyScanner scanner = new MyPackagePolicyScanner();
-await using var server = await NuGetTestServerHost.StartAsync(policy, scanner);
-```
-
-`DeterministicPackagePolicyScanner` is available for tests. It maps package IDs
-to configured clean, malicious, or inconclusive results; it does not perform
-real malware analysis.
-
-Signed packages are checked with NuGet.Packaging signing APIs for valid signature
-and signed-content integrity. `RequireSignedPackages` rejects unsigned packages.
-This policy does not configure a certificate allow-list and does not promise
-online revocation or external trust validation.
-
-Publication responses are:
-
-| Result | HTTP status |
-| --- | ---: |
-| Published | `201 Created` |
-| Identical content already published | `200 OK` |
-| Same ID/version with different content | `409 Conflict` |
-| Quarantined for inconclusive/error scanning | `202 Accepted` |
-| Invalid signature, required signature missing, or malicious | `422 Unprocessable Entity` |
-| Ownership or namespace violation | `403 Forbidden` |
-| Identity or repository quota exceeded | `429 Too Many Requests` |
-
-Administrators can approve, reject, quarantine, or delete a stored version with
-a required audit reason:
-
-```text
-POST /__admin/packages/{id}/{version}/approve?reason=...
-POST /__admin/packages/{id}/{version}/reject?reason=...
-POST /__admin/packages/{id}/{version}/quarantine?reason=...
-POST /__admin/packages/{id}/{version}/delete?reason=...
-GET  /__admin/packages/{id}/{version}/validations
-GET  /__admin/supply-chain/audit
-```
-
-These routes require the `admin` scope in production mode. Published versions
-are immutable. Rejected or quarantined content can only become public through an
-explicit administrative approval; another push cannot overwrite it.
 
 ### Use production-safe mode
 
@@ -213,9 +136,8 @@ nuget-test-server start --production --api-key-env NUGET_TEST_SERVER_API_KEY
 
 `GET /__test/health` remains available and reports `"mode":"production"`.
 Other `/__test` routes are not mapped, including state and package controls,
-reset, request inspection, and fault injection. The scoped `/__admin` moderation
-routes remain available. Test mode remains the default and retains all existing
-test controls.
+reset, hard deletion, request inspection, and fault injection. Test mode remains
+the default and retains all existing test controls.
 
 Production mode refuses anonymous write configuration. It also refuses cleartext
 HTTP on non-loopback listeners. The CLI always binds to loopback, where HTTP is
@@ -266,11 +188,11 @@ Identity names and credentials must be unique.
 
 The available scopes are `read`, `publish`, `unlist`, `delete`, and `admin`.
 `admin` grants every operation and namespace. A publisher must also match a
-configured package ID prefix. The first publication admitted to quarantine
-reserves ownership of the package ID, including when later validation rejects
-that version; later versions, unlisting, and hard deletion are restricted to
-that owner or an administrator. Ownership is transactionally persisted with
-supply-chain state in `<storage>\supply-chain.db`.
+configured package ID prefix. The first successful publisher claims ownership of
+the package ID; later versions, unlisting, and hard deletion are restricted to
+that owner or an administrator. Ownership and moderation history are persisted in
+`<storage>\supply-chain.db`, while package moderation state is also stored with
+the first-class package metadata.
 Hard deletion is available only with production identities at
 `DELETE /package/{id}/{version}/hard`.
 
@@ -286,6 +208,37 @@ bounded tracking for address churn. Authentication, authorization, throttling,
 and ownership events are emitted as structured records and appended to
 `<storage>\security\audit.jsonl` for CLI servers. In-memory retention is capped
 at 1,000 events; the audit file rotates at 10 MiB with one previous file retained.
+
+## Validate and moderate package publication
+
+Protocol pushes are quarantine-first. The server validates NuGet signatures and
+invokes the configured `IPackagePolicyScanner` before changing a package to
+`Published`. Invalid signatures and malicious scan results are rejected;
+inconclusive results and scanner failures remain quarantined. Only published
+packages are visible through flat-container content, versions, registration,
+search, rich metadata, or symbol retrieval. The same filtering is restored from
+durable state after restart.
+
+`SupplyChainOptions` configures required signatures, per-identity and
+per-repository package/byte quotas, and reserved package-ID namespaces.
+Identical retries are idempotent; a different archive for an existing ID/version
+conflicts because published versions are immutable. Trusted test-control seeds
+are recorded as published without protocol validation.
+
+Administrators can approve, reject, quarantine, or controlled-delete a version:
+
+```http
+POST /__admin/packages/{id}/{version}/approve?reason=reviewed
+POST /__admin/packages/{id}/{version}/reject?reason=policy
+POST /__admin/packages/{id}/{version}/quarantine?reason=investigation
+POST /__admin/packages/{id}/{version}/delete?reason=retention
+GET  /__admin/packages/{id}/{version}/validations
+GET  /__admin/supply-chain/audit
+```
+
+Moderation, validation records, ownership, tombstones, and audit history survive
+CLI restarts. Missing policy metadata fails closed by recovering durable package
+blobs as quarantined.
 
 ## Install the CLI as a local .NET tool
 
@@ -505,8 +458,7 @@ dotnet nuget push .\packages\Example.Package.1.0.0.nupkg `
   --configfile .\NuGet.config
 ```
 
-Pushing identical content for an already published ID and version is idempotent.
-Different content for the same ID and version returns `409 Conflict`.
+Pushing the same package ID and version again returns `409 Conflict`.
 
 ### Seed a directory
 
@@ -685,9 +637,14 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
+- Base64 SHA-512 sidecars for package archives
 - Registration indexes, pages, and leaf metadata
+- Rich registration and search metadata from package archives and test state
 - Package search with stable pagination totals and complete listed-version metadata
-- Package push
+- Package and symbol-package push through standard NuGet clients
+- Quarantine-first signature/scanner validation and durable moderation
+- Published-only package, rich-metadata, search, registration, and symbol visibility
+- Immutable/idempotent publication, ownership, namespaces, and quotas
 - Package unlisting
 - Package seeding and hard deletion through the control API
 - Request recording
@@ -702,6 +659,62 @@ The current implementation supports:
 CLI package state is persisted in the Local AppData storage directory. Servers
 created with `NuGetTestServerHost.StartAsync()` remain isolated and in memory.
 Fault rules and request history are always runtime-only.
+
+### NuGet V3 capability matrix
+
+The service index advertises only resources implemented by the server.
+
+| Capability | Service-index type or route | Status | Client coverage |
+| --- | --- | --- | --- |
+| Service discovery | `GET/HEAD /v3/index.json` | Implemented | NuGet.Protocol and `dotnet` |
+| Package versions, archives, nuspecs | `PackageBaseAddress/3.0.0` | Implemented | NuGet.Protocol and `dotnet restore` |
+| Package hashes | `{id}.{version}.nupkg.sha512` | Implemented as Base64 SHA-512 of the exact archive | Raw Kestrel `GET`/`HEAD` |
+| Registration indexes, pages, and leaves | `RegistrationsBaseUrl/3.6.0` | Implemented | NuGet.Protocol |
+| Search | `SearchQueryService/3.0.0-beta` and `/3.5.0` | Implemented | NuGet.Protocol |
+| Package publishing and unlisting | `PackagePublish/2.0.0` | Implemented | `dotnet nuget push` |
+| Symbol-package publishing | `SymbolPackagePublish/4.9.0` | Implemented; `.snupkg` files are validated and persisted separately | `dotnet nuget push` automatic symbol upload |
+| Vulnerability data | `VulnerabilityInfo/6.7.0` | Implemented | NuGet restore audit |
+| Symbol download | No general NuGet V3 resource exists | Deferred and not advertised | N/A |
+| Repository signatures | `RepositorySignatures/4.7.0` and later | Deferred and not advertised | N/A |
+
+Registration metadata includes authors, owners, title, description, summary,
+tags, project URL, embedded readme and icon paths, license expression/file/URL,
+package types, repository details, dependencies, publication/listing state,
+download count, deprecation reasons/message/alternate package, and
+vulnerabilities. Search projects applicable fields plus per-version and total
+download counts and verification state.
+
+Tests can set repository-owned metadata without rewriting a package archive:
+
+```http
+PUT /__test/packages/{id}/{version}/metadata
+Content-Type: application/json
+
+{
+  "owners": ["Alice", "Bob"],
+  "downloads": 42,
+  "verified": true,
+  "deprecation": {
+    "reasons": ["Legacy"],
+    "message": "Use Replacement.Package.",
+    "alternatePackage": {
+      "id": "Replacement.Package",
+      "range": "[2.0.0,)"
+    }
+  }
+}
+```
+
+Downloads must be non-negative, deprecation reasons are limited to `Legacy`,
+`CriticalBugs`, and `Other`, and alternate-package ranges must be valid NuGet
+version ranges. This metadata persists with CLI package storage.
+
+Repository signatures are intentionally deferred. A correct
+`RepositorySignatures` resource requires HTTPS, X.509 signing certificates,
+repository-signing every claimed package, and trust metadata matching those
+actual signatures. This loopback test server can validate author/repository-signed package content
+but has no repository-signing-key pipeline, so advertising an empty or synthetic
+repository-signature resource would misrepresent package trust.
 
 ## Repository layout
 
@@ -732,9 +745,10 @@ Repository agents and contributors follow the workflow in
 - This is test infrastructure, not a production package feed.
 - Programmatic test-server storage is in memory; the CLI persists packages locally.
 - The server uses anonymous HTTP by default unless credentials are supplied.
-- The default policy scanner is not antivirus. Real malware detection requires an
-  injected `IPackagePolicyScanner` implementation.
-- Signature validation checks NuGet signature and content integrity but does not
-  configure signer allow-lists or guarantee online certificate revocation checks.
-- Symbols and advanced network faults are not yet implemented.
+- The default policy scanner performs structural policy checks, not antivirus;
+  real malware detection requires an injected `IPackagePolicyScanner`.
+- Signature validation checks NuGet signature/content integrity but does not
+  configure signer allow-lists or guarantee online revocation checks.
+- Automatic certificate provisioning, advanced network faults, symbol download,
+  and repository signatures are not yet implemented.
 - The server binds to `127.0.0.1` unless its hosting configuration is changed.

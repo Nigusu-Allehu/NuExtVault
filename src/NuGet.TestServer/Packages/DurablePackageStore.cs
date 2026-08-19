@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using NuGet.Versioning;
 
@@ -31,6 +32,7 @@ public sealed class DurablePackageStore : IPackageStore
             RecoverPendingDeletes();
             ImportUntrackedBlobs();
             LoadAndVerifyPackages();
+            LoadAndVerifySymbols();
         }
         catch
         {
@@ -46,7 +48,10 @@ public sealed class DurablePackageStore : IPackageStore
         StoredPackageBlob? blob = null;
         try
         {
-            if (await _cache.FindAsync(package.Identity.Id, package.NormalizedVersion, token) is not null)
+            if (await _cache.FindStoredAsync(
+                    package.Identity.Id,
+                    package.NormalizedVersion,
+                    token) is not null)
             {
                 throw new DuplicatePackageException(package.Identity.Id, package.NormalizedVersion);
             }
@@ -89,6 +94,58 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default) =>
         _cache.FindAsync(id, version, token);
 
+    public ValueTask<TestPackage?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        _cache.FindStoredAsync(id, version, token);
+
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        _cache.FindSymbolAsync(id, version, token);
+
+    public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        token.ThrowIfCancellationRequested();
+        var package = InMemoryPackageStore.ParseSymbolPackage(content);
+        await _gate.WaitAsync(token);
+        string? relativePath = null;
+        try
+        {
+            if (await _cache.FindSymbolAsync(
+                    package.Identity.Id,
+                    package.NormalizedVersion,
+                    token) is not null)
+            {
+                throw new DuplicatePackageException(
+                    package.Identity.Id,
+                    package.NormalizedVersion);
+            }
+
+            relativePath = GetSymbolRelativePath(
+                package.Identity.Id,
+                package.NormalizedVersion);
+            await PublishBytesAsync(relativePath, content, token);
+            try
+            {
+                await _cache.AddSymbolAsync(content, CancellationToken.None);
+            }
+            catch
+            {
+                _blobs.Delete(relativePath);
+                throw;
+            }
+        }
+        finally
+        {
+            package.Dispose();
+            _gate.Release();
+        }
+    }
+
     public ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
         string id,
         CancellationToken token = default) =>
@@ -97,13 +154,18 @@ public sealed class DurablePackageStore : IPackageStore
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default) =>
         _cache.GetAllAsync(token);
 
+    public ValueTask<IReadOnlyList<TestPackage>> GetAllStoredAsync(
+        CancellationToken token = default) =>
+        _cache.GetAllStoredAsync(token);
+
     public ValueTask<PackageSearchPage> SearchAsync(
         string query,
         bool includePrerelease,
         int skip,
         int take,
-        CancellationToken token = default) =>
-        _cache.SearchAsync(query, includePrerelease, skip, take, token);
+        CancellationToken token = default,
+        string? packageType = null) =>
+        _cache.SearchAsync(query, includePrerelease, skip, take, token, packageType);
 
     public async ValueTask<bool> SetListedAsync(
         string id,
@@ -134,6 +196,65 @@ public sealed class DurablePackageStore : IPackageStore
         }
     }
 
+    public async ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        await _gate.WaitAsync(token);
+        try
+        {
+            var normalizedVersion = Normalize(version);
+            if (!_metadata.SetRepositoryMetadata(id, normalizedVersion, metadata))
+            {
+                return false;
+            }
+
+            if (!await _cache.SetRepositoryMetadataAsync(id, normalizedVersion, metadata, token))
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Metadata exists for package '{id} {normalizedVersion}', but it is absent from memory.");
+            }
+
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async ValueTask<bool> SetModerationStateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            var normalizedVersion = Normalize(version);
+            if (!_metadata.SetModerationState(id, normalizedVersion, state))
+            {
+                return false;
+            }
+
+            if (!await _cache.SetModerationStateAsync(id, normalizedVersion, state, token))
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Metadata exists for package '{id} {normalizedVersion}', but it is absent from memory.");
+            }
+
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async ValueTask<bool> DeleteAsync(
         string id,
         string version,
@@ -149,18 +270,27 @@ public sealed class DurablePackageStore : IPackageStore
                 return false;
             }
 
-            var pendingDelete = _blobs.StageDelete(metadata.BlobPath);
+            var pendingDeletes = new List<(string PendingPath, string BlobPath)>
+            {
+                (_blobs.StageDelete(metadata.BlobPath), metadata.BlobPath)
+            };
+            var symbolPath = GetSymbolRelativePath(metadata.Id, metadata.NormalizedVersion);
+            if (File.Exists(_blobs.GetFullPath(symbolPath)))
+            {
+                pendingDeletes.Add((_blobs.StageDelete(symbolPath), symbolPath));
+            }
+
             try
             {
                 if (!_metadata.Delete(id, normalizedVersion))
                 {
-                    _blobs.RollbackDelete(pendingDelete, metadata.BlobPath);
+                    RollbackDeletes(pendingDeletes);
                     return false;
                 }
             }
             catch
             {
-                _blobs.RollbackDelete(pendingDelete, metadata.BlobPath);
+                RollbackDeletes(pendingDeletes);
                 throw;
             }
 
@@ -170,7 +300,11 @@ public sealed class DurablePackageStore : IPackageStore
                     $"Deleted metadata for package '{id} {normalizedVersion}', but it was absent from memory.");
             }
 
-            _blobs.CompleteDelete(pendingDelete);
+            foreach (var pendingDelete in pendingDeletes)
+            {
+                _blobs.CompleteDelete(pendingDelete.PendingPath);
+            }
+
             return true;
         }
         finally
@@ -193,6 +327,14 @@ public sealed class DurablePackageStore : IPackageStore
                     pendingDeletes.Add((
                         _blobs.StageDelete(metadata.BlobPath),
                         metadata.BlobPath));
+                }
+
+                foreach (var symbolPath in GetSymbolPaths())
+                {
+                    token.ThrowIfCancellationRequested();
+                    pendingDeletes.Add((
+                        _blobs.StageDelete(symbolPath),
+                        symbolPath));
                 }
 
                 token.ThrowIfCancellationRequested();
@@ -264,6 +406,11 @@ public sealed class DurablePackageStore : IPackageStore
             {
                 _blobs.RollbackDelete(pendingPath, blobPath);
             }
+            else if (blobPath.EndsWith(".snupkg", StringComparison.OrdinalIgnoreCase) &&
+                     _metadata.ContainsBlob(Path.ChangeExtension(blobPath, ".nupkg")))
+            {
+                _blobs.RollbackDelete(pendingPath, blobPath);
+            }
             else
             {
                 _blobs.CompleteDelete(pendingPath);
@@ -320,10 +467,13 @@ public sealed class DurablePackageStore : IPackageStore
             TestPackage package;
             try
             {
-                package = TestPackage.FromFile(fullPath, _limits) with
+                var parsed = TestPackage.FromFile(fullPath, _limits);
+                package = parsed with
                 {
                     IsListed = metadata.IsListed,
-                    Published = metadata.Published
+                    Published = metadata.Published,
+                    ModerationState = metadata.ModerationState,
+                    RepositoryMetadata = metadata.RepositoryMetadata ?? parsed.RepositoryMetadata
                 };
             }
             catch (Exception exception) when (
@@ -343,6 +493,90 @@ public sealed class DurablePackageStore : IPackageStore
             }
 
             _cache.AddAsync(package).AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    private void LoadAndVerifySymbols()
+    {
+        foreach (var relativePath in GetSymbolPaths())
+        {
+            var fullPath = _blobs.GetFullPath(relativePath);
+            try
+            {
+                _cache.AddSymbolAsync(File.ReadAllBytes(fullPath))
+                    .AsTask()
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch (Exception exception) when (
+                exception is InvalidPackageException or DuplicatePackageException)
+            {
+                throw new PackageStorageCorruptionException(
+                    $"Symbol package blob '{relativePath}' is invalid.",
+                    exception);
+            }
+        }
+    }
+
+    private async ValueTask PublishBytesAsync(
+        string relativePath,
+        byte[] content,
+        CancellationToken token)
+    {
+        var fullPath = _blobs.GetFullPath(relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        var temporaryPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await using (var stream = new FileStream(
+                             temporaryPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             64 * 1024,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await stream.WriteAsync(content, token);
+                await stream.FlushAsync(token);
+                stream.Flush(flushToDisk: true);
+            }
+
+            token.ThrowIfCancellationRequested();
+            File.Move(temporaryPath, fullPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private IEnumerable<string> GetSymbolPaths() =>
+        Directory.EnumerateFiles(
+                Path.Combine(_root, "packages"),
+                "*.snupkg",
+                SearchOption.AllDirectories)
+            .Select(path => Path.GetRelativePath(_root, path))
+            .ToArray();
+
+    private static string GetSymbolRelativePath(string id, string normalizedVersion)
+    {
+        var normalizedId = id.ToLowerInvariant();
+        return Path.Combine(
+            "packages",
+            normalizedId,
+            normalizedVersion,
+            $"{normalizedId}.{normalizedVersion}.snupkg");
+    }
+
+    private void RollbackDeletes(
+        IEnumerable<(string PendingPath, string BlobPath)> pendingDeletes)
+    {
+        foreach (var pendingDelete in pendingDeletes.Reverse())
+        {
+            _blobs.RollbackDelete(pendingDelete.PendingPath, pendingDelete.BlobPath);
         }
     }
 
@@ -380,6 +614,14 @@ public interface IPackageMetadataStore
     IReadOnlyList<PackageMetadata> GetAll();
     void Insert(PackageMetadata package);
     bool SetListed(string id, string normalizedVersion, bool listed);
+    bool SetRepositoryMetadata(
+        string id,
+        string normalizedVersion,
+        PackageRepositoryMetadata metadata);
+    bool SetModerationState(
+        string id,
+        string normalizedVersion,
+        PackageModerationState state);
     bool Delete(string id, string normalizedVersion);
 }
 
@@ -401,7 +643,9 @@ public sealed record PackageMetadata(
     bool IsListed,
     long ContentLength,
     string BlobPath,
-    byte[] Sha256)
+    byte[] Sha256,
+    PackageRepositoryMetadata? RepositoryMetadata,
+    PackageModerationState ModerationState)
 {
     internal static PackageMetadata FromPackage(TestPackage package, StoredPackageBlob blob) =>
         new(
@@ -416,7 +660,9 @@ public sealed record PackageMetadata(
             package.IsListed,
             blob.Length,
             blob.RelativePath,
-            blob.Sha256);
+            blob.Sha256,
+            package.RepositoryMetadata,
+            package.ModerationState);
 }
 
 internal sealed class FilePackageBlobStore : IPackageBlobStore
@@ -532,7 +778,7 @@ internal sealed class FilePackageBlobStore : IPackageBlobStore
     }
 
     public IEnumerable<string> GetPendingDeletes() =>
-        Directory.EnumerateFiles(_trashDirectory, "*.nupkg", SearchOption.AllDirectories);
+        Directory.EnumerateFiles(_trashDirectory, "*.*nupkg", SearchOption.AllDirectories);
 
     public string GetBlobPathForPendingDelete(string pendingPath) =>
         Path.Combine("packages", Path.GetRelativePath(_trashDirectory, pendingPath));
@@ -581,7 +827,7 @@ internal sealed class FilePackageBlobStore : IPackageBlobStore
 
 internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 3;
     private readonly string _connectionString;
 
     public SqlitePackageMetadataStore(string databasePath)
@@ -614,7 +860,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.CommandText =
             """
             SELECT id, normalized_version, original_version, description, authors, tags,
-                   nuspec, published_utc, is_listed, content_length, blob_path, sha256
+                   nuspec, published_utc, is_listed, content_length, blob_path, sha256,
+                   repository_metadata, moderation_state
             FROM packages
             ORDER BY id COLLATE NOCASE, normalized_version;
             """;
@@ -635,7 +882,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.CommandText =
             """
             SELECT id, normalized_version, original_version, description, authors, tags,
-                   nuspec, published_utc, is_listed, content_length, blob_path, sha256
+                   nuspec, published_utc, is_listed, content_length, blob_path, sha256,
+                   repository_metadata, moderation_state
             FROM packages
             WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
             """;
@@ -655,10 +903,12 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             """
             INSERT INTO packages (
                 id, normalized_version, original_version, description, authors, tags,
-                nuspec, published_utc, is_listed, content_length, blob_path, sha256)
+                nuspec, published_utc, is_listed, content_length, blob_path, sha256,
+                repository_metadata, moderation_state)
             VALUES (
                 $id, $normalizedVersion, $originalVersion, $description, $authors, $tags,
-                $nuspec, $published, $listed, $length, $blobPath, $sha256);
+                $nuspec, $published, $listed, $length, $blobPath, $sha256,
+                $repositoryMetadata, $moderationState);
             """;
         AddParameters(command, package);
         try
@@ -685,6 +935,54 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
             """;
         command.Parameters.AddWithValue("$listed", listed ? 1 : 0);
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$version", normalizedVersion);
+        var changed = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return changed;
+    }
+
+    public bool SetRepositoryMetadata(
+        string id,
+        string normalizedVersion,
+        PackageRepositoryMetadata metadata)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE packages
+            SET repository_metadata = $metadata
+            WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
+            """;
+        command.Parameters.AddWithValue(
+            "$metadata",
+            JsonSerializer.Serialize(metadata));
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$version", normalizedVersion);
+        var changed = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return changed;
+    }
+
+    public bool SetModerationState(
+        string id,
+        string normalizedVersion,
+        PackageModerationState state)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE packages
+            SET moderation_state = $state
+            WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
+            """;
+        command.Parameters.AddWithValue("$state", state.ToString());
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$version", normalizedVersion);
         var changed = command.ExecuteNonQuery() == 1;
@@ -760,6 +1058,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                     content_length INTEGER NOT NULL CHECK (content_length >= 0),
                     blob_path TEXT NOT NULL UNIQUE,
                     sha256 BLOB NOT NULL CHECK (length(sha256) = 32),
+                    repository_metadata TEXT NULL,
+                    moderation_state TEXT NOT NULL,
                     PRIMARY KEY (id, normalized_version)
                 );
                 CREATE TABLE storage_migrations (
@@ -768,7 +1068,45 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 );
                 INSERT INTO storage_migrations(version, applied_utc)
                 VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-                PRAGMA user_version = 1;
+                INSERT INTO storage_migrations(version, applied_utc)
+                VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                INSERT INTO storage_migrations(version, applied_utc)
+                VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                PRAGMA user_version = 3;
+                """;
+            command.ExecuteNonQuery();
+            transaction.Commit();
+            return;
+        }
+
+        if (version == 1)
+        {
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                ALTER TABLE packages ADD COLUMN repository_metadata TEXT NULL;
+                INSERT INTO storage_migrations(version, applied_utc)
+                VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                PRAGMA user_version = 2;
+                """;
+            command.ExecuteNonQuery();
+            transaction.Commit();
+            version = 2;
+        }
+
+        if (version == 2)
+        {
+            using var transaction = connection.BeginTransaction();
+            using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText =
+                """
+                ALTER TABLE packages ADD COLUMN moderation_state TEXT NOT NULL DEFAULT 'Published';
+                INSERT INTO storage_migrations(version, applied_utc)
+                VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                PRAGMA user_version = 3;
                 """;
             command.ExecuteNonQuery();
             transaction.Commit();
@@ -806,7 +1144,13 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             reader.GetInt64(8) == 1,
             reader.GetInt64(9),
             reader.GetString(10),
-            (byte[])reader[11]);
+            (byte[])reader[11],
+            reader.IsDBNull(12)
+                ? null
+                : JsonSerializer.Deserialize<PackageRepositoryMetadata>(reader.GetString(12))
+                    ?? throw new PackageStorageCorruptionException(
+                        "Stored package repository metadata is invalid."),
+            Enum.Parse<PackageModerationState>(reader.GetString(13), ignoreCase: true));
 
     private static void AddParameters(SqliteCommand command, PackageMetadata package)
     {
@@ -824,6 +1168,12 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         command.Parameters.AddWithValue("$length", package.ContentLength);
         command.Parameters.AddWithValue("$blobPath", package.BlobPath);
         command.Parameters.AddWithValue("$sha256", package.Sha256);
+        command.Parameters.AddWithValue(
+            "$repositoryMetadata",
+            package.RepositoryMetadata is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(package.RepositoryMetadata));
+        command.Parameters.AddWithValue("$moderationState", package.ModerationState.ToString());
     }
 }
 

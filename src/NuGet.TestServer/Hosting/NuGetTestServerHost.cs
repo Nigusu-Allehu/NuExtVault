@@ -20,7 +20,8 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ControlUrl = new Uri(baseUrl, "/__test");
         HttpClient = new HttpClient { BaseAddress = baseUrl };
         Packages = new PackageControlClient(
-            application.Services.GetRequiredService<IPackageStore>());
+            application.Services.GetRequiredService<IPackageStore>(),
+            application.Services.GetRequiredService<PackageSupplyChainService>());
         Faults = new FaultControlClient(
             application.Services.GetRequiredService<FaultRuleStore>());
         Requests = new RequestControlClient(
@@ -323,10 +324,12 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 }
 
-public sealed class PackageControlClient(IPackageStore store)
+public sealed class PackageControlClient(
+    IPackageStore store,
+    PackageSupplyChainService supplyChain)
 {
     public ValueTask AddAsync(TestPackage package, CancellationToken token = default) =>
-        store.AddAsync(package, token);
+        supplyChain.AddAsync(package, token);
 
     public ValueTask<TestPackage?> FindAsync(
         string id,
@@ -334,7 +337,14 @@ public sealed class PackageControlClient(IPackageStore store)
         CancellationToken token = default) =>
         store.FindAsync(id, version, token);
 
-    public ValueTask ResetAsync(CancellationToken token = default) => store.ResetAsync(token);
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default) =>
+        store.FindSymbolAsync(id, version, token);
+
+    public ValueTask ResetAsync(CancellationToken token = default) =>
+        supplyChain.ResetAsync(token);
 }
 
 public sealed class FaultControlClient(FaultRuleStore store)

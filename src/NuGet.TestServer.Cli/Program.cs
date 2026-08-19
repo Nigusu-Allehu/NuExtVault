@@ -105,14 +105,14 @@ try
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
         vulnerabilities: vulnerabilityProvider,
-        packageLimits: packageLimits,
         mode: mode,
+        packageLimits: packageLimits,
         trustedProxies: ParseTrustedProxies(arguments));
 }
 catch (Exception exception) when (
-    exception is PackageStorageInUseException or
-        PackageStorageCorruptionException or
-        ServerHostingConfigurationException)
+    exception is ServerHostingConfigurationException
+        or PackageStorageInUseException
+        or PackageStorageCorruptionException)
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
@@ -195,6 +195,17 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
     return null;
 }
 
+static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)
+{
+    var value = ReadOption(arguments, "--trusted-proxy");
+    return value is null
+        ? null
+        : new TrustedProxyOptions(
+            value.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+}
+
 static long ReadPositiveLongOption(
     IReadOnlyList<string> arguments,
     string name,
@@ -212,17 +223,6 @@ static long ReadPositiveLongOption(
     }
 
     return parsed;
-}
-
-static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)
-{
-    var value = ReadOption(arguments, "--trusted-proxy");
-    return value is null
-        ? null
-        : new TrustedProxyOptions(
-            value.Split(
-                ',',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 }
 
 static string GenerateApiKey()
