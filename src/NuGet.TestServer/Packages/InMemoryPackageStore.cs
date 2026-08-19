@@ -83,6 +83,17 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        var package = _packages.GetValueOrDefault(Key(id, Normalize(version)));
+        return ValueTask.FromResult(
+            package?.ModerationState == PackageModerationState.Published ? package : null);
+    }
+
+    public ValueTask<TestPackage?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
         return ValueTask.FromResult(_packages.GetValueOrDefault(Key(id, Normalize(version))));
     }
 
@@ -92,6 +103,12 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        if (_packages.GetValueOrDefault(Key(id, Normalize(version)))?.ModerationState !=
+            PackageModerationState.Published)
+        {
+            return ValueTask.FromResult<byte[]?>(null);
+        }
+
         return ValueTask.FromResult(
             _symbols.GetValueOrDefault(Key(id, Normalize(version)))?.ToArray());
     }
@@ -139,12 +156,25 @@ public sealed class InMemoryPackageStore : IPackageStore
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
             .Where(package => string.Equals(package.Identity.Id, id, StringComparison.OrdinalIgnoreCase))
+            .Where(package => package.ModerationState == PackageModerationState.Published)
             .OrderBy(package => package.Identity.Version)
             .ToArray();
         return ValueTask.FromResult(result);
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        IReadOnlyList<TestPackage> result = _packages.Values
+            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(package => package.Identity.Version)
+            .ToArray();
+        return ValueTask.FromResult(result);
+    }
+
+    public ValueTask<IReadOnlyList<TestPackage>> GetAllStoredAsync(
+        CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
@@ -168,6 +198,7 @@ public sealed class InMemoryPackageStore : IPackageStore
         skip = Math.Max(skip, 0);
 
         var applicablePackages = _packages.Values
+            .Where(package => package.ModerationState == PackageModerationState.Published)
             .Where(package => package.IsListed)
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
             .Where(package =>
@@ -244,6 +275,39 @@ public sealed class InMemoryPackageStore : IPackageStore
                 if (_packagesDirectory is not null)
                 {
                     await PersistRepositoryMetadataAsync(updated, token);
+                }
+
+                if (_packages.TryUpdate(key, updated, package))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        finally
+        {
+            _persistenceGate.Release();
+        }
+    }
+
+    public async ValueTask<bool> SetModerationStateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        var key = Key(id, Normalize(version));
+        await _persistenceGate.WaitAsync(token);
+        try
+        {
+            while (_packages.TryGetValue(key, out var package))
+            {
+                var updated = package with { ModerationState = state };
+                if (_packagesDirectory is not null)
+                {
+                    await PersistModerationStateAsync(updated, token);
                 }
 
                 if (_packages.TryUpdate(key, updated, package))
@@ -402,6 +466,17 @@ public sealed class InMemoryPackageStore : IPackageStore
                 };
             }
 
+            var moderationPath = GetModerationStatePath(package);
+            if (File.Exists(moderationPath))
+            {
+                package = package with
+                {
+                    ModerationState = Enum.Parse<PackageModerationState>(
+                        File.ReadAllText(moderationPath),
+                        ignoreCase: true)
+                };
+            }
+
             if (!_packages.TryAdd(Key(package.Identity.Id, package.NormalizedVersion), package))
             {
                 throw new InvalidDataException(
@@ -449,6 +524,7 @@ public sealed class InMemoryPackageStore : IPackageStore
 
             File.Move(temporary, destination, overwrite: false);
             SetUnlistedMarker(package, package.IsListed);
+            await PersistModerationStateAsync(package, token);
             return destination;
         }
         finally
@@ -514,6 +590,30 @@ public sealed class InMemoryPackageStore : IPackageStore
                 token);
             File.Move(temporary, destination, overwrite: true);
         }
+
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                File.Delete(temporary);
+            }
+        }
+    }
+
+    private async Task PersistModerationStateAsync(
+        TestPackage package,
+        CancellationToken token)
+    {
+        var destination = GetModerationStatePath(package);
+        var temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporary,
+                package.ModerationState.ToString(),
+                token);
+            File.Move(temporary, destination, overwrite: true);
+        }
         finally
         {
             if (File.Exists(temporary))
@@ -542,6 +642,9 @@ public sealed class InMemoryPackageStore : IPackageStore
 
     private string GetRepositoryMetadataPath(TestPackage package) =>
         Path.Combine(GetPackageDirectory(package), "metadata.json");
+
+    private string GetModerationStatePath(TestPackage package) =>
+        Path.Combine(GetPackageDirectory(package), "moderation.state");
 
     private string GetSymbolPath(TestPackage package)
     {

@@ -9,6 +9,11 @@ public interface IPackageStore : IAsyncDisposable
         string version,
         CancellationToken token = default);
 
+    ValueTask<TestPackage?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token = default);
+
     ValueTask<byte[]?> FindSymbolAsync(
         string id,
         string version,
@@ -21,6 +26,8 @@ public interface IPackageStore : IAsyncDisposable
         CancellationToken token = default);
 
     ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default);
+
+    ValueTask<IReadOnlyList<TestPackage>> GetAllStoredAsync(CancellationToken token = default);
 
     ValueTask<PackageSearchPage> SearchAsync(
         string query,
@@ -40,6 +47,12 @@ public interface IPackageStore : IAsyncDisposable
         string id,
         string version,
         PackageRepositoryMetadata metadata,
+        CancellationToken token = default);
+
+    ValueTask<bool> SetModerationStateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
         CancellationToken token = default);
 
     ValueTask<bool> DeleteAsync(

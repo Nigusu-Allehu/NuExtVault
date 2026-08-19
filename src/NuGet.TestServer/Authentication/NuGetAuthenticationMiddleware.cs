@@ -49,7 +49,12 @@ public sealed class NuGetAuthenticationMiddleware(
         string? username = null;
         var requiresBasic = configuration.RequiresBasicAuthentication;
         var requiresApiKey =
-            requirement.Kind is NuGetAccessKind.Write or NuGetAccessKind.Control &&
+            requirement.Kind is NuGetAccessKind.Write or
+                NuGetAccessKind.Control or
+                NuGetAccessKind.Publish or
+                NuGetAccessKind.Unlist or
+                NuGetAccessKind.Delete or
+                NuGetAccessKind.Admin &&
             configuration.RequiresApiKeyForWrites;
 
         if (requiresBasic)

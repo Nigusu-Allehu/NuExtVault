@@ -26,7 +26,9 @@ public static class ServerApplication
         RuntimeStateConfiguration? runtimeState = null,
         PackageTransferLimits? packageLimits = null,
         TrustedProxyOptions? trustedProxies = null,
-        int maximumAuthenticationFailures = 5)
+        int maximumAuthenticationFailures = 5,
+        SupplyChainOptions? supplyChain = null,
+        IPackagePolicyScanner? packageScanner = null)
     {
         var hosting = ServerHostingOptions.Create(
             mode,
@@ -64,6 +66,12 @@ public static class ServerApplication
             storageDirectory is null
                 ? new InMemoryPackageStore(limits: packageLimits)
                 : new DurablePackageStore(storageDirectory, packageLimits));
+        builder.Services.AddSingleton(provider => new PackageSupplyChainService(
+            provider.GetRequiredService<IPackageStore>(),
+            storageDirectory,
+            supplyChain,
+            packageScanner,
+            provider.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
         builder.Services.AddSingleton(
@@ -74,6 +82,7 @@ public static class ServerApplication
         try
         {
             _ = app.Services.GetRequiredService<IPackageStore>();
+            _ = app.Services.GetRequiredService<PackageSupplyChainService>();
         }
         catch
         {
@@ -83,6 +92,7 @@ public static class ServerApplication
 
         MapMiddleware(app, mode);
         MapProtocolEndpoints(app);
+        MapModerationEndpoints(app);
         MapHealthEndpoint(app, mode);
         if (mode == ServerMode.Test)
         {
@@ -367,11 +377,16 @@ public static class ServerApplication
                 string id,
                 string version,
                 IPackageStore store,
-                IPackageOwnershipStore ownership,
+                PackageSupplyChainService supplyChainService,
                 ISecurityAuditSink audits,
                 CancellationToken token) =>
             {
-                if (!CanManagePackage(context, id, ownership, audits))
+                if (!await CanManagePackageAsync(
+                        context,
+                        id,
+                        supplyChainService,
+                        audits,
+                        token))
                 {
                     return Results.StatusCode(StatusCodes.Status403Forbidden);
                 }
@@ -396,21 +411,105 @@ public static class ServerApplication
                     string id,
                     string version,
                     IPackageStore store,
-                    IPackageOwnershipStore ownership,
+                    PackageSupplyChainService supplyChainService,
                     ISecurityAuditSink audits,
                     CancellationToken token) =>
                 {
-                    if (!CanManagePackage(context, id, ownership, audits))
+                    if (!await CanManagePackageAsync(
+                            context,
+                            id,
+                            supplyChainService,
+                            audits,
+                            token))
                     {
                         return Results.StatusCode(StatusCodes.Status403Forbidden);
                     }
 
-                    return await store.DeleteAsync(id, version, token)
+                    return await supplyChainService.DeleteControlledAsync(
+                            id,
+                            version,
+                            context.User.Identity?.Name ?? "administrator",
+                            "Production hard-delete endpoint.",
+                            token)
                         ? Results.NoContent()
                         : Results.NotFound();
                 })
                 .WithMetadata(NuGetAccessRequirement.Delete);
         }
+    }
+
+    private static void MapModerationEndpoints(WebApplication app)
+    {
+        app.MapPost(
+            "/__admin/packages/{id}/{version}/{action}",
+            async Task<IResult> (
+                HttpContext context,
+                string id,
+                string version,
+                string action,
+                string? reason,
+                PackageSupplyChainService supplyChainService,
+                CancellationToken token) =>
+            {
+                if (string.IsNullOrWhiteSpace(reason))
+                {
+                    return Results.BadRequest("A moderation reason is required.");
+                }
+
+                var actor = context.User.Identity?.Name ?? "administrator";
+                if (action.Equals("delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    return await supplyChainService.DeleteControlledAsync(
+                        id,
+                        version,
+                        actor,
+                        reason,
+                        token)
+                        ? Results.NoContent()
+                        : Results.NotFound();
+                }
+
+                var state = action.ToLowerInvariant() switch
+                {
+                    "approve" => PackageModerationState.Published,
+                    "reject" => PackageModerationState.Rejected,
+                    "quarantine" => PackageModerationState.Quarantined,
+                    _ => (PackageModerationState?)null
+                };
+                if (state is null)
+                {
+                    return Results.BadRequest(
+                        "Moderation action must be approve, reject, quarantine, or delete.");
+                }
+
+                return await supplyChainService.ModerateAsync(
+                    id,
+                    version,
+                    state.Value,
+                    actor,
+                    reason,
+                    token)
+                    ? Results.NoContent()
+                    : Results.NotFound();
+            })
+            .WithMetadata(NuGetAccessRequirement.Admin);
+
+        app.MapGet(
+            "/__admin/supply-chain/audit",
+            async (PackageSupplyChainService supplyChainService, CancellationToken token) =>
+                Results.Json(await supplyChainService.GetAuditHistoryAsync(token)))
+            .WithMetadata(NuGetAccessRequirement.Admin);
+
+        app.MapGet(
+            "/__admin/packages/{id}/{version}/validations",
+            async (
+                string id,
+                string version,
+                PackageSupplyChainService supplyChainService,
+                CancellationToken token) =>
+                Results.Json(
+                    await supplyChainService.GetValidationResultsAsync(id, version, token)))
+            .WithMetadata(NuGetAccessRequirement.Admin);
     }
 
     private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
@@ -441,7 +540,10 @@ public static class ServerApplication
 
         app.MapPost(
             "/__test/reset",
-            async (IPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>
+            async (
+                PackageSupplyChainService packages,
+                FaultRuleStore faults,
+                RequestRecorder requests) =>
             {
                 await packages.ResetAsync();
                 faults.Reset();
@@ -460,7 +562,7 @@ public static class ServerApplication
             "/__test/packages",
             async Task<IResult> (
                 HttpRequest request,
-                IPackageStore store,
+                PackageSupplyChainService supplyChainService,
                 PackageTransferLimits limits,
                 CancellationToken token) =>
             {
@@ -534,10 +636,10 @@ public static class ServerApplication
                     }
 
                     await using var contentStream = new MemoryStream(content, writable: false);
-                    return await AddPackageAsync(contentStream, store, limits, token);
+                    return await AddPackageAsync(contentStream, supplyChainService, limits, token);
                 }
 
-                return await AddPackageAsync(request.Body, store, limits, token);
+                return await AddPackageAsync(request.Body, supplyChainService, limits, token);
             })
             .WithMetadata(NuGetAccessRequirement.Control);
 
@@ -634,7 +736,7 @@ public static class ServerApplication
     private static async Task<IResult> PublishPackageAsync(
         HttpRequest request,
         IPackageStore store,
-        IPackageOwnershipStore ownership,
+        PackageSupplyChainService supplyChainService,
         ISecurityAuditSink audits,
         PackageTransferLimits limits,
         CancellationToken token)
@@ -664,7 +766,7 @@ public static class ServerApplication
                 request,
                 stream,
                 store,
-                ownership,
+                supplyChainService,
                 audits,
                 limits,
                 token);
@@ -674,7 +776,7 @@ public static class ServerApplication
             request,
             request.Body,
             store,
-            ownership,
+            supplyChainService,
             audits,
             limits,
             token);
@@ -684,7 +786,7 @@ public static class ServerApplication
         HttpRequest request,
         Stream content,
         IPackageStore store,
-        IPackageOwnershipStore ownership,
+        PackageSupplyChainService supplyChainService,
         ISecurityAuditSink audits,
         PackageTransferLimits limits,
         CancellationToken token)
@@ -699,61 +801,40 @@ public static class ServerApplication
 
             var identity =
                 request.HttpContext.Items[typeof(ProductionIdentity)] as ProductionIdentity;
-            if (identity is not null)
+            if (identity is not null && !identity.AllowsPackage(package.Identity.Id))
             {
-                if (!identity.AllowsPackage(package.Identity.Id))
-                {
-                    WriteAuthorizationDenied(
-                        request.HttpContext,
-                        audits,
-                        identity,
-                        $"Package '{package.Identity.Id}' is outside configured namespaces.");
-                    return Results.StatusCode(StatusCodes.Status403Forbidden);
-                }
-
-                var publishResult = await ownership.PublishAsync(
-                    package.Identity.Id,
-                    identity.Name,
-                    identity.HasScope(SecurityScope.Admin),
-                    async cancellationToken =>
-                        (await store.FindByIdAsync(
-                            package.Identity.Id,
-                            cancellationToken)).Count > 0,
-                    async cancellationToken =>
-                    {
-                        await store.AddAsync(package, cancellationToken);
-                    },
-                    token);
-
-                if (!publishResult.Authorized)
-                {
-                    WriteAuthorizationDenied(
-                        request.HttpContext,
-                        audits,
-                        identity,
-                        $"Package '{package.Identity.Id}' is owned by another identity.");
-                    return Results.StatusCode(StatusCodes.Status403Forbidden);
-                }
-
-                if (publishResult.OwnershipClaimed)
-                {
-                    audits.Write(CreateAudit(
-                        request.HttpContext,
-                        SecurityAuditEventType.PackageOwnershipClaimed,
-                        identity.Name,
-                        package.Identity.Id));
-                }
-            }
-            else
-            {
-                await store.AddAsync(package, token);
+                WriteAuthorizationDenied(
+                    request.HttpContext,
+                    audits,
+                    identity,
+                    $"Package '{package.Identity.Id}' is outside configured namespaces.");
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            var result = Results.Created(
-                $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
-                PackageSummary(package));
+            var publication = await supplyChainService.PublishAsync(
+                new PackagePublicationRequest(
+                    package,
+                    identity?.Name ?? request.HttpContext.User.Identity?.Name ?? "anonymous",
+                    "default",
+                    identity?.HasScope(SecurityScope.Admin) ?? false),
+                token);
             package = null;
-            return result;
+            return publication.Outcome switch
+            {
+                PackagePublicationOutcome.Published => Results.Created(
+                    request.Path,
+                    publication),
+                PackagePublicationOutcome.Duplicate => Results.Ok(publication),
+                PackagePublicationOutcome.Quarantined => Results.Accepted(request.Path, publication),
+                PackagePublicationOutcome.Rejected => Results.Json(
+                    publication,
+                    statusCode: StatusCodes.Status422UnprocessableEntity),
+                PackagePublicationOutcome.Unauthorized =>
+                    Results.StatusCode(StatusCodes.Status403Forbidden),
+                PackagePublicationOutcome.QuotaExceeded =>
+                    Results.StatusCode(StatusCodes.Status429TooManyRequests),
+                _ => Results.Conflict(publication)
+            };
         }
         catch (PackageLimitExceededException exception)
         {
@@ -822,7 +903,7 @@ public static class ServerApplication
 
     private static async Task<IResult> AddPackageAsync(
         Stream content,
-        IPackageStore store,
+        PackageSupplyChainService supplyChainService,
         PackageTransferLimits limits,
         CancellationToken token)
     {
@@ -833,7 +914,7 @@ public static class ServerApplication
                 content,
                 limits,
                 cancellationToken: token);
-            await store.AddAsync(package, token);
+            await supplyChainService.AddAsync(package, token);
             var result = Results.Created(
                 $"/__test/packages/{Uri.EscapeDataString(package.Identity.Id)}/{package.NormalizedVersion}",
                 PackageSummary(package));
@@ -878,11 +959,12 @@ public static class ServerApplication
         }
     }
 
-    private static bool CanManagePackage(
+    private static async ValueTask<bool> CanManagePackageAsync(
         HttpContext context,
         string packageId,
-        IPackageOwnershipStore ownership,
-        ISecurityAuditSink audits)
+        PackageSupplyChainService supplyChainService,
+        ISecurityAuditSink audits,
+        CancellationToken token)
     {
         var identity = context.Items[typeof(ProductionIdentity)] as ProductionIdentity;
         if (identity is null)
@@ -890,7 +972,7 @@ public static class ServerApplication
             return true;
         }
 
-        var owner = ownership.GetOwner(packageId);
+        var owner = await supplyChainService.GetOwnerAsync(packageId, token);
         if ((owner is not null &&
              string.Equals(owner, identity.Name, StringComparison.Ordinal)) ||
             identity.HasScope(SecurityScope.Admin))

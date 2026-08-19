@@ -82,6 +82,19 @@ public sealed class DurablePackageStore : IPackageStore
     {
         token.ThrowIfCancellationRequested();
         var metadata = _metadata.Find(id, Normalize(version));
+        return ValueTask.FromResult(
+            metadata?.ModerationState == PackageModerationState.Published
+                ? Project(metadata)
+                : null);
+    }
+
+    public ValueTask<TestPackage?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        var metadata = _metadata.Find(id, Normalize(version));
         return ValueTask.FromResult(metadata is null ? null : Project(metadata));
     }
 
@@ -91,6 +104,12 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        if (_metadata.Find(id, Normalize(version))?.ModerationState !=
+            PackageModerationState.Published)
+        {
+            return ValueTask.FromResult<byte[]?>(null);
+        }
+
         return ValueTask.FromResult(
             _symbols.GetValueOrDefault(SymbolKey(id, Normalize(version)))?.ToArray());
     }
@@ -136,10 +155,21 @@ public sealed class DurablePackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(Project(_metadata.FindById(id)));
+        return ValueTask.FromResult(Project(_metadata.FindById(id)
+            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .ToArray()));
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(Project(_metadata.GetAll()
+            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .ToArray()));
+    }
+
+    public ValueTask<IReadOnlyList<TestPackage>> GetAllStoredAsync(
+        CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         return ValueTask.FromResult(Project(_metadata.GetAll()));
@@ -203,6 +233,29 @@ public sealed class DurablePackageStore : IPackageStore
         {
             var normalizedVersion = Normalize(version);
             if (!_metadata.SetRepositoryMetadata(id, normalizedVersion, metadata))
+            {
+                return false;
+            }
+
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async ValueTask<bool> SetModerationStateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            var normalizedVersion = Normalize(version);
+            if (!_metadata.SetModerationState(id, normalizedVersion, state))
             {
                 return false;
             }
@@ -560,6 +613,10 @@ public interface IPackageMetadataStore
         string id,
         string normalizedVersion,
         PackageRepositoryMetadata metadata);
+    bool SetModerationState(
+        string id,
+        string normalizedVersion,
+        PackageModerationState state);
     bool Delete(string id, string normalizedVersion);
 }
 
@@ -583,7 +640,8 @@ public sealed record PackageMetadata(
     string BlobPath,
     byte[] Sha256,
     PackageRepositoryMetadata? RepositoryMetadata,
-    string PackageHash)
+    string PackageHash,
+    PackageModerationState ModerationState)
 {
     internal static PackageMetadata FromPackage(TestPackage package, StoredPackageBlob blob) =>
         new(
@@ -600,7 +658,8 @@ public sealed record PackageMetadata(
             blob.RelativePath,
             blob.Sha256,
             package.RepositoryMetadata,
-            package.PackageHash);
+            package.PackageHash,
+            package.ModerationState);
 }
 
 internal sealed record PackageBlobReference(
@@ -779,12 +838,12 @@ internal sealed class FilePackageBlobStore : IPackageBlobStore
 
 internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
 {
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 4;
     private const string Columns =
         """
         id, normalized_version, original_version, description, authors, tags,
         nuspec, published_utc, is_listed, content_length, blob_path, sha256,
-        repository_metadata, package_hash
+        repository_metadata, package_hash, moderation_state
         """;
     private const string QualifiedColumns =
         """
@@ -792,7 +851,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         package.description, package.authors, package.tags, package.nuspec,
         package.published_utc, package.is_listed, package.content_length,
         package.blob_path, package.sha256, package.repository_metadata,
-        package.package_hash
+        package.package_hash, package.moderation_state
         """;
     private readonly string _connectionString;
     private readonly string _storageRoot;
@@ -923,6 +982,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 SELECT package.normalized_id
                 FROM packages AS package
                 WHERE package.is_listed = 1
+                  AND package.moderation_state = 'Published'
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   {packageTypeFilter}
                 GROUP BY package.normalized_id
@@ -933,6 +993,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 FROM packages_search
                 JOIN packages AS package ON package.rowid = packages_search.rowid
                 WHERE package.is_listed = 1
+                  AND package.moderation_state = 'Published'
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND packages_search MATCH $match
                   AND package.search_text LIKE $pattern ESCAPE '\'
@@ -944,6 +1005,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 SELECT package.normalized_id
                 FROM packages AS package
                 WHERE package.is_listed = 1
+                  AND package.moderation_state = 'Published'
                   AND ($prerelease = 1 OR package.is_prerelease = 0)
                   AND package.search_text LIKE $pattern ESCAPE '\'
                   {packageTypeFilter}
@@ -982,6 +1044,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             FROM packages AS package
             JOIN matching_ids ON matching_ids.normalized_id = package.normalized_id
             WHERE package.is_listed = 1
+              AND package.moderation_state = 'Published'
               AND ($prerelease = 1 OR package.is_prerelease = 0)
               {packageTypeFilter}
             ORDER BY package.normalized_id, package.version_sort_key;
@@ -1025,12 +1088,12 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 id, normalized_id, normalized_version, original_version, is_prerelease,
                 version_sort_key, description, authors, tags, search_text, nuspec,
                 published_utc, is_listed, content_length, blob_path, sha256,
-                repository_metadata, package_hash)
+                repository_metadata, package_hash, moderation_state)
             VALUES (
                 $id, $normalizedId, $normalizedVersion, $originalVersion, $isPrerelease,
                 $versionSortKey, $description, $authors, $tags, $searchText, $nuspec,
                 $published, $listed, $length, $blobPath, $sha256,
-                $repositoryMetadata, $packageHash);
+                $repositoryMetadata, $packageHash, $moderationState);
             """;
         AddParameters(command, package);
         try
@@ -1078,12 +1141,35 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             """
             UPDATE packages
             SET repository_metadata = $metadata
-            WHERE id = $id COLLATE NOCASE AND normalized_version = $version;
+            WHERE normalized_id = $id AND normalized_version = $version;
             """;
         command.Parameters.AddWithValue(
             "$metadata",
             JsonSerializer.Serialize(metadata));
-        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$id", NormalizeId(id));
+        command.Parameters.AddWithValue("$version", normalizedVersion);
+        var changed = command.ExecuteNonQuery() == 1;
+        transaction.Commit();
+        return changed;
+    }
+
+    public bool SetModerationState(
+        string id,
+        string normalizedVersion,
+        PackageModerationState state)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            UPDATE packages
+            SET moderation_state = $state
+            WHERE normalized_id = $id AND normalized_version = $version;
+            """;
+        command.Parameters.AddWithValue("$state", state.ToString());
+        command.Parameters.AddWithValue("$id", NormalizeId(id));
         command.Parameters.AddWithValue("$version", normalizedVersion);
         var changed = command.ExecuteNonQuery() == 1;
         transaction.Commit();
@@ -1176,6 +1262,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 sha256 BLOB NOT NULL CHECK (length(sha256) = 32),
                 repository_metadata TEXT NULL,
                 package_hash TEXT NOT NULL,
+                moderation_state TEXT NOT NULL,
                 PRIMARY KEY (id, normalized_version)
             );
             CREATE TABLE storage_migrations (
@@ -1191,7 +1278,9 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
             INSERT INTO storage_migrations(version, applied_utc)
             VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-            PRAGMA user_version = 3;
+            INSERT INTO storage_migrations(version, applied_utc)
+            VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            PRAGMA user_version = 4;
             """;
         command.ExecuteNonQuery();
         transaction.Commit();
@@ -1202,6 +1291,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
         var hasIndexedColumns = HasColumn(connection, "normalized_id");
         var hasRepositoryMetadata = HasColumn(connection, "repository_metadata");
         var hasPackageHash = HasColumn(connection, "package_hash");
+        var hasModerationState = HasColumn(connection, "moderation_state");
         using var transaction = connection.BeginTransaction();
         using (var alter = connection.CreateCommand())
         {
@@ -1229,6 +1319,13 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             {
                 alter.CommandText =
                     "ALTER TABLE packages ADD COLUMN package_hash TEXT NOT NULL DEFAULT '';";
+                alter.ExecuteNonQuery();
+            }
+
+            if (!hasModerationState)
+            {
+                alter.CommandText =
+                    "ALTER TABLE packages ADD COLUMN moderation_state TEXT NOT NULL DEFAULT 'Published';";
                 alter.ExecuteNonQuery();
             }
         }
@@ -1305,7 +1402,9 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
             VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
             INSERT OR IGNORE INTO storage_migrations(version, applied_utc)
             VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
-            PRAGMA user_version = 3;
+            INSERT OR IGNORE INTO storage_migrations(version, applied_utc)
+            VALUES (4, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            PRAGMA user_version = 4;
             """;
         finalize.ExecuteNonQuery();
 
@@ -1404,7 +1503,8 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 : JsonSerializer.Deserialize<PackageRepositoryMetadata>(reader.GetString(12))
                     ?? throw new PackageStorageCorruptionException(
                         "Stored package repository metadata is invalid."),
-            reader.GetString(13));
+            reader.GetString(13),
+            Enum.Parse<PackageModerationState>(reader.GetString(14), ignoreCase: true));
 
     private static void AddParameters(SqliteCommand command, PackageMetadata package)
     {
@@ -1435,6 +1535,7 @@ internal sealed class SqlitePackageMetadataStore : IPackageMetadataStore
                 ? DBNull.Value
                 : JsonSerializer.Serialize(package.RepositoryMetadata));
         command.Parameters.AddWithValue("$packageHash", package.PackageHash);
+        command.Parameters.AddWithValue("$moderationState", package.ModerationState.ToString());
     }
 
     private static SqliteCommand CreateSearchCommand(

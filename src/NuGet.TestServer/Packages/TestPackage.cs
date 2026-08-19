@@ -65,6 +65,8 @@ public sealed record TestPackage : IDisposable
     public required IReadOnlyList<PackageDependencyGroup> DependencyGroups { get; init; }
     public required DateTimeOffset Published { get; init; }
     public bool IsListed { get; init; } = true;
+    public PackageModerationState ModerationState { get; init; } =
+        PackageModerationState.Published;
 
     public static TestPackage FromContent(byte[] content, TimeProvider? timeProvider = null)
     {
@@ -211,7 +213,8 @@ public sealed record TestPackage : IDisposable
                     Deprecation: null),
             DependencyGroups = dependencyGroups,
             Published = metadata.Published,
-            IsListed = metadata.IsListed
+            IsListed = metadata.IsListed,
+            ModerationState = metadata.ModerationState
         };
     }
 

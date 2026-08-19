@@ -78,8 +78,9 @@ public sealed class DurablePackageStoreTests
             WHERE packages_search MATCH '"migration"';
             """;
 
-        Assert.Equal(3L, versionCommand.ExecuteScalar());
-        Assert.Equal(3L, migrationCommand.ExecuteScalar());
+        Assert.Equal(4L, versionCommand.ExecuteScalar());
+        Assert.Equal([1L, 2L, 3L, 4L], ReadMigrationVersions(connection));
+        Assert.Equal(4L, migrationCommand.ExecuteScalar());
         Assert.Equal(4L, columnsCommand.ExecuteScalar());
         Assert.Equal(4L, indexesCommand.ExecuteScalar());
         Assert.Contains(
@@ -370,11 +371,11 @@ public sealed class DurablePackageStoreTests
             Path.Combine(directory.Path, "packages"),
             "*.snupkg",
             SearchOption.AllDirectories));
-        await using var symbolLock = new FileStream(
-            symbolPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.None);
+        var pendingSymbolPath = Path.Combine(
+            directory.Path,
+            "trash",
+            Path.GetRelativePath(Path.Combine(directory.Path, "packages"), symbolPath));
+        Directory.CreateDirectory(pendingSymbolPath);
 
         await Assert.ThrowsAsync<IOException>(
             () => store.DeleteAsync("Rollback.Package", "1.0.0").AsTask());
@@ -495,6 +496,20 @@ public sealed class DurablePackageStoreTests
 
         Assert.False(File.Exists(partialPath));
         Assert.Null(await store.FindAsync("Partial.Package", "1.0.0"));
+    }
+
+    private static long[] ReadMigrationVersions(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT version FROM storage_migrations ORDER BY version;";
+        using var reader = command.ExecuteReader();
+        var versions = new List<long>();
+        while (reader.Read())
+        {
+            versions.Add(reader.GetInt64(0));
+        }
+
+        return versions.ToArray();
     }
 
     private sealed class TemporaryDirectory : IDisposable
