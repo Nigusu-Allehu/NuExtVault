@@ -16,12 +16,18 @@ public static class ServerApplication
         string? url = null,
         string? storageDirectory = null,
         AuthenticationConfiguration? authentication = null,
-        VulnerabilitySnapshotProvider? vulnerabilities = null)
+        VulnerabilitySnapshotProvider? vulnerabilities = null,
+        ServerMode mode = ServerMode.Test)
     {
+        var hosting = ServerHostingOptions.Create(
+            mode,
+            url ?? "http://127.0.0.1:0",
+            authentication ?? AuthenticationConfiguration.Anonymous);
         var builder = WebApplication.CreateBuilder(args ?? []);
-        builder.WebHost.UseUrls(url ?? "http://127.0.0.1:0");
+        builder.WebHost.UseUrls(hosting.Url);
         builder.Services.AddSingleton(TimeProvider.System);
-        builder.Services.AddSingleton(authentication ?? AuthenticationConfiguration.Anonymous);
+        builder.Services.AddSingleton(hosting);
+        builder.Services.AddSingleton(hosting.Authentication);
         builder.Services.AddSingleton(new InMemoryPackageStore(storageDirectory));
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
@@ -30,54 +36,62 @@ public static class ServerApplication
             new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()));
 
         var app = builder.Build();
-        MapMiddleware(app);
+        MapMiddleware(app, mode);
         MapProtocolEndpoints(app);
-        MapControlEndpoints(app);
+        MapHealthEndpoint(app, mode);
+        if (mode == ServerMode.Test)
+        {
+            MapControlEndpoints(app);
+        }
+
         return app;
     }
 
-    private static void MapMiddleware(WebApplication app)
+    private static void MapMiddleware(WebApplication app, ServerMode mode)
     {
-        app.Use(async (context, next) =>
+        if (mode == ServerMode.Test)
         {
-            var recorder = context.RequestServices.GetRequiredService<RequestRecorder>();
-            var faults = context.RequestServices.GetRequiredService<FaultRuleStore>();
-            var sequence = recorder.NextSequence();
-            var started = Stopwatch.GetTimestamp();
-            string? faultRuleId = null;
-
-            try
+            app.Use(async (context, next) =>
             {
-                var fault = context.Request.Path.StartsWithSegments("/__test")
-                    ? null
-                    : faults.Match(context.Request.Method, context.Request.Path);
-                if (fault is not null)
+                var recorder = context.RequestServices.GetRequiredService<RequestRecorder>();
+                var faults = context.RequestServices.GetRequiredService<FaultRuleStore>();
+                var sequence = recorder.NextSequence();
+                var started = Stopwatch.GetTimestamp();
+                string? faultRuleId = null;
+
+                try
                 {
-                    faultRuleId = fault.Id;
-                    if (fault.Delay > TimeSpan.Zero)
+                    var fault = context.Request.Path.StartsWithSegments("/__test")
+                        ? null
+                        : faults.Match(context.Request.Method, context.Request.Path);
+                    if (fault is not null)
                     {
-                        await Task.Delay(fault.Delay, context.RequestAborted);
+                        faultRuleId = fault.Id;
+                        if (fault.Delay > TimeSpan.Zero)
+                        {
+                            await Task.Delay(fault.Delay, context.RequestAborted);
+                        }
+
+                        context.Response.StatusCode = (int)fault.StatusCode;
+                        return;
                     }
 
-                    context.Response.StatusCode = (int)fault.StatusCode;
-                    return;
+                    await next(context);
                 }
-
-                await next(context);
-            }
-            finally
-            {
-                recorder.Add(new RequestRecord(
-                    sequence,
-                    recorder.UtcNow,
-                    context.Request.Method,
-                    context.Request.Path,
-                    context.Response.StatusCode,
-                    (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    faultRuleId,
-                    context.User.Identity?.Name));
-            }
-        });
+                finally
+                {
+                    recorder.Add(new RequestRecord(
+                        sequence,
+                        recorder.UtcNow,
+                        context.Request.Method,
+                        context.Request.Path,
+                        context.Response.StatusCode,
+                        (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                        faultRuleId,
+                        context.User.Identity?.Name));
+                }
+            });
+        }
 
         app.UseMiddleware<NuGetAuthenticationMiddleware>();
     }
@@ -287,11 +301,18 @@ public static class ServerApplication
             .WithMetadata(NuGetAccessRequirement.Write);
     }
 
+    private static void MapHealthEndpoint(WebApplication app, ServerMode mode)
+    {
+        app.MapGet("/__test/health", () => Results.Json(new
+        {
+            status = "healthy",
+            mode = mode.ToString().ToLowerInvariant()
+        }))
+            .WithMetadata(NuGetAccessRequirement.Anonymous);
+    }
+
     private static void MapControlEndpoints(WebApplication app)
     {
-        app.MapGet("/__test/health", () => Results.Json(new { status = "healthy" }))
-            .WithMetadata(NuGetAccessRequirement.Anonymous);
-
         app.MapGet(
             "/__test/state",
             async (InMemoryPackageStore packages, FaultRuleStore faults, RequestRecorder requests) =>

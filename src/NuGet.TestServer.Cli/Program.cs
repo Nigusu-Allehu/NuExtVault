@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
@@ -13,7 +14,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0 || !string.Equals(arguments[0], "start", StringComparison.OrdinalIgnoreCase))
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server start [--port <port>] [--data <directory>] [--storage <directory>] [authentication options]");
+        "Usage: nuget-test-server start [--production] [--port <port>] [--data <directory>] [--storage <directory>] [authentication options]");
     return 2;
 }
 
@@ -57,11 +58,26 @@ if (authentication.GeneratedApiKey is not null)
     authentication = authentication with { GeneratedApiKey = null };
 }
 
-var app = ServerApplication.Build(
-    url: $"http://127.0.0.1:{parsedPort}",
-    storageDirectory: storageDirectory,
-    authentication: authentication.Configuration,
-    vulnerabilities: vulnerabilityProvider);
+var mode = arguments.Any(argument =>
+    string.Equals(argument, "--production", StringComparison.OrdinalIgnoreCase))
+    ? ServerMode.Production
+    : ServerMode.Test;
+WebApplication app;
+try
+{
+    app = ServerApplication.Build(
+        url: $"http://127.0.0.1:{parsedPort}",
+        storageDirectory: storageDirectory,
+        authentication: authentication.Configuration,
+        vulnerabilities: vulnerabilityProvider,
+        mode: mode);
+}
+catch (ServerHostingConfigurationException exception)
+{
+    Console.Error.WriteLine(exception.Message);
+    return 2;
+}
+
 await app.StartAsync();
 
 var dataDirectory = ReadOption(arguments, "--data");
@@ -91,7 +107,13 @@ var address = app.Services
     .Addresses.Single()
     ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
 Console.WriteLine($"Source:      {address}/v3/index.json");
-Console.WriteLine($"Control API: {address}/__test");
+Console.WriteLine($"Mode:        {mode}");
+if (mode == ServerMode.Test)
+{
+    Console.WriteLine($"Control API: {address}/__test");
+}
+
+Console.WriteLine($"Health:      {address}/__test/health");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
 Console.WriteLine(
     $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
