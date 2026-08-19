@@ -44,7 +44,9 @@ The CLI selects an available loopback port and prints the endpoints:
 
 ```text
 Source:      http://127.0.0.1:54321/v3/index.json
+Mode:        Test
 Control API: http://127.0.0.1:54321/__test
+Health:      http://127.0.0.1:54321/__test/health
 Storage:     C:\Users\<user>\AppData\Local\nuget-test-server
 Vulnerabilities: 2026-08-18T17:36:11.6736167+00:00 (<snapshot-id>)
 ```
@@ -76,6 +78,33 @@ nuget-test-server start --storage .\.nuget-test-server
 ```
 
 Stop the server with Ctrl+C.
+
+### Use production-safe mode
+
+Production-safe mode removes the test control surface while retaining the NuGet
+protocol endpoints:
+
+```powershell
+$env:NUGET_TEST_SERVER_API_KEY = "<secret>"
+nuget-test-server start --production --api-key-env NUGET_TEST_SERVER_API_KEY
+```
+
+`GET /__test/health` remains available and reports `"mode":"production"`.
+Other `/__test` routes are not mapped, including state and package controls,
+reset, hard deletion, request inspection, and fault injection. Test mode remains
+the default and retains all existing test controls.
+
+Production mode refuses anonymous write configuration. It also refuses cleartext
+HTTP on non-loopback listeners. The CLI always binds to loopback, where HTTP is
+appropriate for a local tool and an API key or Basic credentials protect writes.
+Library hosts may use HTTPS on a non-loopback listener when Kestrel certificates
+are configured separately.
+
+A reverse proxy can expose the loopback listener, but the server cannot verify
+the proxy's public TLS, network policy, forwarded-host handling, or identity
+controls. Operators are responsible for those boundaries. This mode provides
+endpoint reduction and rejects unsafe application defaults; it does not add the
+broader remote identity and transport features tracked separately.
 
 ## Install the CLI as a local .NET tool
 
@@ -359,7 +388,9 @@ the reset request itself is not retained.
 
 ## Use the control API
 
-The `/__test` endpoints are test-only and are never advertised in the NuGet service index.
+The `/__test` control endpoints are test-only and are never advertised in the
+NuGet service index. Production-safe mode maps only `/__test/health`; all
+control endpoints below are absent.
 
 When authentication is configured, the control API uses the same write policy:
 
@@ -452,8 +483,8 @@ The current implementation supports:
 
 - V3 service-index discovery
 - Package Base Address / flat-container downloads
-- Inline registration metadata
-- Package search
+- Registration indexes, pages, and leaf metadata
+- Package search with stable pagination totals and complete listed-version metadata
 - Package push
 - Package unlisting
 - Package seeding and hard deletion through the control API

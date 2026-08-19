@@ -30,5 +30,6 @@ public sealed class ServerLifecycleTests
 
         var health = await server.HttpClient.GetFromJsonAsync<JsonElement>("/__test/health");
         Assert.Equal("healthy", health.GetProperty("status").GetString());
+        Assert.Equal("test", health.GetProperty("mode").GetString());
     }
 }

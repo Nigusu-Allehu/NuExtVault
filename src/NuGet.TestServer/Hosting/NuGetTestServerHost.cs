@@ -92,12 +92,45 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         RuntimeStateConfiguration runtimeState,
         CancellationToken token = default)
     {
+        return await StartAsync(ServerMode.Test, authentication, vulnerabilities, runtimeState, token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        CancellationToken token = default)
+    {
+        return await StartAsync(mode, authentication, EmbeddedVulnerabilitySnapshot.Load(), token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            mode,
+            authentication,
+            vulnerabilities,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        RuntimeStateConfiguration runtimeState,
+        CancellationToken token = default)
+    {
         ArgumentNullException.ThrowIfNull(authentication);
         ArgumentNullException.ThrowIfNull(vulnerabilities);
         ArgumentNullException.ThrowIfNull(runtimeState);
         var application = ServerApplication.Build(
             authentication: authentication,
             vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
+            mode: mode,
             runtimeState: runtimeState);
         try
         {
