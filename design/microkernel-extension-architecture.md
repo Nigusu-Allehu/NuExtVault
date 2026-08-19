@@ -280,27 +280,42 @@ The kernel owns the smallest first-class package model needed to guarantee:
 
 Extensions may request these operations but cannot bypass them.
 
-The kernel owns the normative package state machine:
+The kernel keeps package authority, public visibility, workflow provenance, and
+authorization separate.
 
-```text
-Staged -> Quarantined -> Published <-> Unlisted -> Deleted -> Recovered
-```
+Authoritative package facts include the publication or moderation disposition,
+listing intent, content-integrity trust, deletion, and any safety hold required by
+recovery. These facts change only through kernel transactions. Staging groups,
+scanner progress, approval queues, and organization-specific workflow stages are
+extension-owned metadata and cannot grant public visibility.
 
-`Recovered` re-enters `Quarantined`; recovery never creates trust. Valid transitions
-are exposed as kernel operations rather than direct state writes.
+`Unlisted` is listing intent rather than a publication phase. Recovery is an audited
+transition rather than a trusted durable state: recovered content always receives a
+safety hold and re-enters quarantine.
 
-| State | Content by exact ID/version | Version enumeration | Registration | Search |
-| --- | --- | --- | --- | --- |
-| `Staged` | No | No | No | No |
-| `Quarantined` | No | No | No | No |
-| `Published` | Yes | Yes | Included, `listed: true` | Included |
-| `Unlisted` | Yes | Yes | Included, `listed: false` | Excluded |
-| `Deleted` | No | No | No | No |
-| `Recovered` | No | No | No | No |
+The kernel derives an immutable public-resource grant set from one atomic authority
+snapshot. The initial grant sets are:
 
-The kernel exposes a typed `CanRead(package, resourceClass)` decision. Protocol
-extensions must use it immediately before serialization. They may not infer
-visibility from extension projections.
+| Authority facts | Exact content | Version enumeration | Registration | Search | Symbols |
+| --- | --- | --- | --- | --- | --- |
+| Published, trusted, listed, no safety hold | Yes | Yes | Included, `listed: true` | Included | Yes |
+| Published, trusted, unlisted, no safety hold | Yes | Yes | Included, `listed: false` | Excluded | Yes |
+| Staged, quarantined, rejected, deleted, recovered, untrusted, or held | No | No | No | No | No |
+
+Resource classes have stable typed identifiers. An absent, unknown, or newly added
+resource class is denied until the kernel explicitly includes it in a validated
+grant set. Named sets such as listed, unlisted, or hidden may be used as immutable
+templates or diagnostics, but package authority does not depend on mutable profile
+names. A future visibility pattern may add a validated kernel-owned grant set
+without adding workflow phases to the visibility contract.
+
+The kernel exposes a typed `CanRead(authoritySnapshot, resourceClass)` decision.
+Protocol extensions must use it immediately before serialization. They may not infer
+visibility from workflow metadata or extension projections, and they cannot directly
+edit public grants.
+
+Administrative and raw reads are not public resource classes. They use separately
+authenticated and authorized kernel operations or capabilities.
 
 ### Extension state
 
@@ -1225,8 +1240,8 @@ The migration must avoid a flag-day rewrite.
 1. Inventory the live durable storage, publication, moderation, security, backup,
    embedded-host, and protocol behavior.
 2. Freeze externally observable behavior with characterization tests.
-3. Specify and test the normative package state machine and resource visibility
-   table.
+3. Specify and test the normative package-authority facts, transitions, and
+   public-resource grant table.
 4. Define typed operation IDs and contracts.
 5. Create kernel-facing adapters around current implementation.
 6. Publish no third-party SDK yet and make no compatibility commitment.

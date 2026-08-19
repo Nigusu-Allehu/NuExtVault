@@ -120,19 +120,23 @@ protocol behavior.
 
 **Changes:**
 
-- Introduce internal typed package states and resource classes.
-- Add one authoritative visibility service for exact content, version enumeration,
-  registration, search, symbols, and administrative reads.
+- Introduce internal typed package-authority facts and public resource classes.
+- Add one authoritative visibility service that derives immutable public-resource
+  grants for exact content, version enumeration, registration, search, and symbols.
+- Keep administrative and raw reads on a separate authorized path rather than
+  modeling them as public visibility.
 - Adapt existing stores and supply-chain services to use the contract.
 - Preserve current durable schema unless a migration is demonstrably required.
 
 **Tests first:**
 
-- Full matrix for staged, quarantined, published, unlisted, deleted, and recovered
-  packages.
+- Full matrix for authoritative fact combinations and public resource classes,
+  including unknown values that must fail closed.
 - Unlisted exact-version restore remains possible.
 - Quarantined and deleted packages never leak through public resources.
 - Symbols follow the same publication policy.
+- Independently differing resource classes cannot be pre-filtered through another
+  class's visibility decision.
 
 **Done when:** Protocol code no longer implements visibility rules independently.
 
