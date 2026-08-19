@@ -233,6 +233,55 @@ public sealed class PublishAndControlTests
         Assert.Equal([503, 503, 200], attempts.Select(r => r.StatusCode));
     }
 
+    [Fact]
+    public async Task Control_api_reports_bounded_runtime_state_and_reset_clears_it()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync(
+            new RuntimeStateConfiguration(requestHistoryCapacity: 3, faultRuleCapacity: 2));
+
+        for (var index = 0; index < 5; index++)
+        {
+            using var health = await server.HttpClient.GetAsync("/__test/health");
+            health.EnsureSuccessStatusCode();
+        }
+
+        var requests = await server.HttpClient.GetFromJsonAsync<JsonElement[]>("/__test/requests");
+        Assert.Equal(3, requests!.Length);
+
+        using var firstFault = await AddFaultAsync(server, "first");
+        using var secondFault = await AddFaultAsync(server, "second");
+        using var rejectedFault = await AddFaultAsync(server, "third");
+        Assert.Equal(HttpStatusCode.Created, firstFault.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, secondFault.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, rejectedFault.StatusCode);
+
+        var state = await server.HttpClient.GetFromJsonAsync<JsonElement>("/__test/state");
+        Assert.Equal(3, state.GetProperty("requestCount").GetInt32());
+        Assert.True(state.GetProperty("evictedRequestCount").GetInt64() >= 3);
+        Assert.Equal(3, state.GetProperty("requestCapacity").GetInt32());
+        Assert.Equal(2, state.GetProperty("faultCount").GetInt32());
+        Assert.Equal(2, state.GetProperty("faultCapacity").GetInt32());
+
+        using var reset = await server.HttpClient.PostAsync("/__test/reset", null);
+        reset.EnsureSuccessStatusCode();
+
+        state = await server.HttpClient.GetFromJsonAsync<JsonElement>("/__test/state");
+        Assert.Equal(0, state.GetProperty("requestCount").GetInt32());
+        Assert.Equal(0, state.GetProperty("evictedRequestCount").GetInt64());
+        Assert.Equal(0, state.GetProperty("faultCount").GetInt32());
+    }
+
+    private static Task<HttpResponseMessage> AddFaultAsync(
+        NuGetTestServerHost server,
+        string id) =>
+        server.HttpClient.PostAsJsonAsync("/__test/faults", new FaultRule(
+            Id: id,
+            Method: "GET",
+            PathContains: "/flatcontainer/",
+            StatusCode: HttpStatusCode.ServiceUnavailable,
+            RemainingMatches: 1,
+            Delay: TimeSpan.Zero));
+
     private static PackageTransferLimits CreateLimits() => new()
     {
         MaxRequestBodyBytes = 1024 * 1024,

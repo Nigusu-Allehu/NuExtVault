@@ -43,6 +43,19 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
+        RuntimeStateConfiguration runtimeState,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(runtimeState);
+        return await StartAsync(
+            AuthenticationConfiguration.Anonymous,
+            EmbeddedVulnerabilitySnapshot.Load(),
+            PackageTransferLimits.Default,
+            runtimeState,
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
         AuthenticationConfiguration authentication,
         CancellationToken token = default)
     {
@@ -50,6 +63,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             authentication,
             EmbeddedVulnerabilitySnapshot.Load(),
             PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
             token);
     }
 
@@ -61,6 +75,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             AuthenticationConfiguration.Anonymous,
             EmbeddedVulnerabilitySnapshot.Load(),
             packageLimits,
+            new RuntimeStateConfiguration(),
             token);
     }
 
@@ -72,6 +87,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             AuthenticationConfiguration.Anonymous,
             vulnerabilities,
             PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
             token);
     }
 
@@ -84,6 +100,23 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
             authentication,
             vulnerabilities,
             PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
+        RuntimeStateConfiguration runtimeState,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            ServerMode.Test,
+            authentication,
+            vulnerabilities,
+            packageLimits,
+            runtimeState,
             token);
     }
 
@@ -93,12 +126,55 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         PackageTransferLimits packageLimits,
         CancellationToken token = default)
     {
+        return await StartAsync(
+            ServerMode.Test,
+            authentication,
+            vulnerabilities,
+            packageLimits,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        CancellationToken token = default)
+    {
+        return await StartAsync(mode, authentication, EmbeddedVulnerabilitySnapshot.Load(), token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        CancellationToken token = default)
+    {
+        return await StartAsync(
+            mode,
+            authentication,
+            vulnerabilities,
+            PackageTransferLimits.Default,
+            new RuntimeStateConfiguration(),
+            token);
+    }
+
+    public static async Task<NuGetTestServerHost> StartAsync(
+        ServerMode mode,
+        AuthenticationConfiguration authentication,
+        VulnerabilitySnapshot vulnerabilities,
+        PackageTransferLimits packageLimits,
+        RuntimeStateConfiguration runtimeState,
+        CancellationToken token = default)
+    {
         ArgumentNullException.ThrowIfNull(authentication);
         ArgumentNullException.ThrowIfNull(vulnerabilities);
         ArgumentNullException.ThrowIfNull(packageLimits);
+        ArgumentNullException.ThrowIfNull(runtimeState);
         var application = ServerApplication.Build(
             authentication: authentication,
             vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
+            mode: mode,
+            runtimeState: runtimeState,
             packageLimits: packageLimits);
         try
         {

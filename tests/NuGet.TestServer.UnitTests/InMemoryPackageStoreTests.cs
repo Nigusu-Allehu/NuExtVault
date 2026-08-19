@@ -33,18 +33,51 @@ public sealed class InMemoryPackageStoreTests
     }
 
     [Fact]
-    public async Task Search_returns_only_the_latest_allowed_listed_version()
+    public async Task Search_returns_all_applicable_versions_and_total_before_pagination()
     {
         var store = new InMemoryPackageStore();
         await store.AddAsync(TestPackageBuilder.Create("Example.Logging", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Example.Logging", "1.5.0").Build());
         await store.AddAsync(TestPackageBuilder.Create("Example.Logging", "2.0.0-beta.1").Build());
-        await store.AddAsync(TestPackageBuilder.Create("Other", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Example.Tracing", "1.0.0").WithTags("logging").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Other", "1.0.0").WithDescription("LOGGING").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Unlisted.Logging", "1.0.0").Build());
+        await store.SetListedAsync("Unlisted.Logging", "1.0.0", false);
 
-        var stable = await store.SearchAsync("logging", includePrerelease: false, skip: 0, take: 20);
+        var stable = await store.SearchAsync("LoGgInG", includePrerelease: false, skip: 1, take: 1);
         var prerelease = await store.SearchAsync("logging", includePrerelease: true, skip: 0, take: 20);
 
-        Assert.Equal("1.0.0", Assert.Single(stable).NormalizedVersion);
-        Assert.Equal("2.0.0-beta.1", Assert.Single(prerelease).NormalizedVersion);
+        Assert.Equal(3, stable.TotalHits);
+        var stableResult = Assert.Single(stable.Items);
+        Assert.Equal("Example.Tracing", stableResult.Package.Identity.Id);
+        Assert.Equal(["1.0.0"], stableResult.Versions.Select(package => package.NormalizedVersion));
+
+        Assert.Equal(3, prerelease.TotalHits);
+        Assert.Equal(
+            ["Example.Logging", "Example.Tracing", "Other"],
+            prerelease.Items.Select(result => result.Package.Identity.Id));
+        var logging = prerelease.Items[0];
+        Assert.Equal("2.0.0-beta.1", logging.Package.NormalizedVersion);
+        Assert.Equal(
+            ["1.0.0", "1.5.0", "2.0.0-beta.1"],
+            logging.Versions.Select(package => package.NormalizedVersion));
+    }
+
+    [Fact]
+    public async Task Empty_search_has_deterministic_case_insensitive_ordering_and_offsets()
+    {
+        var store = new InMemoryPackageStore();
+        await store.AddAsync(TestPackageBuilder.Create("zulu", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("Alpha", "1.0.0").Build());
+        await store.AddAsync(TestPackageBuilder.Create("bravo", "1.0.0").Build());
+
+        var firstPage = await store.SearchAsync(string.Empty, includePrerelease: false, skip: 0, take: 2);
+        var secondPage = await store.SearchAsync(string.Empty, includePrerelease: false, skip: 2, take: 2);
+
+        Assert.Equal(3, firstPage.TotalHits);
+        Assert.Equal(["Alpha", "bravo"], firstPage.Items.Select(result => result.Package.Identity.Id));
+        Assert.Equal(3, secondPage.TotalHits);
+        Assert.Equal(["zulu"], secondPage.Items.Select(result => result.Package.Identity.Id));
     }
 
     [Fact]
