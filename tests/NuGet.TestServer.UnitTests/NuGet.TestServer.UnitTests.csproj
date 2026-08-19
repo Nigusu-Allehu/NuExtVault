@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\NuGet.TestServer\NuGet.TestServer.csproj" />
   </ItemGroup>
 
