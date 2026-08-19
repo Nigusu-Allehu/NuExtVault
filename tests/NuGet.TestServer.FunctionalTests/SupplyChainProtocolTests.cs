@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 
@@ -6,6 +7,95 @@ namespace NuGet.TestServer.FunctionalTests;
 
 public sealed class SupplyChainProtocolTests
 {
+    [Fact]
+    public async Task Public_resources_apply_visibility_immediately_and_keep_admin_reads_separate()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        var package = TestPackageBuilder.Create("Visibility.Protocol", "1.0.0")
+            .WithDescription("authoritative visibility metadata")
+            .WithPackageType("DotnetTool", "1.0.0")
+            .Build();
+        var symbols = TestPackageBuilder.Create("Visibility.Protocol", "1.0.0")
+            .WithFile("lib/net10.0/Visibility.Protocol.pdb", [1, 2, 3, 4])
+            .Build();
+        await server.Packages.AddAsync(package);
+        using var symbolPush = await server.HttpClient.PutAsync(
+            "/symbolpackage",
+            new ByteArrayContent(symbols.Content));
+        Assert.Equal(HttpStatusCode.Created, symbolPush.StatusCode);
+
+        using var unlist = await server.HttpClient.PostAsync(
+            "/__test/packages/Visibility.Protocol/1.0.0/unlist",
+            null);
+        using var exact = await server.HttpClient.GetAsync(
+            "/flatcontainer/visibility.protocol/1.0.0/visibility.protocol.1.0.0.nupkg");
+        using var versions = await server.HttpClient.GetAsync(
+            "/flatcontainer/visibility.protocol/index.json");
+        using var registrationResponse = await server.HttpClient.GetAsync(
+            "/registration/visibility.protocol/index.json");
+        using var registration = JsonDocument.Parse(
+            await registrationResponse.Content.ReadAsStreamAsync());
+        using var searchResponse = await server.HttpClient.GetAsync(
+            "/query?q=Visibility.Protocol&packageType=DotnetTool");
+        using var search = JsonDocument.Parse(await searchResponse.Content.ReadAsStreamAsync());
+
+        Assert.Equal(HttpStatusCode.NoContent, unlist.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, exact.StatusCode);
+        Assert.Contains("1.0.0", await versions.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.False(registration.RootElement
+            .GetProperty("items")[0]
+            .GetProperty("items")[0]
+            .GetProperty("catalogEntry")
+            .GetProperty("listed")
+            .GetBoolean());
+        Assert.Equal(
+            "authoritative visibility metadata",
+            registration.RootElement
+                .GetProperty("items")[0]
+                .GetProperty("items")[0]
+                .GetProperty("catalogEntry")
+                .GetProperty("description")
+                .GetString());
+        Assert.Equal(0, search.RootElement.GetProperty("totalHits").GetInt32());
+        Assert.Equal(symbols.Content, await server.Packages.FindSymbolAsync(
+            "Visibility.Protocol",
+            "1.0.0"));
+
+        using var quarantine = await server.HttpClient.PostAsync(
+            "/__admin/packages/Visibility.Protocol/1.0.0/quarantine?reason=investigation",
+            null);
+        using var hiddenExact = await server.HttpClient.GetAsync(
+            "/flatcontainer/visibility.protocol/1.0.0/visibility.protocol.1.0.0.nupkg");
+        using var hiddenVersions = await server.HttpClient.GetAsync(
+            "/flatcontainer/visibility.protocol/index.json");
+        using var hiddenRegistration = await server.HttpClient.GetAsync(
+            "/registration/visibility.protocol/index.json");
+        using var hiddenSearchResponse = await server.HttpClient.GetAsync(
+            "/query?q=Visibility.Protocol");
+        using var hiddenSearch = JsonDocument.Parse(
+            await hiddenSearchResponse.Content.ReadAsStreamAsync());
+
+        Assert.Equal(HttpStatusCode.NoContent, quarantine.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, hiddenExact.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, hiddenVersions.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, hiddenRegistration.StatusCode);
+        Assert.Equal(0, hiddenSearch.RootElement.GetProperty("totalHits").GetInt32());
+        Assert.Null(await server.Packages.FindSymbolAsync("Visibility.Protocol", "1.0.0"));
+
+        using var approve = await server.HttpClient.PostAsync(
+            "/__admin/packages/Visibility.Protocol/1.0.0/approve?reason=validated",
+            null);
+        using var delete = await server.HttpClient.PostAsync(
+            "/__admin/packages/Visibility.Protocol/1.0.0/delete?reason=retired",
+            null);
+        using var deletedExact = await server.HttpClient.GetAsync(
+            "/flatcontainer/visibility.protocol/1.0.0/visibility.protocol.1.0.0.nupkg");
+
+        Assert.Equal(HttpStatusCode.NoContent, approve.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, deletedExact.StatusCode);
+    }
+
     [Fact]
     public async Task Malicious_unsigned_quarantined_and_over_quota_packages_are_not_restorable()
     {

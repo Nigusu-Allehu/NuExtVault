@@ -575,6 +575,9 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
 
             var hash = ComputeHashAsync(package, CancellationToken.None)
                 .AsTask().GetAwaiter().GetResult();
+            var persistedState = trustAsLegacy
+                ? PackageModerationState.Published
+                : PackageModerationState.Quarantined;
             using var transaction = _connection.BeginTransaction();
             Execute(
                 transaction,
@@ -585,9 +588,7 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
                 """,
                 ("$id", package.Identity.Id),
                 ("$version", package.NormalizedVersion),
-                ("$state", (trustAsLegacy
-                    ? PackageModerationState.Published
-                    : PackageModerationState.Quarantined).ToString()),
+                ("$state", persistedState.ToString()),
                 ("$repository", trustAsLegacy ? "legacy" : "recovered"),
                 ("$hash", Convert.ToHexString(hash)),
                 ("$length", package.ContentLength));
@@ -605,9 +606,7 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
             if (!_inner.SetModerationStateAsync(
                     package.Identity.Id,
                     package.NormalizedVersion,
-                    trustAsLegacy
-                        ? PackageModerationState.Published
-                        : PackageModerationState.Quarantined)
+                    persistedState)
                 .AsTask().GetAwaiter().GetResult())
             {
                 throw new PackageStorageCorruptionException(

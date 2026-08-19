@@ -5,8 +5,9 @@ using NuGet.Versioning;
 
 namespace NuGet.TestServer.Packages;
 
-public sealed class InMemoryPackageStore : IPackageStore
+public sealed class InMemoryPackageStore : IPackageStore, IPackageCandidateStore
 {
+    private static readonly PackageVisibilityPolicy Visibility = PackageVisibilityPolicy.Instance;
     private readonly ConcurrentDictionary<string, TestPackage> _packages =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte[]> _symbols =
@@ -87,7 +88,10 @@ public sealed class InMemoryPackageStore : IPackageStore
         token.ThrowIfCancellationRequested();
         var package = _packages.GetValueOrDefault(Key(id, Normalize(version)));
         return ValueTask.FromResult(
-            package?.ModerationState == PackageModerationState.Published ? package : null);
+            package is not null &&
+            Visibility.CanRead(package, PackageResourceClass.ExactContent)
+                ? package
+                : null);
     }
 
     public ValueTask<TestPackage?> FindStoredAsync(
@@ -105,8 +109,9 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        if (_packages.GetValueOrDefault(Key(id, Normalize(version)))?.ModerationState !=
-            PackageModerationState.Published)
+        var package = _packages.GetValueOrDefault(Key(id, Normalize(version)));
+        if (package is null ||
+            !Visibility.CanRead(package, PackageResourceClass.Symbols))
         {
             return ValueTask.FromResult<byte[]?>(null);
         }
@@ -156,19 +161,29 @@ public sealed class InMemoryPackageStore : IPackageStore
         CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
-        IReadOnlyList<TestPackage> result = _packages.Values
-            .Where(package => string.Equals(package.Identity.Id, id, StringComparison.OrdinalIgnoreCase))
-            .Where(package => package.ModerationState == PackageModerationState.Published)
-            .OrderBy(package => package.Identity.Version)
+        IReadOnlyList<TestPackage> result = FindStoredById(id)
+            .Where(package => Visibility.CanRead(
+                package,
+                PackageResourceClass.VersionEnumeration))
             .ToArray();
         return ValueTask.FromResult(result);
+    }
+
+    ValueTask<IReadOnlyList<TestPackage>> IPackageCandidateStore.FindStoredByIdAsync(
+        string id,
+        CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult<IReadOnlyList<TestPackage>>(FindStoredById(id));
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> GetAllAsync(CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         IReadOnlyList<TestPackage> result = _packages.Values
-            .Where(package => package.ModerationState == PackageModerationState.Published)
+            .Where(package => Visibility.CanRead(
+                package,
+                PackageResourceClass.VersionEnumeration))
             .OrderBy(package => package.Identity.Id, StringComparer.OrdinalIgnoreCase)
             .ThenBy(package => package.Identity.Version)
             .ToArray();
@@ -200,8 +215,7 @@ public sealed class InMemoryPackageStore : IPackageStore
         skip = Math.Max(skip, 0);
 
         var applicablePackages = _packages.Values
-            .Where(package => package.ModerationState == PackageModerationState.Published)
-            .Where(package => package.IsListed)
+            .Where(package => Visibility.CanRead(package, PackageResourceClass.Search))
             .Where(package => includePrerelease || !package.Identity.Version.IsPrerelease)
             .Where(package =>
                 string.IsNullOrWhiteSpace(packageType) ||
@@ -410,6 +424,15 @@ public sealed class InMemoryPackageStore : IPackageStore
 
     private static string Key(string id, string version) =>
         $"{id.ToLowerInvariant()}\n{version.ToLowerInvariant()}";
+
+    private TestPackage[] FindStoredById(string id) =>
+        _packages.Values
+            .Where(package => string.Equals(
+                package.Identity.Id,
+                id,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(package => package.Identity.Version)
+            .ToArray();
 
     internal static TestPackage ParseSymbolPackage(byte[] content)
     {
