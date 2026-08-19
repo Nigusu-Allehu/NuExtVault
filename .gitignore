@@ -13,6 +13,7 @@ coverage.*
 .tools/
 .nuget-test-server/
 server-data/
+.design/
 
 # IDE and user settings
 .vs/
