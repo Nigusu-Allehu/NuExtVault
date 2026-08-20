@@ -9,10 +9,44 @@ internal sealed record GetServiceIndexResponse(
     ImmutableArray<ServiceResourceDescriptor> Resources);
 
 internal sealed record ServiceResourceDescriptor(
+    string Url,
+    string ResourceType,
+    string? Comment);
+
+internal sealed record ServiceResourceContribution(
     string ResourceType,
     string Version,
     OperationId OperationId,
-    string RouteName);
+    string RouteName,
+    ServiceResourceVisibility Visibility,
+    ServiceResourceAccess RequiredAccess,
+    ImmutableArray<string> ProducesUrlsFor,
+    ImmutableArray<string> RequiresResourceTypes,
+    string? Comment,
+    int Order,
+    ServiceResourceReadiness Readiness)
+{
+    public string AdvertisedType => $"{ResourceType}/{Version}";
+}
+
+internal enum ServiceResourceVisibility
+{
+    Advertised,
+    Hidden
+}
+
+internal enum ServiceResourceAccess
+{
+    Read,
+    Write,
+    PackagePublish
+}
+
+internal enum ServiceResourceReadiness
+{
+    NotReady,
+    Ready
+}
 
 internal sealed record GetPackageVersionsRequest(string PackageId);
 

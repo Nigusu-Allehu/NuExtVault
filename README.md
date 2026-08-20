@@ -509,7 +509,25 @@ that are not granted are omitted and reported in startup diagnostics. Privileged
 calls are scoped and audited by host instance, operation owner, and operation ID;
 embedded hosts deny outbound HTTP, secret references, and sidecars, while production
 profiles deny test instrumentation. This is an internal migration boundary and does
-not change the public hosting API, NuGet routes, or operation ownership.
+not change the public hosting API or NuGet routes.
+
+### Internal service-index composition
+
+`NuGet.ServiceIndex.Get` is owned by the internal official service-index feature.
+Selected built-in resource owners contribute typed discovery metadata: resource type
+and version, owning operation and route, access and readiness requirements, linked
+resource requirements, URL-production links, stable comments, and projection order.
+The kernel validates those contributions before listening and rejects ownership,
+version, route, link, access, or readiness conflicts.
+
+Resource owners never receive `HttpContext` and cannot mutate service-index JSON.
+The kernel generates absolute URLs from the validated request origin after transport
+security and trusted-proxy handling, projects only the supported typed fields, and
+preserves the existing resource order and compatibility aliases. Adding another
+internal resource consists of registering its typed contribution with its owner; the
+service-index operation itself does not change. Flat-container, registration, search,
+publication, symbol publication, and vulnerability implementations remain in their
+existing owners.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:

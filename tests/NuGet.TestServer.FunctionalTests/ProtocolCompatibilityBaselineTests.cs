@@ -7,6 +7,7 @@ using System.Text.Json;
 using NuGet.Common;
 using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
+using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
@@ -37,6 +38,31 @@ public sealed class ProtocolCompatibilityBaselineTests
             {"version":"3.0.0","resources":[{"@id":"<ROOT>/flatcontainer/","@type":"PackageBaseAddress/3.0.0"},{"@id":"<ROOT>/registration/","@type":"RegistrationsBaseUrl/3.6.0"},{"@id":"<ROOT>/query","@type":"SearchQueryService/3.0.0-beta"},{"@id":"<ROOT>/query","@type":"SearchQueryService/3.5.0"},{"@id":"<ROOT>/package","@type":"PackagePublish/2.0.0"},{"@id":"<ROOT>/symbolpackage","@type":"SymbolPackagePublish/4.9.0"},{"@id":"<ROOT>/v3/vulnerabilities/index.json","@type":"VulnerabilityInfo/6.7.0"}]}
             """,
             normalized);
+    }
+
+    [Fact]
+    public async Task Service_index_urls_use_the_trusted_proxy_scheme_and_forwarded_host()
+    {
+        var security = ProductionSecurityConfiguration.Create(
+        [
+            new("reader", ["reader-key"], [SecurityScope.Read], ["*"])
+        ]);
+        await using var server = await NuGetTestServerHost.StartProductionAsync(security);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/v3/index.json");
+        request.Headers.Host = "packages.example.test";
+        request.Headers.Add("X-Forwarded-Proto", "https");
+        request.Headers.Add("X-NuGet-ApiKey", "reader-key");
+
+        using var response = await server.HttpClient.SendAsync(request);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.All(
+            document.RootElement.GetProperty("resources").EnumerateArray(),
+            resource => Assert.StartsWith(
+                "https://packages.example.test/",
+                resource.GetProperty("@id").GetString(),
+                StringComparison.Ordinal));
     }
 
     [Fact]

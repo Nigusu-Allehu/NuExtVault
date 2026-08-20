@@ -15,10 +15,12 @@ internal static class BuiltInOperationOwners
     public static OperationRegistry CreateRegistry(
         CapabilityBroker broker,
         ResolvedExtensionGraph graph,
+        ServiceIndexResourceRegistry resources,
         PackageTransferLimits limits)
     {
         ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(graph);
+        ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(limits);
         var builder = new OperationRegistryBuilder();
         var selected = graph.Extensions
@@ -36,6 +38,11 @@ internal static class BuiltInOperationOwners
                 packages,
                 capabilities.GetRequired<IVulnerabilityReadCapability>(
                     BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
+        }
+
+        if (selected.Contains(BuiltInExtensionIds.ServiceIndex))
+        {
+            new ServiceIndexOperations(resources).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.Publication))
