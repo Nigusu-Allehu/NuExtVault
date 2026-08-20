@@ -4,6 +4,7 @@ using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
@@ -147,10 +148,39 @@ public static class ServerApplication
         builder.Services.AddSingleton<RequestRecorder>();
         builder.Services.AddSingleton(
             composition.Vulnerabilities);
-        builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
-            provider,
+        builder.Services.AddSingleton(_ => new HttpClient(
+            new HttpClientHandler { AllowAutoRedirect = false })
+        {
+            Timeout = TimeSpan.FromSeconds(30)
+        });
+        builder.Services.AddSingleton<CapabilityAuditLog>();
+        builder.Services.AddSingleton(new CapabilityLimits(
+            MaximumConcurrentCalls: 64,
+            MaximumStreamBytes: Math.Max(
+                packageLimits.MaxRequestBodyBytes,
+                packageLimits.MaxPackageBytes)));
+        builder.Services.AddSingleton(provider => new CapabilityBroker(
+            composition.InstanceId,
             composition.ExtensionGraph,
-            composition));
+            provider.GetRequiredService<CapabilityAuditLog>(),
+            provider.GetRequiredService<CapabilityLimits>(),
+            new CapabilityServices(
+                provider.GetRequiredService<IPackageStore>(),
+                provider.GetRequiredService<IPackageCandidateStore>(),
+                provider.GetRequiredService<PackageVisibilityPolicy>(),
+                provider.GetRequiredService<PackageSupplyChainService>(),
+                provider.GetRequiredService<FaultRuleStore>(),
+                provider.GetRequiredService<RequestRecorder>(),
+                provider.GetRequiredService<StorageHealth>(),
+                provider.GetRequiredService<ServerDiagnostics>(),
+                composition.Hosting,
+                composition.StorageDirectory,
+                composition.Vulnerabilities,
+                provider.GetRequiredService<HttpClient>())));
+        builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
+            provider.GetRequiredService<CapabilityBroker>(),
+            composition.ExtensionGraph,
+            packageLimits));
         builder.Services.AddSingleton(provider => new OperationDispatcher(
             provider.GetRequiredService<OperationRegistry>(),
             provider.GetRequiredService<ServerDiagnostics>()));

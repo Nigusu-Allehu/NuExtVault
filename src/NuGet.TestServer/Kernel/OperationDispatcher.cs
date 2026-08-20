@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 
@@ -53,6 +54,7 @@ internal sealed class OperationDispatcher(
         activity?.SetTag("nuget.operation.id", operationId.Value);
         activity?.SetTag("nuget.operation.owner", registration.ExtensionId);
         var started = Stopwatch.GetTimestamp();
+        using var attribution = CapabilityOperationAttribution.Enter(operationId.Value);
         try
         {
             var result = (OperationResponse<TResponse>)await registration.Invoke(

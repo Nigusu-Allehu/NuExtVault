@@ -1,6 +1,7 @@
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
@@ -12,11 +13,11 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// Test-control owners. They wrap the existing package, fault, and request stores.
 /// </summary>
 internal sealed class ControlOperations(
-    IPackageStore store,
-    PackageSupplyChainService supplyChain,
-    FaultRuleStore faults,
-    RequestRecorder requests,
-    ServerDiagnostics diagnostics,
+    IPackageReadCapability packages,
+    IPackageMutationCapability mutations,
+    IPublicationCapability publication,
+    IControlInstrumentationCapability instrumentation,
+    ITypedEventPublisher events,
     PackageTransferLimits limits)
 {
     public void Register(OperationRegistryBuilder builder)
@@ -102,14 +103,16 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var packages = await store.GetAllAsync(token);
+        var storedPackages = await packages.GetAllAsync(token);
+        var faults = await instrumentation.GetFaultsAsync(token);
+        var requests = await instrumentation.GetRequestsAsync(token);
         var response = new GetControlStateResponse(
-            packages.Count,
-            faults.GetAll().Count,
-            faults.Capacity,
-            requests.GetAll().Count,
-            requests.Capacity,
-            requests.EvictedCount);
+            storedPackages.Count,
+            faults.Count,
+            instrumentation.FaultCapacity,
+            requests.Count,
+            instrumentation.RequestCapacity,
+            instrumentation.EvictedRequestCount);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new
@@ -129,9 +132,9 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await supplyChain.ResetAsync(token);
-        faults.Reset();
-        requests.Reset();
+        await publication.ResetAsync(token);
+        await instrumentation.ClearFaultsAsync(token);
+        await instrumentation.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ResetControlStateResponse>.Success(new ResetControlStateResponse());
     }
@@ -142,7 +145,7 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var response = new GetControlPackagesResponse(
-            [.. (await store.GetAllAsync(token)).Select(CreateSummary)]);
+            [.. (await packages.GetAllAsync(token)).Select(CreateSummary)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(response.Packages.Select(RenderSummary).ToArray())));
@@ -162,8 +165,8 @@ internal sealed class ControlOperations(
                 content.Stream ?? new MemoryStream(content.Bytes!.Value.ToArray(), writable: false),
                 limits,
                 cancellationToken: token);
-            await supplyChain.AddAsync(package, token);
-            diagnostics.RecordPackagePublished();
+            await publication.AddAsync(package, token);
+            await events.PublishAsync(KernelEventKind.PackagePublished, token);
             var summary = CreateSummary(package);
             package = null;
             context.Complete(new OperationHttpResult(
@@ -185,7 +188,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await store.DeleteAsync(request.Package.Id, request.Package.Version, token))
+        if (!await mutations.DeleteAsync(request.Package.Id, request.Package.Version, token))
         {
             return OperationResponse<DeleteControlPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -200,7 +203,11 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await store.SetListedAsync(request.Package.Id, request.Package.Version, true, token))
+        if (!await mutations.SetListedAsync(
+                request.Package.Id,
+                request.Package.Version,
+                true,
+                token))
         {
             return OperationResponse<RelistControlPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -215,7 +222,11 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await store.SetListedAsync(request.Package.Id, request.Package.Version, false, token))
+        if (!await mutations.SetListedAsync(
+                request.Package.Id,
+                request.Package.Version,
+                false,
+                token))
         {
             return OperationResponse<UnlistControlPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -249,7 +260,7 @@ internal sealed class ControlOperations(
                         ? new AlternatePackage(alternate.Id, alternate.Range)
                         : null)
                 : null);
-        if (!await store.SetRepositoryMetadataAsync(
+        if (!await mutations.SetRepositoryMetadataAsync(
                 request.Package.Id,
                 request.Package.Version,
                 metadata,
@@ -263,13 +274,12 @@ internal sealed class ControlOperations(
             new UpdatePackageMetadataResponse(request.Package));
     }
 
-    private ValueTask<OperationResponse<GetRequestsResponse>> GetRequestsAsync(
+    private async ValueTask<OperationResponse<GetRequestsResponse>> GetRequestsAsync(
         GetRequestsRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        var records = requests.GetAll();
+        var records = await instrumentation.GetRequestsAsync(token);
         var response = new GetRequestsResponse(
             [
                 .. records.Select(record => new RequestRecordDocument(
@@ -285,72 +295,61 @@ internal sealed class ControlOperations(
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(records)));
-        return ValueTask.FromResult(OperationResponse<GetRequestsResponse>.Success(response));
+        return OperationResponse<GetRequestsResponse>.Success(response);
     }
 
-    private ValueTask<OperationResponse<ClearRequestsResponse>> ClearRequestsAsync(
+    private async ValueTask<OperationResponse<ClearRequestsResponse>> ClearRequestsAsync(
         ClearRequestsRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        requests.Reset();
+        await instrumentation.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
-        return ValueTask.FromResult(
-            OperationResponse<ClearRequestsResponse>.Success(new ClearRequestsResponse()));
+        return OperationResponse<ClearRequestsResponse>.Success(new ClearRequestsResponse());
     }
 
-    private ValueTask<OperationResponse<GetFaultsResponse>> GetFaultsAsync(
+    private async ValueTask<OperationResponse<GetFaultsResponse>> GetFaultsAsync(
         GetFaultsRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        var rules = faults.GetAll();
+        var rules = await instrumentation.GetFaultsAsync(token);
         var response = new GetFaultsResponse([.. rules.Select(CreateFaultDocument)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(rules)));
-        return ValueTask.FromResult(OperationResponse<GetFaultsResponse>.Success(response));
+        return OperationResponse<GetFaultsResponse>.Success(response);
     }
 
-    private ValueTask<OperationResponse<AddFaultResponse>> AddFaultAsync(
+    private async ValueTask<OperationResponse<AddFaultResponse>> AddFaultAsync(
         AddFaultRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
         var rule = CreateFaultRule(request.Fault);
-        try
+        var conflict = await instrumentation.TryAddFaultAsync(rule, token);
+        if (conflict is not null)
         {
-            faults.Add(rule);
-        }
-        catch (FaultRuleStore.FaultRuleConflictException exception)
-        {
-            return ValueTask.FromResult(
-                OperationResponse<AddFaultResponse>.Failure(
-                    OperationErrorPolicy.Conflict(exception.Message)));
+            return OperationResponse<AddFaultResponse>.Failure(
+                OperationErrorPolicy.Conflict(conflict));
         }
 
         context.Complete(new OperationHttpResult(
             StatusCodes.Status201Created,
             new JsonResponseBody(rule),
             $"/__test/faults/{Uri.EscapeDataString(rule.Id)}"));
-        return ValueTask.FromResult(
-            OperationResponse<AddFaultResponse>.Success(
-                new AddFaultResponse(CreateFaultDocument(rule))));
+        return OperationResponse<AddFaultResponse>.Success(
+            new AddFaultResponse(CreateFaultDocument(rule)));
     }
 
-    private ValueTask<OperationResponse<ClearFaultsResponse>> ClearFaultsAsync(
+    private async ValueTask<OperationResponse<ClearFaultsResponse>> ClearFaultsAsync(
         ClearFaultsRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        faults.Reset();
+        await instrumentation.ClearFaultsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
-        return ValueTask.FromResult(
-            OperationResponse<ClearFaultsResponse>.Success(new ClearFaultsResponse()));
+        return OperationResponse<ClearFaultsResponse>.Success(new ClearFaultsResponse());
     }
 
     internal static FaultRuleDocument CreateFaultDocument(FaultRule rule) =>
@@ -370,6 +369,12 @@ internal sealed class ControlOperations(
             (System.Net.HttpStatusCode)document.StatusCode,
             document.RemainingMatches ?? 0,
             TimeSpan.FromMilliseconds(document.DelayMilliseconds));
+
+    private static PackageSummaryDocument CreateSummary(CapabilityPackageMetadata package) =>
+        new(
+            new PackageIdentity(package.Id, package.NormalizedVersion),
+            package.IsListed,
+            package.Published);
 
     private static PackageSummaryDocument CreateSummary(TestPackage package) =>
         new(

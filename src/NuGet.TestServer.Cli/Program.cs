@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
 using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Storage;
@@ -231,14 +232,13 @@ Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
 Console.WriteLine(
     $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
 
-using var refreshClient = new HttpClient
-{
-    Timeout = TimeSpan.FromSeconds(30)
-};
+var outboundHttp = app.Services.GetRequiredService<CapabilityBroker>()
+    .ForOwner(BuiltInExtensionIds.VulnerabilityRefresh)
+    .GetRequired<IOutboundHttpCapability>(BuiltInCapabilityNames.OutboundHttp);
 var refresher = new VulnerabilitySnapshotRefresher(
     vulnerabilityProvider,
     vulnerabilityCache,
-    refreshClient,
+    outboundHttp,
     new Uri("https://api.nuget.org/v3/vulnerabilities/index.json"));
 var refreshTask =
     DateTimeOffset.UtcNow - vulnerabilityProvider.Active.FetchedAt > TimeSpan.FromHours(6)

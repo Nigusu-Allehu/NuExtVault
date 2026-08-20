@@ -495,6 +495,22 @@ Programmatic servers created with `NuGetTestServerHost.StartAsync()` always use
 the embedded snapshot and never refresh from the network, preserving
 deterministic test behavior.
 
+### Internal capability broker
+
+Each server host creates its own internal capability broker. Built-in operation
+owners receive only the actions declared by their resolved profile, such as bounded
+package-content reads, publication mutations, moderation decisions, backup
+invocation, or test-instrumentation configuration. They do not receive the root
+service provider, database connections, storage-root paths, unrestricted network
+access, or raw secrets.
+
+Required capabilities are validated before the server listens. Optional capabilities
+that are not granted are omitted and reported in startup diagnostics. Privileged
+calls are scoped and audited by host instance, operation owner, and operation ID;
+embedded hosts deny outbound HTTP, secret references, and sidecars, while production
+profiles deny test instrumentation. This is an internal migration boundary and does
+not change the public hosting API, NuGet routes, or operation ownership.
+
 To select the local source explicitly for restore auditing, add it as an audit
 source:
 

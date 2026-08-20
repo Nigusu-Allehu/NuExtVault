@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
 
@@ -11,10 +12,8 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// and then rendered into the current protocol shape.
 /// </summary>
 internal sealed class RegistrationSearchOperations(
-    IPackageStore store,
-    IPackageCandidateStore candidates,
-    PackageVisibilityPolicy visibility,
-    VulnerabilitySnapshotProvider vulnerabilities)
+    IPackageReadCapability packages,
+    IVulnerabilityReadCapability vulnerabilities)
 {
     public void Register(OperationRegistryBuilder builder)
     {
@@ -54,7 +53,7 @@ internal sealed class RegistrationSearchOperations(
                     $"Package '{request.PackageId}' has no registration."));
         }
 
-        var normalizedId = packages[0].Identity.Id.ToLowerInvariant();
+        var normalizedId = packages[0].Id.ToLowerInvariant();
         var response = new GetRegistrationIndexResponse(
             $"{request.BaseAddress}/registration/{normalizedId}/index.json",
             1,
@@ -76,7 +75,7 @@ internal sealed class RegistrationSearchOperations(
         CancellationToken token)
     {
         var packages = await FindRegistrationCandidatesAsync(request.PackageId, token);
-        if (!RegistrationPageBounds.Matches(packages, request.Lower, request.Upper))
+        if (!MatchesBounds(packages, request.Lower, request.Upper))
         {
             return OperationResponse<GetRegistrationPageResponse>.Failure(
                 OperationErrorPolicy.NotFound(
@@ -95,11 +94,12 @@ internal sealed class RegistrationSearchOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var package = await store.FindStoredAsync(
+        var package = await packages.FindReadableAsync(
             request.Package.Id,
             request.Package.Version,
+            PackageResourceClass.Registration,
             token);
-        if (package is null || !visibility.CanRead(package, PackageResourceClass.Registration))
+        if (package is null)
         {
             return OperationResponse<GetRegistrationLeafResponse>.Failure(
                 OperationErrorPolicy.NotFound(
@@ -120,13 +120,13 @@ internal sealed class RegistrationSearchOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var page = await store.SearchAsync(
+        var page = await packages.SearchAsync(
             request.Query,
             request.IncludePrerelease,
             request.Skip,
             request.Take,
-            token,
-            request.PackageType);
+            request.PackageType,
+            token);
         var response = new SearchResponse(
             page.TotalHits,
             [
@@ -145,21 +145,23 @@ internal sealed class RegistrationSearchOperations(
         return OperationResponse<SearchResponse>.Success(response);
     }
 
-    private async ValueTask<TestPackage[]> FindRegistrationCandidatesAsync(
+    private async ValueTask<CapabilityPackageMetadata[]> FindRegistrationCandidatesAsync(
         string packageId,
         CancellationToken token) =>
         [
-            .. (await candidates.FindStoredByIdAsync(packageId, token))
-                .Where(package => visibility.CanRead(package, PackageResourceClass.Registration))
+            .. await packages.FindReadableStoredByIdAsync(
+                packageId,
+                PackageResourceClass.Registration,
+                token)
         ];
 
     private RegistrationPageDocument CreatePage(
-        IReadOnlyList<TestPackage> packages,
+        IReadOnlyList<CapabilityPackageMetadata> packages,
         string baseAddress)
     {
         var first = packages[0];
         var last = packages[^1];
-        var normalizedId = first.Identity.Id.ToLowerInvariant();
+        var normalizedId = first.Id.ToLowerInvariant();
         return new RegistrationPageDocument(
             $"{baseAddress}/registration/{normalizedId}/page/" +
             $"{first.NormalizedVersion}/{last.NormalizedVersion}.json",
@@ -170,24 +172,26 @@ internal sealed class RegistrationSearchOperations(
             [.. packages.Select(package => CreateLeaf(package, baseAddress))]);
     }
 
-    private RegistrationLeafDocument CreateLeaf(TestPackage package, string baseAddress)
+    private RegistrationLeafDocument CreateLeaf(
+        CapabilityPackageMetadata package,
+        string baseAddress)
     {
-        var id = package.Identity.Id.ToLowerInvariant();
+        var id = package.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
         var advisories = vulnerabilities.Active.Find(
-            package.Identity.Id,
-            package.Identity.Version);
+            package.Id,
+            package.Version);
         return new RegistrationLeafDocument(
             $"{baseAddress}/registration/{id}/{version}.json",
             $"{baseAddress}/registration/{id}/index.json",
             $"{baseAddress}/flatcontainer/{id}/{version}/{id}.{version}.nupkg",
-            new PackageIdentity(package.Identity.Id, version),
+            new PackageIdentity(package.Id, version),
             package.Authors,
             [.. package.RepositoryMetadata.Owners],
             package.RepositoryMetadata.Downloads,
             package.Description,
             package.Summary,
-            string.IsNullOrEmpty(package.Title) ? package.Identity.Id : package.Title,
+            string.IsNullOrEmpty(package.Title) ? package.Id : package.Title,
             [.. package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
             package.ProjectUrl?.OriginalString,
             package.Readme,
@@ -233,19 +237,19 @@ internal sealed class RegistrationSearchOperations(
     }
 
     private static SearchResultDocument CreateSearchResult(
-        TestPackage package,
-        IReadOnlyList<TestPackage> versions,
+        CapabilityPackageMetadata package,
+        IReadOnlyList<CapabilityPackageMetadata> versions,
         string baseAddress)
     {
-        var id = package.Identity.Id.ToLowerInvariant();
+        var id = package.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
         return new SearchResultDocument(
             $"{baseAddress}/registration/{id}/{version}.json",
             $"{baseAddress}/registration/{id}/index.json",
-            new PackageIdentity(package.Identity.Id, version),
+            new PackageIdentity(package.Id, version),
             package.Description,
             string.IsNullOrEmpty(package.Summary) ? package.Description : package.Summary,
-            string.IsNullOrEmpty(package.Title) ? package.Identity.Id : package.Title,
+            string.IsNullOrEmpty(package.Title) ? package.Id : package.Title,
             [package.Authors],
             [.. package.RepositoryMetadata.Owners],
             [.. package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
@@ -394,4 +398,26 @@ internal sealed class RegistrationSearchOperations(
         registrationUrl.EndsWith("/index.json", StringComparison.Ordinal)
             ? registrationUrl[..^"/index.json".Length]
             : registrationUrl;
+
+    private static bool MatchesBounds(
+        IReadOnlyList<CapabilityPackageMetadata> packages,
+        string lower,
+        string upper)
+    {
+        if (packages.Count == 0 ||
+            !NuGet.Versioning.NuGetVersion.TryParse(lower, out var lowerVersion) ||
+            !NuGet.Versioning.NuGetVersion.TryParse(upper, out var upperVersion))
+        {
+            return false;
+        }
+
+        return string.Equals(
+                   packages[0].NormalizedVersion,
+                   TestPackage.NormalizeVersion(lowerVersion),
+                   StringComparison.Ordinal) &&
+               string.Equals(
+                   packages[^1].NormalizedVersion,
+                   TestPackage.NormalizeVersion(upperVersion),
+                   StringComparison.Ordinal);
+    }
 }

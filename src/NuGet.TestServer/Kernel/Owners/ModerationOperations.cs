@@ -1,5 +1,6 @@
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel.Owners;
@@ -7,7 +8,7 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// <summary>
 /// Moderation owners. They wrap the existing supply-chain service.
 /// </summary>
-internal sealed class ModerationOperations(PackageSupplyChainService supplyChain)
+internal sealed class ModerationOperations(IModerationCapability moderation)
 {
     public void Register(OperationRegistryBuilder builder)
     {
@@ -35,13 +36,13 @@ internal sealed class ModerationOperations(PackageSupplyChainService supplyChain
         CancellationToken token)
     {
         var applied = request.Action == ModerationAction.Delete
-            ? await supplyChain.DeleteControlledAsync(
+            ? await moderation.DeleteControlledAsync(
                 request.Package.Id,
                 request.Package.Version,
                 request.Actor,
                 request.Reason,
                 token)
-            : await supplyChain.ModerateAsync(
+            : await moderation.ModerateAsync(
                 request.Package.Id,
                 request.Package.Version,
                 MapState(request.Action),
@@ -66,7 +67,7 @@ internal sealed class ModerationOperations(PackageSupplyChainService supplyChain
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var history = await supplyChain.GetAuditHistoryAsync(token);
+        var history = await moderation.GetAuditHistoryAsync(token);
         var filtered = history
             .Where(entry => entry.Sequence > (request.AfterSequence ?? 0))
             .Take(request.Take <= 0 ? history.Count : request.Take)
@@ -104,7 +105,7 @@ internal sealed class ModerationOperations(PackageSupplyChainService supplyChain
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var validations = await supplyChain.GetValidationResultsAsync(
+        var validations = await moderation.GetValidationResultsAsync(
             request.Package.Id,
             request.Package.Version,
             token);

@@ -1,6 +1,7 @@
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 
@@ -11,9 +12,10 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// keep package content streaming.
 /// </summary>
 internal sealed class PublicationOperations(
-    IPackageStore store,
-    PackageSupplyChainService supplyChain,
-    ServerDiagnostics diagnostics,
+    IPackageReadCapability packages,
+    IPackageMutationCapability mutations,
+    IPublicationCapability publication,
+    ITypedEventPublisher events,
     PackageTransferLimits limits)
 {
     public void Register(OperationRegistryBuilder builder)
@@ -74,7 +76,7 @@ internal sealed class PublicationOperations(
             }
 
             var identity = new PackageIdentity(package.Identity.Id, package.NormalizedVersion);
-            var publication = await supplyChain.PublishAsync(
+            var result = await publication.PublishAsync(
                 new PackagePublicationRequest(
                     package,
                     request.Actor,
@@ -82,14 +84,14 @@ internal sealed class PublicationOperations(
                     request.IsAdministrator),
                 token);
             package = null;
-            if (publication.Outcome == PackagePublicationOutcome.Published)
+            if (result.Outcome == PackagePublicationOutcome.Published)
             {
-                diagnostics.RecordPackagePublished();
+                await events.PublishAsync(KernelEventKind.PackagePublished, token);
             }
 
-            context.Complete(RenderPublication(publication, context.RequestPath ?? "/package"));
+            context.Complete(RenderPublication(result, context.RequestPath ?? "/package"));
             return OperationResponse<PushPackageResponse>.Success(
-                new PushPackageResponse(identity, MapOutcome(publication.Outcome)));
+                new PushPackageResponse(identity, MapOutcome(result.Outcome)));
         }
         finally
         {
@@ -109,7 +111,7 @@ internal sealed class PublicationOperations(
             limits.MaxRequestBodyBytes,
             token);
         var package = TestPackage.FromContent(symbols);
-        await store.AddSymbolAsync(symbols, token);
+        await mutations.AddSymbolAsync(symbols, token);
         var identity = new PackageIdentity(package.Identity.Id, package.NormalizedVersion);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status201Created,
@@ -123,16 +125,16 @@ internal sealed class PublicationOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var packages = request.PackageId is null
-            ? await store.GetAllAsync(token)
-            : await store.FindByIdAsync(request.PackageId, token);
+        var listedPackages = request.PackageId is null
+            ? await packages.GetAllAsync(token)
+            : await packages.FindByIdAsync(request.PackageId, token);
         var response = new ListPackagesResponse(
             [
-                .. packages
+                .. listedPackages
                     .Skip(Math.Max(0, request.Skip))
                     .Take(Math.Max(0, request.Take))
                     .Select(package => new PackageSummaryDocument(
-                        new PackageIdentity(package.Identity.Id, package.NormalizedVersion),
+                    new PackageIdentity(package.Id, package.NormalizedVersion),
                         package.IsListed,
                         package.Published))
             ]);
@@ -154,7 +156,11 @@ internal sealed class PublicationOperations(
             return OperationResponse<UnlistPackageResponse>.Failure(denial);
         }
 
-        if (!await store.SetListedAsync(request.Package.Id, request.Package.Version, false, token))
+        if (!await mutations.SetListedAsync(
+                request.Package.Id,
+                request.Package.Version,
+                false,
+                token))
         {
             return OperationResponse<UnlistPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -175,7 +181,11 @@ internal sealed class PublicationOperations(
             return OperationResponse<RelistPackageResponse>.Failure(denial);
         }
 
-        if (!await store.SetListedAsync(request.Package.Id, request.Package.Version, true, token))
+        if (!await mutations.SetListedAsync(
+                request.Package.Id,
+                request.Package.Version,
+                true,
+                token))
         {
             return OperationResponse<RelistPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -196,7 +206,7 @@ internal sealed class PublicationOperations(
             return OperationResponse<DeletePackageResponse>.Failure(denial);
         }
 
-        if (!await supplyChain.DeleteControlledAsync(
+        if (!await publication.DeleteControlledAsync(
                 request.Package.Id,
                 request.Package.Version,
                 request.Actor,
@@ -222,7 +232,7 @@ internal sealed class PublicationOperations(
             return null;
         }
 
-        var owner = await supplyChain.GetOwnerAsync(packageId, token);
+        var owner = await publication.GetOwnerAsync(packageId, token);
         if ((owner is not null &&
              string.Equals(owner, authorization.IdentityName, StringComparison.Ordinal)) ||
             authorization.IsAdministrator)
