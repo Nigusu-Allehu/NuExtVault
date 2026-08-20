@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/NuGet.TestServer.Cli/NuGet.TestServer.Cli.csproj" />
+    <Project Path="src/NuGet.TestServer.Extensions.Abstractions/NuGet.TestServer.Extensions.Abstractions.csproj" />
     <Project Path="src/NuGet.TestServer/NuGet.TestServer.csproj" />
   </Folder>
   <Folder Name="/tests/">

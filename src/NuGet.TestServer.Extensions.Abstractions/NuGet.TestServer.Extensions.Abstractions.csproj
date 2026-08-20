@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <Description>Internal pre-compatibility operation contracts for NuGet.TestServer.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="CompatibilityStatus" Value="InternalPreCompatibility" />
+    <InternalsVisibleTo Include="NuGet.TestServer.UnitTests" />
+  </ItemGroup>
+
+</Project>
