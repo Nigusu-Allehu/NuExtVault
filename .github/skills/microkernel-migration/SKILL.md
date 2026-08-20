@@ -36,6 +36,18 @@ Do not implement an upper step from a stale or unmerged lower-step branch. Do no
 combine multiple migration steps into one PR unless the user explicitly approves a
 revised plan explaining why they cannot remain independently attainable.
 
+Steps 1 through 11 are complete through merged PR #62. The old Step 12 is paused.
+The next eligible work is Step 11A, then 11B, 11C, and 11D. Do not begin Step 12A,
+12B, or another extraction until all four prerequisites pass.
+
+After Step 11D, use only the approved lanes:
+
+- Lane A: 12A, then 12B.
+- Lane B: 13, then a mechanical registration/search split, then 14 and 15 may run in
+  parallel after the URL-projection gate.
+- Lane C: 16.
+- Step 17 waits for the read and policy lanes.
+
 ## Required workflow
 
 For each step:
@@ -95,6 +107,16 @@ Official extensions follow the same rules as third-party extensions. If an offic
 extension needs an unavailable capability, propose a narrow public capability
 instead of adding a private escape hatch.
 
+Routes must come from typed, transport-neutral descriptors that declare method, path
+template, parameter/body/stream binding, HEAD policy, access policy, limits,
+operation ID, and contract versions. The kernel validates semantic collisions,
+reserved prefixes, ownership, and contracts, then generates and freezes routes
+before listening. Runtime route mutation is out of scope.
+
+A separately compiled test module must be able to add `/flavors/index.json` with an
+operation, binder or codec, resource, and requested capabilities without kernel
+source changes. If it cannot, stop and reframe the architecture as a modular monolith.
+
 ## Compatibility invariants
 
 Preserve these invariants in every step:
@@ -118,6 +140,8 @@ Preserve these invariants in every step:
 - Keep request, response, and error contracts independent of ASP.NET Core, SQLite,
   and implementation types.
 - Make contracts serializable and asynchronous so they can support future sidecars.
+- Use route references plus typed parameters instead of base addresses or
+  host-derived absolute URLs. The kernel performs trusted-proxy-aware URL projection.
 - Version manifests, SDK APIs, RPC protocols, and operation contracts independently.
 - Default operation replacement to disabled.
 - Never make authoritative publication, moderation, ownership, identity, or recovery
@@ -128,6 +152,10 @@ Preserve these invariants in every step:
 Do not publish the third-party SDK before the migration plan's SDK stabilization
 step.
 
+Before SDK publication, reach zero kernel-specific rendering escapes. Eliminate
+`OperationHttpResult` use by owners or formalize a transport-neutral, versioned
+rendering contract. Enforce structural contract hashes and golden snapshots.
+
 ## Capability rules
 
 - Deny capabilities by default.
@@ -135,6 +163,9 @@ step.
 - Fail profile validation for an ungranted required capability.
 - Scope handles to host instance and extension identity.
 - Enforce cancellation, quotas, stream limits, and audit on every privileged call.
+- Keep interfaces action-scoped. Reject signatures containing
+  `OperationExecutionContext`, `TestPackage`, `StorageBackupManifest`, stores,
+  filesystem paths, dependency injection, ASP.NET, or kernel types.
 - Treat outbound HTTP, secret references, restore, moderation, publication, and test
   instrumentation as sensitive capabilities.
 - Production profiles cannot grant test fault-injection or request-recording access.
@@ -143,8 +174,12 @@ step.
 
 - Keep required authoritative extension state in the kernel-provided transactional
   state store.
+- Before Step 12B, implement schema versions and migrations, optimistic concurrency,
+  per-record and per-owner quotas, bounded streaming and buffering, bounded lock
+  cardinality, checkpoint participation, and crash-safe restore.
 - Treat external stores only as rebuildable projections.
-- Make event consumers idempotent.
+- Durable at-least-once events are not implemented. Add them only for a concrete
+  projection consumer; when added, make consumers idempotent.
 - Preserve normalized package-ID ordering for package events.
 - Post-filter every projection-backed response through authoritative visibility.
 - Do not use asynchronous projections for standard or embedded protocol reads unless
@@ -175,6 +210,36 @@ When sidecars are in scope:
 - Bound messages, concurrency, deadlines, restarts, and logs.
 - Treat process isolation and security sandboxing as separate concerns.
 
+The v1 lifecycle is restart-required and limited to
+validated/started/ready/failed/stopped. Do not claim dynamic unload, durable events,
+or full `Degraded` recovery. Sidecars remain gated on a concrete consumer and
+transport-neutral parity.
+
+## Scalability gates
+
+Step 11D must establish a measured baseline before budgets are ratified. It executes
+the currently applicable gateway, stream, host, catalog, health, audit, and CI gates.
+The ratified budget also governs state and backup work when Step 12A introduces those
+mechanisms. At minimum:
+
+- Provisional gateway/capability overhead target of at most 5% p95 for metadata reads
+  with controlled allocations.
+- 512 concurrent flat-container reads return typed `503` plus `Retry-After` or wait
+  within a deadline; quota exceptions never escape.
+- Constant-memory streams enforce every declared limit and release leases on EOF,
+  disposal, and cancellation.
+- Embedded startup measurements and 100 parallel hosts with no shared mutable state.
+- Deterministic catalog measurements at 8, 50, and 200 manifests/routes.
+- Bounded health/readiness latency without synchronous full-storage enumeration.
+- Step 12A state quota, buffering, concurrency-token, migration, and
+  lock-cardinality tests.
+- Sampled/aggregated hot-read auditing or proof of bounded full-audit overhead.
+- Step 12A concurrent-mutation/crash backup matrix, plus Step 11D CI/test-growth
+  tracking.
+
+Treat v1 as per-process and single-node plus parallel embedded hosts. Multi-node
+storage, distributed coordination, and remote sidecars are not implied goals.
+
 ## Tests required for every step
 
 Run the smallest targeted tests first, then:
@@ -204,6 +269,9 @@ During review, verify:
 - Kernel invariants remain kernel-owned.
 - No private extension escape hatch was introduced.
 - Contracts contain no implementation types.
+- Routes are descriptor-generated and URLs are kernel-projected.
+- Owners have no kernel-specific rendering escape.
+- Capability signatures are action-scoped and serializable.
 - Required capabilities and access policies are explicit.
 - Embedded and production profiles remain coherent.
 - Tests prove compatibility, failure behavior, and rollback.
@@ -212,6 +280,11 @@ During review, verify:
 Reject the change if it creates a success-shaped fallback, silently degrades a
 required policy, permits stale projections to expose forbidden packages, or makes
 extension discovery order observable.
+
+Also reject extraction work that starts before Steps 11A through 11D, owner-shaped
+capabilities, static endpoint additions for extension routes, host-derived URLs in
+extension contracts, or claims that deferred lifecycle, event, loading, sidecar, or
+distributed behavior is implemented.
 
 ## Completion report
 
