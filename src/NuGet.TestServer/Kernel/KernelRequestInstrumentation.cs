@@ -37,9 +37,7 @@ internal sealed class KernelRequestInstrumentation
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(configuration);
         IsEnabled = profile.Grants.Any(
-            grant => grant.Name == BuiltInCapabilityNames.ControlFaultsInject) &&
-            profile.Grants.Any(
-                grant => grant.Name == BuiltInCapabilityNames.ControlRequestsRead);
+            grant => grant.Name == BuiltInCapabilityNames.ControlInstrumentationManage);
         _faults = new FaultRuleStore(configuration);
         _requests = new RequestRecorder(timeProvider, configuration);
         _configuredSensitiveHeaders = configuration.SensitiveHeaders;

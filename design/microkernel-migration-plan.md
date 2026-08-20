@@ -5,7 +5,7 @@
 Approved migration plan. Each implementation step still requires its own focused
 proposal and explicit approval under `AGENTS.md`.
 
-Implementation status: Steps 1 through 10 are implemented. Step 10 has local
+Implementation status: Steps 1 through 11 are implemented. Step 11 has local
 validation only; cross-platform CI remains a completion gate.
 
 Target architecture:
@@ -374,6 +374,9 @@ low-risk read-only feature.
 - Move control endpoint ownership into `NuTest.Control`.
 - Access package generation, reset, faults, and recordings through capabilities.
 - Keep actual request interception in the kernel.
+- Use only the host-scoped `control.packages.manage` and
+  `control.instrumentation.manage` capabilities; production profiles cannot select
+  or grant them.
 
 **Tests first:**
 

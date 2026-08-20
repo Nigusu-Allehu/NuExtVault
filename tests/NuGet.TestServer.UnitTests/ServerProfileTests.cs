@@ -31,6 +31,32 @@ public sealed class ServerProfileTests
     }
 
     [Fact]
+    public void Production_profile_rejects_test_control_selection()
+    {
+        using var storage = TemporaryDirectory.Create();
+        var testControl = Assert.Single(
+            ServerProfiles.Standard.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.TestControl);
+        var invalid = ServerProfiles.Production with
+        {
+            Extensions = ServerProfiles.Production.Extensions.Add(testControl),
+            Grants = ServerProfiles.Production.Grants
+                .Add(new CapabilityGrant(BuiltInCapabilityNames.ControlPackagesManage))
+                .Add(new CapabilityGrant(BuiltInCapabilityNames.ControlInstrumentationManage))
+        };
+
+        var exception = Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                invalid,
+                storageDirectory: storage.Path,
+                authentication: CreateProductionAuthentication(),
+                supplyChain: new SupplyChainOptions()));
+
+        Assert.Contains("production", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("control", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Embedded_profile_denies_outbound_network_and_sidecars()
     {
         Assert.DoesNotContain(

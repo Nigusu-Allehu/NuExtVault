@@ -24,23 +24,26 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ServiceIndexUrl = new Uri(baseUrl, "/v3/index.json");
         ControlUrl = new Uri(baseUrl, "/__test");
         HttpClient = new HttpClient { BaseAddress = baseUrl };
-        Packages = new PackageControlClient(
-            application.Services.GetRequiredService<IPackageStore>(),
-            application.Services.GetRequiredService<PackageSupplyChainService>());
         if (composition.ExtensionGraph.Extensions.Any(
                 extension => extension.Id == BuiltInExtensionIds.TestControl))
         {
             var capabilities = application.Services.GetRequiredService<CapabilityBroker>()
                 .ForOwner(BuiltInExtensionIds.TestControl);
+            var packageControl = capabilities.GetRequired<IPackageControlCapability>(
+                BuiltInCapabilityNames.ControlPackagesManage);
+            var instrumentation = capabilities.GetRequired<IKernelInstrumentationControlCapability>(
+                BuiltInCapabilityNames.ControlInstrumentationManage);
+            Packages = new PackageControlClient(packageControl);
             Faults = new FaultControlClient(
-                capabilities.GetRequired<IFaultInjectionCapability>(
-                    BuiltInCapabilityNames.ControlFaultsInject));
+                instrumentation);
             Requests = new RequestControlClient(
-                capabilities.GetRequired<IRequestRecordingCapability>(
-                    BuiltInCapabilityNames.ControlRequestsRead));
+                instrumentation);
         }
         else
         {
+            Packages = new PackageControlClient(
+                application.Services.GetRequiredService<IPackageStore>(),
+                application.Services.GetRequiredService<PackageSupplyChainService>());
             Faults = new FaultControlClient((IFaultInjectionCapability?)null);
             Requests = new RequestControlClient((IRequestRecordingCapability?)null);
         }
@@ -344,37 +347,66 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     }
 }
 
-public sealed class PackageControlClient(
-    IPackageStore store,
-    PackageSupplyChainService supplyChain)
+public sealed class PackageControlClient
 {
+    private readonly IPackageControlCapability? _capability;
+    private readonly IPackageStore? _store;
+    private readonly PackageSupplyChainService? _supplyChain;
+
+    internal PackageControlClient(IPackageControlCapability capability)
+    {
+        _capability = capability;
+    }
+
+    public PackageControlClient(IPackageStore store, PackageSupplyChainService supplyChain)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(supplyChain);
+        _store = store;
+        _supplyChain = supplyChain;
+    }
+
     public ValueTask AddAsync(TestPackage package, CancellationToken token = default) =>
-        supplyChain.AddAsync(package, token);
+        _capability is not null
+            ? _capability.AddAsync(package, token)
+            : _supplyChain!.AddAsync(package, token);
 
     public ValueTask<TestPackage?> FindAsync(
         string id,
         string version,
         CancellationToken token = default) =>
-        store.FindAsync(id, version, token);
+        _capability is not null
+            ? _capability.FindAsync(id, version, token)
+            : _store!.FindAsync(id, version, token);
 
     public ValueTask<byte[]?> FindSymbolAsync(
         string id,
         string version,
         CancellationToken token = default) =>
-        store.FindSymbolAsync(id, version, token);
+        _capability is not null
+            ? _capability.FindSymbolAsync(id, version, token)
+            : _store!.FindSymbolAsync(id, version, token);
 
     public ValueTask ResetAsync(CancellationToken token = default) =>
-        supplyChain.ResetAsync(token);
+        _capability is not null
+            ? _capability.ResetAsync(token)
+            : _supplyChain!.ResetAsync(token);
 }
 
 public sealed class FaultControlClient
 {
     private readonly IFaultInjectionCapability? _capability;
+    private readonly IKernelInstrumentationControlCapability? _controlCapability;
     private readonly FaultRuleStore? _legacyStore;
 
     internal FaultControlClient(IFaultInjectionCapability? capability)
     {
         _capability = capability;
+    }
+
+    internal FaultControlClient(IKernelInstrumentationControlCapability capability)
+    {
+        _controlCapability = capability;
     }
 
     public FaultControlClient(FaultRuleStore store)
@@ -383,7 +415,8 @@ public sealed class FaultControlClient
         _legacyStore = store;
     }
 
-    internal bool IsAvailable => _capability is not null || _legacyStore is not null;
+    internal bool IsAvailable =>
+        _capability is not null || _controlCapability is not null || _legacyStore is not null;
 
     public ValueTask AddAsync(FaultRule rule, CancellationToken token = default)
     {
@@ -402,7 +435,9 @@ public sealed class FaultControlClient
             return;
         }
 
-        var conflict = await GetCapability().TryAddFaultAsync(rule, token);
+        var conflict = _controlCapability is not null
+            ? await _controlCapability.TryAddFaultAsync(rule, token)
+            : await GetCapability().TryAddFaultAsync(rule, token);
         if (conflict is not null)
         {
             throw new InvalidOperationException(conflict);
@@ -418,7 +453,9 @@ public sealed class FaultControlClient
             return ValueTask.CompletedTask;
         }
 
-        return GetCapability().ClearFaultsAsync(token);
+        return _controlCapability is not null
+            ? _controlCapability.ClearFaultsAsync(token)
+            : GetCapability().ClearFaultsAsync(token);
     }
 
     private IFaultInjectionCapability GetCapability() =>
@@ -429,11 +466,17 @@ public sealed class FaultControlClient
 public sealed class RequestControlClient
 {
     private readonly IRequestRecordingCapability? _capability;
+    private readonly IKernelInstrumentationControlCapability? _controlCapability;
     private readonly RequestRecorder? _legacyRecorder;
 
     internal RequestControlClient(IRequestRecordingCapability? capability)
     {
         _capability = capability;
+    }
+
+    internal RequestControlClient(IKernelInstrumentationControlCapability capability)
+    {
+        _controlCapability = capability;
     }
 
     public RequestControlClient(RequestRecorder recorder)
@@ -450,7 +493,9 @@ public sealed class RequestControlClient
             return ValueTask.FromResult(_legacyRecorder.GetAll());
         }
 
-        return GetCapability().GetRequestsAsync(token);
+        return _controlCapability is not null
+            ? _controlCapability.GetRequestsAsync(token)
+            : GetCapability().GetRequestsAsync(token);
     }
 
     public void Reset() =>
@@ -465,7 +510,9 @@ public sealed class RequestControlClient
             return ValueTask.CompletedTask;
         }
 
-        return GetCapability().ClearRequestsAsync(token);
+        return _controlCapability is not null
+            ? _controlCapability.ClearRequestsAsync(token)
+            : GetCapability().ClearRequestsAsync(token);
     }
 
     private IRequestRecordingCapability GetCapability() =>

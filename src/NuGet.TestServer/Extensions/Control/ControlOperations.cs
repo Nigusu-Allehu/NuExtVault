@@ -1,25 +1,19 @@
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
-using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
-using NuGet.TestServer.Requests;
 using NuGet.Versioning;
 
-namespace NuGet.TestServer.Kernel.Owners;
+namespace NuGet.TestServer.Extensions.Control;
 
 /// <summary>
 /// Test-control owners. They wrap the existing package, fault, and request stores.
 /// </summary>
 internal sealed class ControlOperations(
-    IPackageReadCapability packages,
-    IPackageMutationCapability mutations,
-    IPublicationCapability publication,
-    IFaultInjectionCapability faults,
-    IRequestRecordingCapability requests,
-    ITypedEventPublisher events,
-    PackageTransferLimits limits)
+    IPackageControlCapability packages,
+    IKernelInstrumentationControlCapability instrumentation)
 {
     public void Register(OperationRegistryBuilder builder)
     {
@@ -105,15 +99,15 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var storedPackages = await packages.GetAllAsync(token);
-        var faultRules = await faults.GetFaultsAsync(token);
-        var requestRecords = await requests.GetRequestsAsync(token);
+        var faultRules = await instrumentation.GetFaultsAsync(token);
+        var requestRecords = await instrumentation.GetRequestsAsync(token);
         var response = new GetControlStateResponse(
             storedPackages.Count,
             faultRules.Count,
-            faults.FaultCapacity,
+            instrumentation.FaultCapacity,
             requestRecords.Count,
-            requests.RequestCapacity,
-            requests.EvictedRequestCount);
+            instrumentation.RequestCapacity,
+            instrumentation.EvictedRequestCount);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new
@@ -133,9 +127,9 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await publication.ResetAsync(token);
-        await faults.ClearFaultsAsync(token);
-        await requests.ClearRequestsAsync(token);
+        await packages.ResetAsync(token);
+        await instrumentation.ClearFaultsAsync(token);
+        await instrumentation.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ResetControlStateResponse>.Success(new ResetControlStateResponse());
     }
@@ -159,29 +153,16 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var content = context.Content.Resolve(request.Content);
-        TestPackage? package = null;
-        try
-        {
-            package = await TestPackage.FromStreamAsync(
-                content.Stream ?? new MemoryStream(content.Bytes!.Value.ToArray(), writable: false),
-                limits,
-                cancellationToken: token);
-            await publication.AddAsync(package, token);
-            await events.PublishAsync(KernelEventKind.PackagePublished, token);
-            var summary = CreateSummary(package);
-            package = null;
-            context.Complete(new OperationHttpResult(
-                StatusCodes.Status201Created,
-                new JsonResponseBody(RenderSummary(summary)),
-                $"/__test/packages/{Uri.EscapeDataString(summary.Package.Id)}/" +
-                $"{summary.Package.Version}"));
-            return OperationResponse<AddControlPackageResponse>.Success(
-                new AddControlPackageResponse(summary));
-        }
-        finally
-        {
-            package?.Dispose();
-        }
+        var summary = CreateSummary(await packages.AddContentAsync(
+            content.Stream ?? new MemoryStream(content.Bytes!.Value.ToArray(), writable: false),
+            token));
+        context.Complete(new OperationHttpResult(
+            StatusCodes.Status201Created,
+            new JsonResponseBody(RenderSummary(summary)),
+            $"/__test/packages/{Uri.EscapeDataString(summary.Package.Id)}/" +
+            $"{summary.Package.Version}"));
+        return OperationResponse<AddControlPackageResponse>.Success(
+            new AddControlPackageResponse(summary));
     }
 
     private async ValueTask<OperationResponse<DeleteControlPackageResponse>> DeletePackageAsync(
@@ -189,7 +170,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await mutations.DeleteAsync(request.Package.Id, request.Package.Version, token))
+        if (!await packages.DeleteAsync(request.Package.Id, request.Package.Version, token))
         {
             return OperationResponse<DeleteControlPackageResponse>.Failure(NotFound(request.Package));
         }
@@ -204,7 +185,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await mutations.SetListedAsync(
+        if (!await packages.SetListedAsync(
                 request.Package.Id,
                 request.Package.Version,
                 true,
@@ -223,7 +204,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (!await mutations.SetListedAsync(
+        if (!await packages.SetListedAsync(
                 request.Package.Id,
                 request.Package.Version,
                 false,
@@ -261,7 +242,7 @@ internal sealed class ControlOperations(
                         ? new AlternatePackage(alternate.Id, alternate.Range)
                         : null)
                 : null);
-        if (!await mutations.SetRepositoryMetadataAsync(
+        if (!await packages.SetRepositoryMetadataAsync(
                 request.Package.Id,
                 request.Package.Version,
                 metadata,
@@ -280,7 +261,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var records = await requests.GetRequestsAsync(token);
+        var records = await instrumentation.GetRequestsAsync(token);
         var response = new GetRequestsResponse(
             [
                 .. records.Select(record => new RequestRecordDocument(
@@ -304,7 +285,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await requests.ClearRequestsAsync(token);
+        await instrumentation.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ClearRequestsResponse>.Success(new ClearRequestsResponse());
     }
@@ -314,7 +295,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var rules = await faults.GetFaultsAsync(token);
+        var rules = await instrumentation.GetFaultsAsync(token);
         var response = new GetFaultsResponse([.. rules.Select(CreateFaultDocument)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
@@ -328,7 +309,7 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var rule = CreateFaultRule(request.Fault);
-        var conflict = await faults.TryAddFaultAsync(rule, token);
+        var conflict = await instrumentation.TryAddFaultAsync(rule, token);
         if (conflict is not null)
         {
             return OperationResponse<AddFaultResponse>.Failure(
@@ -348,7 +329,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await faults.ClearFaultsAsync(token);
+        await instrumentation.ClearFaultsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ClearFaultsResponse>.Success(new ClearFaultsResponse());
     }
@@ -371,15 +352,9 @@ internal sealed class ControlOperations(
             document.RemainingMatches ?? 0,
             TimeSpan.FromMilliseconds(document.DelayMilliseconds));
 
-    private static PackageSummaryDocument CreateSummary(CapabilityPackageMetadata package) =>
+    private static PackageSummaryDocument CreateSummary(ControlPackageMetadata package) =>
         new(
             new PackageIdentity(package.Id, package.NormalizedVersion),
-            package.IsListed,
-            package.Published);
-
-    private static PackageSummaryDocument CreateSummary(TestPackage package) =>
-        new(
-            new PackageIdentity(package.Identity.Id, package.NormalizedVersion),
             package.IsListed,
             package.Published);
 

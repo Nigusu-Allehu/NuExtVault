@@ -2,8 +2,8 @@
 
 ## Status
 
-Selected architecture design. Migration Steps 1 through 10 are implemented; later
-feature extractions and the public extension SDK remain planned. Step 10 has local
+Selected architecture design. Migration Steps 1 through 11 are implemented; later
+feature extractions and the public extension SDK remain planned. Step 11 has local
 validation only; cross-platform CI is not claimed here.
 
 This design supersedes the core-first proposal as the intended long-term

@@ -590,6 +590,45 @@ internal interface IRequestRecordingCapability
     ValueTask ClearRequestsAsync(CancellationToken token);
 }
 
+internal sealed record ControlPackageMetadata(
+    string Id,
+    string NormalizedVersion,
+    bool IsListed,
+    DateTimeOffset Published);
+
+internal interface IPackageControlCapability
+{
+    ValueTask<IReadOnlyList<ControlPackageMetadata>> GetAllAsync(CancellationToken token);
+    ValueTask<ControlPackageMetadata> AddContentAsync(Stream content, CancellationToken token);
+    ValueTask AddAsync(TestPackage package, CancellationToken token);
+    ValueTask<TestPackage?> FindAsync(string id, string version, CancellationToken token);
+    ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token);
+    ValueTask ResetAsync(CancellationToken token);
+    ValueTask<bool> DeleteAsync(string id, string version, CancellationToken token);
+    ValueTask<bool> SetListedAsync(
+        string id,
+        string version,
+        bool listed,
+        CancellationToken token);
+    ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token);
+}
+
+internal interface IKernelInstrumentationControlCapability
+{
+    int FaultCapacity { get; }
+    int RequestCapacity { get; }
+    long EvictedRequestCount { get; }
+    ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token);
+    ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token);
+    ValueTask ClearFaultsAsync(CancellationToken token);
+    ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token);
+    ValueTask ClearRequestsAsync(CancellationToken token);
+}
+
 internal sealed record CapabilityStorageReport(
     bool Ready,
     string Status,
@@ -744,16 +783,8 @@ internal static class BuiltInOwnerCapabilityRequirements
             ],
             [BuiltInExtensionIds.TestControl] =
             [
-                BuiltInCapabilityNames.PackagesMetadataRead,
-                BuiltInCapabilityNames.PackagesMetadataWrite,
-                BuiltInCapabilityNames.PackagesContentWrite,
-                BuiltInCapabilityNames.PackagesPublish,
-                BuiltInCapabilityNames.PackagesUnlist,
-                BuiltInCapabilityNames.PackagesRelist,
-                BuiltInCapabilityNames.PackagesDelete,
-                BuiltInCapabilityNames.ControlFaultsInject,
-                BuiltInCapabilityNames.ControlRequestsRead,
-                BuiltInCapabilityNames.EventsPublish
+                BuiltInCapabilityNames.ControlPackagesManage,
+                BuiltInCapabilityNames.ControlInstrumentationManage
             ],
             [BuiltInExtensionIds.Operations] =
             [
@@ -915,6 +946,25 @@ internal sealed class CapabilityOwnerContext
                     _audit,
                     _limits,
                     _services.Instrumentation),
+            var type when type == typeof(IPackageControlCapability) =>
+                new PackageControlCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.SupplyChain,
+                    _services.Diagnostics,
+                    _services.PackageLimits),
+            var type when type == typeof(IKernelInstrumentationControlCapability) =>
+                new KernelInstrumentationControlCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Instrumentation),
             var type when type == typeof(IServerOperationsCapability) =>
                 new ServerOperationsCapability(
                     _hostInstanceId,
@@ -992,6 +1042,10 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.ControlFaultsInject),
             [typeof(IRequestRecordingCapability)] = Set(
                 BuiltInCapabilityNames.ControlRequestsRead),
+            [typeof(IPackageControlCapability)] = Set(
+                BuiltInCapabilityNames.ControlPackagesManage),
+            [typeof(IKernelInstrumentationControlCapability)] = Set(
+                BuiltInCapabilityNames.ControlInstrumentationManage),
             [typeof(IServerOperationsCapability)] = Set(
                 BuiltInCapabilityNames.OperationsQuery,
                 BuiltInCapabilityNames.BackupInvoke,
@@ -1029,7 +1083,8 @@ internal sealed record CapabilityServices(
     VulnerabilitySnapshotProvider Vulnerabilities,
     ExtensionStateStore ExtensionState,
     IExtensionHealthSource ExtensionHealth,
-    KernelOutboundHttpClient OutboundHttp);
+    KernelOutboundHttpClient OutboundHttp,
+    PackageTransferLimits PackageLimits);
 
 internal abstract class CapabilityHandle : ICapabilityHandleIdentity
 {
@@ -1491,6 +1546,204 @@ internal sealed class RequestRecordingCapability(
 
     public async ValueTask ClearRequestsAsync(CancellationToken token) =>
         await Gate(BuiltInCapabilityNames.ControlRequestsRead)
+            .InvokeAsync(
+                "clear-requests",
+                _ =>
+                {
+                    instrumentation.ClearRequests();
+                    return ValueTask.FromResult(true);
+                },
+                token);
+}
+
+internal sealed class PackageControlCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    IPackageStore store,
+    PackageSupplyChainService supplyChain,
+    ServerDiagnostics diagnostics,
+    PackageTransferLimits packageLimits)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IPackageControlCapability
+{
+    public ValueTask<IReadOnlyList<ControlPackageMetadata>> GetAllAsync(
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                "get-packages",
+                async ct => Map(await store.GetAllAsync(ct)),
+                token);
+
+    public ValueTask<ControlPackageMetadata> AddContentAsync(
+        Stream content,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                "add-package-content",
+                async ct =>
+                {
+                    TestPackage? package = null;
+                    try
+                    {
+                        package = await TestPackage.FromStreamAsync(
+                            content,
+                            packageLimits,
+                            cancellationToken: ct);
+                        await supplyChain.AddAsync(package, ct);
+                        diagnostics.RecordPackagePublished();
+                        var result = Map(package);
+                        package = null;
+                        return result;
+                    }
+                    finally
+                    {
+                        package?.Dispose();
+                    }
+                },
+                token);
+
+    public async ValueTask AddAsync(TestPackage package, CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                "add-package",
+                async ct =>
+                {
+                    await supplyChain.AddAsync(package, ct);
+                    return true;
+                },
+                token);
+
+    public ValueTask<TestPackage?> FindAsync(
+        string id,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync("find-package", ct => store.FindAsync(id, version, ct), token);
+
+    public ValueTask<byte[]?> FindSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync("find-symbol", ct => store.FindSymbolAsync(id, version, ct), token);
+
+    public async ValueTask ResetAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                "reset-packages",
+                async ct =>
+                {
+                    await supplyChain.ResetAsync(ct);
+                    return true;
+                },
+                token);
+
+    public ValueTask<bool> DeleteAsync(
+        string id,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync("delete-package", ct => store.DeleteAsync(id, version, ct), token);
+
+    public ValueTask<bool> SetListedAsync(
+        string id,
+        string version,
+        bool listed,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                listed ? "relist-package" : "unlist-package",
+                ct => store.SetListedAsync(id, version, listed, ct),
+                token);
+
+    public ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlPackagesManage)
+            .InvokeAsync(
+                "set-package-metadata",
+                ct => store.SetRepositoryMetadataAsync(id, version, metadata, ct),
+                token);
+
+    private static IReadOnlyList<ControlPackageMetadata> Map(IEnumerable<TestPackage> packages) =>
+        [.. packages.Select(Map)];
+
+    private static ControlPackageMetadata Map(TestPackage package) =>
+        new(
+            package.Identity.Id,
+            package.NormalizedVersion,
+            package.IsListed,
+            package.Published);
+}
+
+internal sealed class KernelInstrumentationControlCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    KernelRequestInstrumentation instrumentation)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IKernelInstrumentationControlCapability
+{
+    public int FaultCapacity => instrumentation.FaultCapacity;
+    public int RequestCapacity => instrumentation.RequestCapacity;
+    public long EvictedRequestCount => instrumentation.EvictedRequestCount;
+
+    public ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
+            .InvokeAsync(
+                "get-faults",
+                _ => ValueTask.FromResult(instrumentation.GetFaults()),
+                token);
+
+    public ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
+            .InvokeAsync(
+                "add-fault",
+                _ =>
+                {
+                    try
+                    {
+                        instrumentation.AddFault(rule);
+                        return ValueTask.FromResult<string?>(null);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        return ValueTask.FromResult<string?>(exception.Message);
+                    }
+                },
+                token);
+
+    public async ValueTask ClearFaultsAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
+            .InvokeAsync(
+                "clear-faults",
+                _ =>
+                {
+                    instrumentation.ClearFaults();
+                    return ValueTask.FromResult(true);
+                },
+                token);
+
+    public ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
+            .InvokeAsync(
+                "get-requests",
+                async ct =>
+                {
+                    await instrumentation.WaitForCompletedRequestsAsync(ct);
+                    return instrumentation.GetRequests();
+                },
+                token);
+
+    public async ValueTask ClearRequestsAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
             .InvokeAsync(
                 "clear-requests",
                 _ =>

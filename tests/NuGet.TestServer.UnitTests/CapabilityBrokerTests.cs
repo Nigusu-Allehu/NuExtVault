@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Operations;
+using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
@@ -435,10 +436,10 @@ public sealed class CapabilityBrokerTests
     {
         Assert.Contains(
             ServerProfiles.Embedded.Grants,
-            grant => grant.Name == BuiltInCapabilityNames.ControlFaultsInject);
+            grant => grant.Name == BuiltInCapabilityNames.ControlPackagesManage);
         Assert.Contains(
             ServerProfiles.Embedded.Grants,
-            grant => grant.Name == BuiltInCapabilityNames.ControlRequestsRead);
+            grant => grant.Name == BuiltInCapabilityNames.ControlInstrumentationManage);
         Assert.DoesNotContain(
             ServerProfiles.Embedded.Grants,
             grant => grant.Name is BuiltInCapabilityNames.OutboundHttp
@@ -446,15 +447,15 @@ public sealed class CapabilityBrokerTests
                 or BuiltInCapabilityNames.SidecarExecution);
         Assert.DoesNotContain(
             ServerProfiles.Production.Grants,
-            grant => grant.Name is BuiltInCapabilityNames.ControlFaultsInject
-                or BuiltInCapabilityNames.ControlRequestsRead
+            grant => grant.Name is BuiltInCapabilityNames.ControlPackagesManage
+                or BuiltInCapabilityNames.ControlInstrumentationManage
                 or BuiltInCapabilityNames.SecretsResolveReference
                 or BuiltInCapabilityNames.SidecarExecution);
 
         var unsafeProduction = ServerProfiles.Production with
         {
             Grants = ServerProfiles.Production.Grants.Add(
-                new CapabilityGrant(BuiltInCapabilityNames.ControlFaultsInject))
+                new CapabilityGrant(BuiltInCapabilityNames.ControlInstrumentationManage))
         };
         var exception = Assert.Throws<ServerHostingConfigurationException>(
             () => BuiltInExtensionCatalog.Instance.Resolve(unsafeProduction));
