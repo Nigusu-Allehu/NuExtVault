@@ -16,9 +16,12 @@ public sealed class ServerProfileTests
         Assert.Contains(
             ServerProfiles.Embedded.Extensions,
             extension => extension.Id == BuiltInExtensionIds.TestControl);
-        Assert.Contains(
+        Assert.DoesNotContain(
             ServerProfiles.Standard.Extensions,
-            extension => extension.Id == BuiltInExtensionIds.VulnerabilityRefresh);
+            extension => extension.Id == "builtin.vulnerability-refresh");
+        Assert.Single(
+            ServerProfiles.Standard.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
         Assert.DoesNotContain(
             ServerProfiles.Production.Extensions,
             extension => extension.Id == BuiltInExtensionIds.TestControl);
@@ -43,7 +46,7 @@ public sealed class ServerProfileTests
     {
         var extension = Assert.Single(
             ServerProfiles.Standard.Extensions,
-            extension => extension.Id == BuiltInExtensionIds.VulnerabilityRefresh);
+            extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
         var originalRequests = extension.RequestedCapabilities;
         var originalGrants = ServerProfiles.Standard.Grants;
 
@@ -55,6 +58,33 @@ public sealed class ServerProfileTests
         Assert.DoesNotContain(originalGrants, grant => grant.Name == "test.grant");
         Assert.NotEqual(originalRequests, changedRequests);
         Assert.NotEqual(originalGrants, changedGrants);
+    }
+
+    [Fact]
+    public void Vulnerability_owner_requests_persistence_and_network_only_in_cli_profiles()
+    {
+        var embedded = Assert.Single(
+            ServerProfiles.Embedded.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
+        var standard = Assert.Single(
+            ServerProfiles.Standard.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
+        var production = Assert.Single(
+            ServerProfiles.Production.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
+
+        Assert.Empty(embedded.RequestedCapabilities);
+        Assert.Equal(
+            [
+                BuiltInCapabilityNames.ExtensionStateRead,
+                BuiltInCapabilityNames.ExtensionStateWrite,
+                BuiltInCapabilityNames.OutboundHttp
+            ],
+            standard.RequestedCapabilities.Select(request => request.Name));
+        Assert.Equal(
+            standard.RequestedCapabilities,
+            production.RequestedCapabilities);
+        Assert.All(standard.RequestedCapabilities, request => Assert.True(request.IsRequired));
     }
 
     [Fact]

@@ -836,7 +836,7 @@ internal static class BuiltInExtensionCatalog
                     "/v3/vulnerabilities/index.json",
                     order: 70)
             ],
-            capabilities: [Required(BuiltInCapabilityNames.VulnerabilityStateRead)]),
+            capabilities: []),
         Manifest(
             BuiltInExtensionIds.TestControl,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
@@ -908,10 +908,6 @@ internal static class BuiltInExtensionCatalog
                 Required(BuiltInCapabilityNames.ModerationRead),
                 Required(BuiltInCapabilityNames.ModerationDecide)
             ]),
-        Manifest(
-            BuiltInExtensionIds.VulnerabilityRefresh,
-            dependencies: [Dependency(BuiltInExtensionIds.Vulnerabilities)],
-            capabilities: [Required(BuiltInCapabilityNames.OutboundHttp)])
     ]);
 
     private static ExtensionManifest Manifest(

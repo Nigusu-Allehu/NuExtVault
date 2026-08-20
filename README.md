@@ -281,8 +281,8 @@ process:
 | Endpoint | Authentication | Meaning |
 | --- | --- | --- |
 | `GET /health/live` | Anonymous | The process is running. |
-| `GET /health/ready` | Anonymous | Configured storage exists and is writable. Returns HTTP 503 when it is not. |
-| `GET /health/storage` | Write/control credential | Package count, storage bytes, available disk bytes, cached snapshot count, and the snapshot retention limit. |
+| `GET /health/ready` | Anonymous | Configured storage exists and is writable. Extension refresh failures are reported as degraded but remain ready; storage failures return HTTP 503. |
+| `GET /health/storage` | Write/control credential | Package count, storage bytes, available disk bytes, the vulnerability owner-state record plus any legacy cache entries awaiting migration, and the owner-state retention limit of one. |
 
 Production mode writes JSON console logs. Request completion and failures use
 structured fields for method, path, status, elapsed time, and exceptions. Do not
@@ -304,9 +304,11 @@ configure its normal OTLP exporter. Include `NuGet.TestServer` in
 `OTEL_DOTNET_AUTO_TRACES_ADDITIONAL_SOURCES`. ASP.NET Core's built-in request
 instrumentation remains available alongside these package and storage signals.
 
-Cached vulnerability snapshots retain the three newest valid entries. Packages
-have no automatic retention policy; unlisting does not reclaim their files, and
-hard deletion is intentionally unavailable in production mode. Monitor
+Vulnerability snapshot state is integrity-protected and atomically replaced as one
+owner-scoped record. During upgrade, storage health also counts legacy
+`vulnerabilities` cache directories until they are removed by an operator. Packages
+have no automatic retention policy; unlisting does not reclaim their files, and hard
+deletion is intentionally unavailable in production mode. Monitor
 `FreeBytes`, define an alert threshold appropriate for the volume, and manage
 package retention through a reviewed offline storage procedure.
 
@@ -377,14 +379,15 @@ nuget-test-server backup `
   --output C:\Backups\nuget-test-server-2026-08-18.zip
 ```
 
-The archive contains the persisted `packages` and `vulnerabilities` trees plus a
+The archive contains persisted package data and namespaced `extension-state` (plus
+the legacy `vulnerabilities` tree when present) together with a
 versioned manifest with every file's length and SHA-256 hash. Credentials,
 runtime request history, and fault rules are not stored. Copy backups to
 separate durable storage and apply the organization's encryption, access, and
 retention policy.
 
-Restore only into storage that does not already contain `packages` or
-`vulnerabilities`:
+Restore only into storage that does not already contain `packages`,
+`extension-state`, or `vulnerabilities`:
 
 ```powershell
 nuget-test-server restore `
@@ -478,18 +481,26 @@ NuGet audit work without network access. Registration metadata also includes
 matching advisories for hosted package IDs and versions, enabling Package
 Manager UI vulnerability details.
 
-CLI servers prefer a newer valid snapshot cached under:
+CLI servers prefer a newer valid snapshot persisted through the kernel's
+owner-namespaced state capability under:
 
 ```text
-<storage>\vulnerabilities
+<storage>\extension-state
 ```
+
+On first startup after upgrade, the kernel provides the extension a bounded,
+owner-scoped logical view of the existing `<storage>\vulnerabilities` cache without
+exposing a storage path. The extension validates the legacy hashes and schema,
+selects the newest valid snapshot, and writes it atomically to owner state. Invalid
+legacy entries are ignored; when none are usable, the embedded baseline remains
+available and health reports degraded with a warning.
 
 After the server is ready, a stale snapshot is refreshed from nuget.org in the
 background. A refresh downloads every referenced page with bounded timeouts and
-sizes, validates the complete snapshot, records source and SHA-256 integrity
-metadata, and atomically activates it. Failed or partial refreshes produce a
-warning and leave the previous snapshot available. The three most recent cached
-snapshots are retained.
+sizes, validates the complete snapshot, persists integrity-protected state
+atomically, and only then activates it. Failed or partial refreshes produce a
+warning, report degraded-but-ready health, and leave the previous snapshot
+available.
 
 Programmatic servers created with `NuGetTestServerHost.StartAsync()` always use
 the embedded snapshot and never refresh from the network, preserving
@@ -525,9 +536,10 @@ The kernel generates absolute URLs from the validated request origin after trans
 security and trusted-proxy handling, projects only the supported typed fields, and
 preserves the existing resource order and compatibility aliases. Adding another
 internal resource consists of registering its typed contribution with its owner; the
-service-index operation itself does not change. Flat-container, registration, search,
-publication, symbol publication, and vulnerability implementations remain in their
-existing owners.
+service-index operation itself does not change. Vulnerability index/page operations
+and refresh lifecycle are owned by the official `NuGet.Vulnerabilities` extension;
+flat-container, registration, search, publication, and symbol publication remain in
+their existing owners.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:

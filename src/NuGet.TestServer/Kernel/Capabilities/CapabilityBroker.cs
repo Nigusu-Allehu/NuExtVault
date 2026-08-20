@@ -606,6 +606,13 @@ internal sealed record CapabilityDiagnosticsSnapshot(
     long PublishedPackageCount,
     long StorageFailureCount);
 
+internal sealed record ExtensionHealthSnapshot(bool Ready, string Status, string? Reason);
+
+internal interface IExtensionHealthSource
+{
+    ExtensionHealthSnapshot GetHealth();
+}
+
 internal interface IServerOperationsCapability
 {
     string Mode { get; }
@@ -649,7 +656,15 @@ internal interface IExtensionStateCapability
     ValueTask<T?> ReadAsync<T>(string key, CancellationToken token);
 
     ValueTask WriteAsync<T>(string key, T value, CancellationToken token);
+
+    ValueTask<ExtensionStateFileSet?> ReadLegacyFileSetAsync(
+        string logicalName,
+        CancellationToken token);
 }
+
+internal sealed record ExtensionStateFile(string LogicalName, byte[] Content);
+
+internal sealed record ExtensionStateFileSet(ImmutableArray<ExtensionStateFile> Files);
 
 internal interface IBackupParticipationCapability
 {
@@ -721,9 +736,7 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.EventsPublish
             ],
             [BuiltInExtensionIds.Vulnerabilities] =
-            [
-                BuiltInCapabilityNames.VulnerabilityStateRead
-            ],
+            [],
             [BuiltInExtensionIds.SupplyChain] =
             [
                 BuiltInCapabilityNames.ModerationRead,
@@ -912,7 +925,8 @@ internal sealed class CapabilityOwnerContext
                     _services.Storage,
                     _services.Diagnostics,
                     _services.Hosting,
-                    _services.StorageDirectory),
+                    _services.StorageDirectory,
+                    _services.ExtensionHealth),
             var type when type == typeof(IVulnerabilityReadCapability) =>
                 new VulnerabilityReadCapability(
                     _hostInstanceId,
@@ -929,6 +943,14 @@ internal sealed class CapabilityOwnerContext
                     _audit,
                     _limits,
                     _services.Diagnostics),
+            var type when type == typeof(IExtensionStateCapability) =>
+                new ExtensionStateCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.ExtensionState),
             var type when type == typeof(IOutboundHttpCapability) =>
                 new OutboundHttpCapability(
                     _hostInstanceId,
@@ -936,7 +958,7 @@ internal sealed class CapabilityOwnerContext
                     _grants,
                     _audit,
                     _limits,
-                    _services.OutboundHttpClient),
+                    _services.OutboundHttp),
             _ => throw new InvalidOperationException(
                 $"Capability handle type '{typeof(T).FullName}' is not available.")
         };
@@ -1005,7 +1027,9 @@ internal sealed record CapabilityServices(
     ServerHostingOptions Hosting,
     string? StorageDirectory,
     VulnerabilitySnapshotProvider Vulnerabilities,
-    HttpClient OutboundHttpClient);
+    ExtensionStateStore ExtensionState,
+    IExtensionHealthSource ExtensionHealth,
+    KernelOutboundHttpClient OutboundHttp);
 
 internal abstract class CapabilityHandle : ICapabilityHandleIdentity
 {
@@ -1486,14 +1510,37 @@ internal sealed class ServerOperationsCapability(
     StorageHealth storage,
     ServerDiagnostics diagnostics,
     ServerHostingOptions hosting,
-    string? storageDirectory)
+    string? storageDirectory,
+    IExtensionHealthSource extensionHealth)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IServerOperationsCapability
 {
     public string Mode => hosting.Mode.ToString().ToLowerInvariant();
 
     public ValueTask<CapabilityStorageReport> GetReadinessAsync(CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OperationsQuery)
-            .InvokeAsync("readiness", _ => ValueTask.FromResult(Map(storage.GetReadiness())), token);
+            .InvokeAsync(
+                "readiness",
+                _ =>
+                {
+                    var storageReport = Map(storage.GetReadiness());
+                    if (!storageReport.Ready)
+                    {
+                        return ValueTask.FromResult(storageReport);
+                    }
+
+                    var extensions = extensionHealth.GetHealth();
+                    return ValueTask.FromResult(
+                        extensions.Status == "healthy"
+                            ? storageReport
+                            : storageReport with
+                            {
+                                Ready = extensions.Ready,
+                                Status = extensions.Status,
+                                Dependency = "extensions",
+                                Reason = extensions.Reason
+                            });
+                },
+                token);
 
     public ValueTask<CapabilityStorageReport> GetStorageReportAsync(CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OperationsQuery)
@@ -1624,13 +1671,55 @@ internal sealed class TypedEventPublisher(
                 token);
 }
 
+internal sealed class ExtensionStateCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    ExtensionStateStore store)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IExtensionStateCapability
+{
+    public ValueTask<T?> ReadAsync<T>(string key, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateRead)
+            .InvokeAsync(
+                "read",
+                ct => store.ReadAsync<T>(OwnerId, key, ct, MaximumStreamBytes),
+                token);
+
+    public async ValueTask WriteAsync<T>(string key, T value, CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ExtensionStateWrite)
+            .InvokeAsync(
+                "write",
+                async ct =>
+                {
+                    await store.WriteAsync(OwnerId, key, value, ct, MaximumStreamBytes);
+                    return true;
+                },
+                token);
+
+    public ValueTask<ExtensionStateFileSet?> ReadLegacyFileSetAsync(
+        string logicalName,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateRead)
+            .InvokeAsync(
+                "read-legacy-file-set",
+                ct => store.ReadLegacyFileSetAsync(
+                    OwnerId,
+                    logicalName,
+                    ct,
+                    MaximumStreamBytes),
+                token);
+}
+
 internal sealed class OutboundHttpCapability(
     string hostInstanceId,
     string ownerId,
     ImmutableHashSet<string> grants,
     CapabilityAuditLog audit,
     CapabilityLimits limits,
-    HttpClient client)
+    KernelOutboundHttpClient client)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
         IOutboundHttpCapability
 {
@@ -1707,6 +1796,23 @@ internal sealed class OutboundHttpCapability(
                     }
                 },
                 token);
+}
+
+internal sealed class KernelOutboundHttpClient : IDisposable
+{
+    private readonly HttpClient _client = new(
+        new HttpClientHandler { AllowAutoRedirect = false })
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+
+    public Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        HttpCompletionOption completion,
+        CancellationToken token) =>
+        _client.SendAsync(request, completion, token);
+
+    public void Dispose() => _client.Dispose();
 }
 
 internal sealed class ResponseLifetimeStream(Stream inner, IDisposable lifetime) : Stream
