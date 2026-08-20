@@ -150,21 +150,21 @@ if (authentication.GeneratedApiKey is not null)
     authentication = authentication with { GeneratedApiKey = null };
 }
 
-var mode = arguments.Any(argument =>
-    string.Equals(argument, "--production", StringComparison.OrdinalIgnoreCase))
-    ? ServerMode.Production
-    : ServerMode.Test;
+var production = arguments.Any(argument =>
+    string.Equals(argument, "--production", StringComparison.OrdinalIgnoreCase));
+ServerComposition composition;
 WebApplication app;
 try
 {
-    app = ServerApplication.Build(
+    composition = CliServerProfileFactory.Create(
+        production,
         url: ReadOption(arguments, "--url") ?? $"http://127.0.0.1:{parsedPort}",
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
         vulnerabilities: vulnerabilityProvider,
-        mode: mode,
         packageLimits: packageLimits,
         trustedProxies: ParseTrustedProxies(arguments));
+    app = ServerApplication.Build(composition);
 }
 catch (Exception exception) when (
     exception is ServerHostingConfigurationException
@@ -218,8 +218,8 @@ foreach (var additionalAddress in addresses.Skip(1))
 {
     Console.WriteLine($"Source:      {additionalAddress}/v3/index.json");
 }
-Console.WriteLine($"Mode:        {mode}");
-if (mode == ServerMode.Test)
+Console.WriteLine($"Mode:        {composition.Hosting.Mode}");
+if (composition.Hosting.Mode == ServerMode.Test)
 {
     Console.WriteLine($"Control API: {address}/__test");
 }

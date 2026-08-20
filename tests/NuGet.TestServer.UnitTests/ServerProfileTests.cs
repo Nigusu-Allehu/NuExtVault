@@ -1,0 +1,126 @@
+using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Packages;
+
+namespace NuGet.TestServer.UnitTests;
+
+public sealed class ServerProfileTests
+{
+    [Fact]
+    public void Built_in_profiles_capture_current_feature_sets()
+    {
+        Assert.Equal("embedded", ServerProfiles.Embedded.Name);
+        Assert.Equal("standard", ServerProfiles.Standard.Name);
+        Assert.Equal("production", ServerProfiles.Production.Name);
+
+        Assert.Contains(
+            ServerProfiles.Embedded.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.TestControl);
+        Assert.Contains(
+            ServerProfiles.Standard.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.VulnerabilityRefresh);
+        Assert.DoesNotContain(
+            ServerProfiles.Production.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.TestControl);
+        Assert.Contains(
+            ServerProfiles.Production.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.Operations);
+    }
+
+    [Fact]
+    public void Embedded_profile_denies_outbound_network_and_sidecars()
+    {
+        Assert.DoesNotContain(
+            ServerProfiles.Embedded.Grants,
+            grant => grant.Name == BuiltInCapabilityNames.OutboundHttp);
+        Assert.DoesNotContain(
+            ServerProfiles.Embedded.Grants,
+            grant => grant.Name == BuiltInCapabilityNames.SidecarExecution);
+    }
+
+    [Fact]
+    public void Capability_requests_and_grants_are_immutable()
+    {
+        var extension = Assert.Single(
+            ServerProfiles.Standard.Extensions,
+            extension => extension.Id == BuiltInExtensionIds.VulnerabilityRefresh);
+        var originalRequests = extension.RequestedCapabilities;
+        var originalGrants = ServerProfiles.Standard.Grants;
+
+        var changedRequests = originalRequests.Add(
+            new CapabilityRequest("test.request", IsRequired: false));
+        var changedGrants = originalGrants.Add(new CapabilityGrant("test.grant"));
+
+        Assert.DoesNotContain(originalRequests, request => request.Name == "test.request");
+        Assert.DoesNotContain(originalGrants, grant => grant.Name == "test.grant");
+        Assert.NotEqual(originalRequests, changedRequests);
+        Assert.NotEqual(originalGrants, changedGrants);
+    }
+
+    [Fact]
+    public void Production_profile_requires_durable_storage()
+    {
+        var exception = Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                ServerProfiles.Production,
+                authentication: CreateProductionAuthentication(),
+                supplyChain: new SupplyChainOptions()));
+
+        Assert.Contains("durable storage", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Production_profile_requires_security_operations_and_supply_chain_policy()
+    {
+        using var storage = TemporaryDirectory.Create();
+
+        Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                ServerProfiles.Production,
+                storageDirectory: storage.Path,
+                supplyChain: new SupplyChainOptions()));
+
+        var missingOperations = ServerProfiles.Production with
+        {
+            Extensions = ServerProfiles.Production.Extensions.RemoveAll(
+                extension => extension.Id == BuiltInExtensionIds.Operations)
+        };
+        Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                missingOperations,
+                storageDirectory: storage.Path,
+                authentication: CreateProductionAuthentication(),
+                supplyChain: new SupplyChainOptions()));
+
+        Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                ServerProfiles.Production,
+                storageDirectory: storage.Path,
+                authentication: CreateProductionAuthentication()));
+    }
+
+    private static AuthenticationConfiguration CreateProductionAuthentication() =>
+        AuthenticationConfiguration.Create(
+            username: null,
+            password: null,
+            apiKey: "publish-key");
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        private TemporaryDirectory(string path) => Path = path;
+
+        public string Path { get; }
+
+        public static TemporaryDirectory Create()
+        {
+            var path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "NuGet.TestServer.UnitTests",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            return new TemporaryDirectory(path);
+        }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+}
