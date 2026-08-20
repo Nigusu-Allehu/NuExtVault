@@ -1,5 +1,6 @@
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 
 namespace NuGet.TestServer.Kernel.Owners;
@@ -7,11 +8,7 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// <summary>
 /// Health, diagnostics, backup, and restore owners.
 /// </summary>
-internal sealed class ServerOperationsOperations(
-    StorageHealth storage,
-    ServerDiagnostics diagnostics,
-    ServerHostingOptions hosting,
-    string? storageDirectory)
+internal sealed class ServerOperationsOperations(IServerOperationsCapability operations)
 {
     public void Register(OperationRegistryBuilder builder)
     {
@@ -56,20 +53,19 @@ internal sealed class ServerOperationsOperations(
         token.ThrowIfCancellationRequested();
         var response = new GetLivenessResponse(
             "healthy",
-            hosting.Mode.ToString().ToLowerInvariant());
+            operations.Mode);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new { status = response.Status, mode = response.Mode })));
         return ValueTask.FromResult(OperationResponse<GetLivenessResponse>.Success(response));
     }
 
-    private ValueTask<OperationResponse<GetReadinessResponse>> GetReadinessAsync(
+    private async ValueTask<OperationResponse<GetReadinessResponse>> GetReadinessAsync(
         GetReadinessRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        var report = storage.GetReadiness();
+        var report = await operations.GetReadinessAsync(token);
         var response = new GetReadinessResponse(report.Status, report.Dependency, report.Ready);
         context.Complete(new OperationHttpResult(
             response.Ready
@@ -80,16 +76,15 @@ internal sealed class ServerOperationsOperations(
                 status = response.Status,
                 dependency = response.Dependency
             })));
-        return ValueTask.FromResult(OperationResponse<GetReadinessResponse>.Success(response));
+        return OperationResponse<GetReadinessResponse>.Success(response);
     }
 
-    private ValueTask<OperationResponse<GetStorageHealthResponse>> GetStorageHealthAsync(
+    private async ValueTask<OperationResponse<GetStorageHealthResponse>> GetStorageHealthAsync(
         GetStorageHealthRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
-        var report = storage.GetReport();
+        var report = await operations.GetStorageReportAsync(token);
 
         // The typed contract carries the dependency status only. Storage roots stay
         // inside the kernel, so the current report is rendered without being copied
@@ -116,15 +111,15 @@ internal sealed class ServerOperationsOperations(
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(report)));
-        return ValueTask.FromResult(OperationResponse<GetStorageHealthResponse>.Success(response));
+        return OperationResponse<GetStorageHealthResponse>.Success(response);
     }
 
-    private ValueTask<OperationResponse<GetDiagnosticsResponse>> GetDiagnosticsAsync(
+    private async ValueTask<OperationResponse<GetDiagnosticsResponse>> GetDiagnosticsAsync(
         GetDiagnosticsRequest request,
         OperationExecutionContext context,
         CancellationToken token)
     {
-        token.ThrowIfCancellationRequested();
+        var diagnostics = await operations.GetDiagnosticsAsync(token);
         var response = new GetDiagnosticsResponse(
             diagnostics.RequestCount,
             diagnostics.FailedRequestCount,
@@ -133,7 +128,7 @@ internal sealed class ServerOperationsOperations(
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(response)));
-        return ValueTask.FromResult(OperationResponse<GetDiagnosticsResponse>.Success(response));
+        return OperationResponse<GetDiagnosticsResponse>.Success(response);
     }
 
     private async ValueTask<OperationResponse<CreateBackupResponse>> CreateBackupAsync(
@@ -141,15 +136,14 @@ internal sealed class ServerOperationsOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (storageDirectory is null)
+        var manifest = await operations.CreateBackupAsync(context, request.Destination, token);
+        if (manifest is null)
         {
             return OperationResponse<CreateBackupResponse>.Failure(
                 OperationErrorPolicy.Unavailable(
                     "Backups require durable storage."));
         }
 
-        var destination = ResolveFile(context, request.Destination);
-        var manifest = await StorageBackup.CreateAsync(storageDirectory, destination, token);
         return OperationResponse<CreateBackupResponse>.Success(
             new CreateBackupResponse(CreateManifest(manifest)));
     }
@@ -159,23 +153,17 @@ internal sealed class ServerOperationsOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        if (storageDirectory is null)
+        var manifest = await operations.RestoreAsync(context, request.Source, token);
+        if (manifest is null)
         {
             return OperationResponse<RestoreBackupResponse>.Failure(
                 OperationErrorPolicy.Unavailable(
                     "Restores require durable storage."));
         }
 
-        var source = ResolveFile(context, request.Source);
-        var manifest = await StorageBackup.RestoreAsync(source, storageDirectory, token);
         return OperationResponse<RestoreBackupResponse>.Success(
             new RestoreBackupResponse(CreateManifest(manifest)));
     }
-
-    private static string ResolveFile(OperationExecutionContext context, StreamHandle handle) =>
-        context.Content.Resolve(handle).FilePath
-        ?? throw new InvalidOperationException(
-            "Backup and restore require a kernel-issued file handle.");
 
     private static BackupManifestDocument CreateManifest(StorageBackupManifest manifest) =>
         new(

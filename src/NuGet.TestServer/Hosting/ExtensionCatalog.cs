@@ -72,13 +72,32 @@ internal sealed record ResolvedRoute(string Method, string Path, string Extensio
 
 internal sealed record ResolvedServiceIndexResource(string ResourceType, string ExtensionId);
 
+internal sealed record ResolvedCapability(
+    string Name,
+    string ExtensionId,
+    bool IsRequired,
+    bool IsGranted);
+
 internal sealed record ResolvedExtensionGraph(
     string ProfileName,
     ImmutableArray<ExtensionManifest> Extensions,
     ImmutableArray<ResolvedOperation> Operations,
     ImmutableArray<ResolvedRoute> Routes,
     ImmutableArray<ResolvedServiceIndexResource> Resources,
-    string Diagnostics);
+    ImmutableArray<ResolvedCapability> Capabilities,
+    string Diagnostics)
+{
+    public ResolvedExtensionGraph(
+        string profileName,
+        ImmutableArray<ExtensionManifest> extensions,
+        ImmutableArray<ResolvedOperation> operations,
+        ImmutableArray<ResolvedRoute> routes,
+        ImmutableArray<ResolvedServiceIndexResource> resources,
+        string diagnostics)
+        : this(profileName, extensions, operations, routes, resources, [], diagnostics)
+    {
+    }
+}
 
 internal sealed class ExtensionCatalog
 {
@@ -117,13 +136,14 @@ internal sealed class ExtensionCatalog
         ValidateManifests(selected);
         ValidateDependencies(selectedById);
         var ordered = OrderByDependencies(selectedById);
-        ValidateCapabilities(profile, ordered);
+        ValidateProductionCapabilityPolicy(profile);
+        var capabilities = ResolveCapabilities(profile, ordered);
 
         var operations = ResolveOperations(ordered);
         var routes = ResolveRoutes(ordered, hasProductionIdentity);
         var resources = ResolveResources(ordered);
         ValidateResourceLinks(ordered, resources);
-        var diagnostics = CreateDiagnostics(profile, ordered, routes, resources);
+        var diagnostics = CreateDiagnostics(profile, ordered, routes, resources, capabilities);
 
         return new ResolvedExtensionGraph(
             profile.Name,
@@ -131,6 +151,7 @@ internal sealed class ExtensionCatalog
             operations,
             routes,
             resources,
+            capabilities,
             diagnostics);
     }
 
@@ -256,13 +277,14 @@ internal sealed class ExtensionCatalog
         }
     }
 
-    private static void ValidateCapabilities(
+    private static ImmutableArray<ResolvedCapability> ResolveCapabilities(
         ServerProfile profile,
         IReadOnlyList<ExtensionManifest> manifests)
     {
         var grants = profile.Grants
             .Select(grant => grant.Name)
             .ToHashSet(StringComparer.Ordinal);
+        var resolved = new List<ResolvedCapability>();
         var selections = profile.Extensions.ToDictionary(
             extension => extension.Id,
             StringComparer.OrdinalIgnoreCase);
@@ -271,19 +293,72 @@ internal sealed class ExtensionCatalog
         {
             var requested = manifest.RequestedCapabilities
                 .Concat(selections[manifest.Id].RequestedCapabilities)
-                .Where(request => request.IsRequired)
-                .Select(request => request.Name)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal);
+                .GroupBy(request => request.Name, StringComparer.Ordinal)
+                .Select(group => new CapabilityRequest(
+                    group.Key,
+                    group.Any(request => request.IsRequired)))
+                .OrderBy(request => request.Name, StringComparer.Ordinal);
             foreach (var capability in requested)
             {
-                if (!grants.Contains(capability))
+                var granted = grants.Contains(capability.Name);
+                if (capability.IsRequired && !granted)
                 {
                     throw Failure(
                         "missing-capability-grant",
-                        $"Extension '{manifest.Id}' requires ungranted capability '{capability}'.");
+                        $"Extension '{manifest.Id}' requires ungranted capability " +
+                        $"'{capability.Name}'.");
                 }
+
+                resolved.Add(new ResolvedCapability(
+                    capability.Name,
+                    manifest.Id,
+                    capability.IsRequired,
+                    granted));
             }
+        }
+
+        return [.. resolved];
+    }
+
+    private static void ValidateProductionCapabilityPolicy(ServerProfile profile)
+    {
+        var granted = profile.Grants.Select(grant => grant.Name).ToHashSet(StringComparer.Ordinal);
+        if (profile.Kind == ServerProfileKind.Embedded)
+        {
+            string[] embeddedDenied =
+            [
+                BuiltInCapabilityNames.OutboundHttp,
+                BuiltInCapabilityNames.SecretsResolveReference,
+                BuiltInCapabilityNames.SidecarExecution
+            ];
+            var embeddedViolation = embeddedDenied.FirstOrDefault(granted.Contains);
+            if (embeddedViolation is not null)
+            {
+                throw Failure(
+                    "embedded-capability-denied",
+                    $"Embedded profile cannot grant capability '{embeddedViolation}'.");
+            }
+        }
+
+        if (profile.Kind != ServerProfileKind.Production)
+        {
+            return;
+        }
+
+        string[] denied =
+        [
+            BuiltInCapabilityNames.TestInstrumentation,
+            BuiltInCapabilityNames.ControlConfigure,
+            BuiltInCapabilityNames.ControlQuery,
+            BuiltInCapabilityNames.SecretsResolveReference,
+            BuiltInCapabilityNames.SidecarExecution
+        ];
+        var violation = denied.FirstOrDefault(granted.Contains);
+        if (violation is not null)
+        {
+            throw Failure(
+                "production-capability-denied",
+                $"Production profile cannot grant capability '{violation}'.");
         }
     }
 
@@ -410,7 +485,8 @@ internal sealed class ExtensionCatalog
         ServerProfile profile,
         IReadOnlyList<ExtensionManifest> manifests,
         ImmutableArray<ResolvedRoute> routes,
-        ImmutableArray<ResolvedServiceIndexResource> resources)
+        ImmutableArray<ResolvedServiceIndexResource> resources,
+        ImmutableArray<ResolvedCapability> resolvedCapabilities)
     {
         var builder = new StringBuilder();
         builder.Append("profile=").Append(profile.Name).Append('\n');
@@ -435,12 +511,21 @@ internal sealed class ExtensionCatalog
                 .Select(resource => resource.ResourceType)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
+            var omittedOptional = resolvedCapabilities
+                .Where(capability =>
+                    capability.ExtensionId == manifest.Id &&
+                    !capability.IsRequired &&
+                    !capability.IsGranted)
+                .Select(capability => capability.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
 
             builder.Append("extension=").Append(manifest.Id)
                 .Append(" version=").Append(manifest.Version)
                 .Append(" capabilities=").Append(ListOrDash(capabilities))
                 .Append(" routes=").Append(ListOrDash(ownedRoutes))
                 .Append(" resources=").Append(ListOrDash(ownedResources))
+                .Append(" omitted-optional=").Append(ListOrDash(omittedOptional))
                 .Append('\n');
         }
 
@@ -510,7 +595,13 @@ internal static class BuiltInExtensionCatalog
                     "SearchQueryService/3.5.0",
                     ["PackageBaseAddress/3.0.0", "RegistrationsBaseUrl/3.6.0"])
             ],
-            capabilities: [Required(BuiltInCapabilityNames.PackagesRead)]),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.PackagesIdentityRead),
+                Required(BuiltInCapabilityNames.PackagesMetadataRead),
+                Required(BuiltInCapabilityNames.PackagesContentRead),
+                Required(BuiltInCapabilityNames.VulnerabilityStateRead)
+            ]),
         Manifest(
             BuiltInExtensionIds.Publication,
             dependencies: [Dependency(BuiltInExtensionIds.Protocol)],
@@ -530,7 +621,16 @@ internal static class BuiltInExtensionCatalog
                 new("PackagePublish/2.0.0", []),
                 new("SymbolPackagePublish/4.9.0", [])
             ],
-            capabilities: [Required(BuiltInCapabilityNames.PackagesWrite)]),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.PackagesMetadataRead),
+                Required(BuiltInCapabilityNames.PackagesContentWrite),
+                Required(BuiltInCapabilityNames.PackagesPublish),
+                Required(BuiltInCapabilityNames.PackagesUnlist),
+                Required(BuiltInCapabilityNames.PackagesRelist),
+                Required(BuiltInCapabilityNames.PackagesDelete),
+                Required(BuiltInCapabilityNames.EventsPublish)
+            ]),
         Manifest(
             BuiltInExtensionIds.Vulnerabilities,
             operations: Operations(OperationFamily.Vulnerabilities),
@@ -540,7 +640,8 @@ internal static class BuiltInExtensionCatalog
                     "/v3/vulnerabilities/index.json",
                     "/v3/vulnerabilities/{snapshotId}/{pageName}.json")
             ],
-            resources: [new("VulnerabilityInfo/6.7.0", [])]),
+            resources: [new("VulnerabilityInfo/6.7.0", [])],
+            capabilities: [Required(BuiltInCapabilityNames.VulnerabilityStateRead)]),
         Manifest(
             BuiltInExtensionIds.TestControl,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
@@ -561,7 +662,19 @@ internal static class BuiltInExtensionCatalog
                 new("POST", "/__test/faults"),
                 new("DELETE", "/__test/faults")
             ],
-            capabilities: [Required(BuiltInCapabilityNames.TestInstrumentation)]),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.PackagesMetadataRead),
+                Required(BuiltInCapabilityNames.PackagesMetadataWrite),
+                Required(BuiltInCapabilityNames.PackagesContentWrite),
+                Required(BuiltInCapabilityNames.PackagesPublish),
+                Required(BuiltInCapabilityNames.PackagesUnlist),
+                Required(BuiltInCapabilityNames.PackagesRelist),
+                Required(BuiltInCapabilityNames.PackagesDelete),
+                Required(BuiltInCapabilityNames.ControlConfigure),
+                Required(BuiltInCapabilityNames.ControlQuery),
+                Required(BuiltInCapabilityNames.EventsPublish)
+            ]),
         Manifest(
             BuiltInExtensionIds.DurableStorage,
             capabilities: [Required(BuiltInCapabilityNames.DurableStorage)]),
@@ -579,7 +692,12 @@ internal static class BuiltInExtensionCatalog
                 new("GET", "/health/storage"),
                 new("GET", "/__test/health")
             ],
-            capabilities: [Required(BuiltInCapabilityNames.Operations)]),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.OperationsQuery),
+                Required(BuiltInCapabilityNames.BackupInvoke),
+                Required(BuiltInCapabilityNames.RestoreInvoke)
+            ]),
         Manifest(
             BuiltInExtensionIds.SupplyChain,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
@@ -590,7 +708,11 @@ internal static class BuiltInExtensionCatalog
                 new("GET", "/__admin/supply-chain/audit"),
                 new("GET", "/__admin/packages/{id}/{version}/validations")
             ],
-            capabilities: [Required(BuiltInCapabilityNames.SupplyChainPolicy)]),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.ModerationRead),
+                Required(BuiltInCapabilityNames.ModerationDecide)
+            ]),
         Manifest(
             BuiltInExtensionIds.VulnerabilityRefresh,
             dependencies: [Dependency(BuiltInExtensionIds.Vulnerabilities)],

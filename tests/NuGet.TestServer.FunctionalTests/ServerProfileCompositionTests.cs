@@ -183,7 +183,7 @@ public sealed class ServerProfileCompositionTests
         var invalidProfile = ServerProfiles.Embedded with
         {
             Grants = ServerProfiles.Embedded.Grants.RemoveAll(
-                grant => grant.Name == BuiltInCapabilityNames.PackagesRead)
+                grant => grant.Name == BuiltInCapabilityNames.PackagesMetadataRead)
         };
         var exception = Assert.Throws<ServerHostingConfigurationException>(
             () => ServerComposition.Create(invalidProfile));

@@ -1,10 +1,7 @@
-using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
-using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
-using NuGet.TestServer.Requests;
-using NuGet.TestServer.Vulnerabilities;
 
 namespace NuGet.TestServer.Kernel;
 
@@ -16,13 +13,13 @@ namespace NuGet.TestServer.Kernel;
 internal static class BuiltInOperationOwners
 {
     public static OperationRegistry CreateRegistry(
-        IServiceProvider services,
+        CapabilityBroker broker,
         ResolvedExtensionGraph graph,
-        ServerComposition composition)
+        PackageTransferLimits limits)
     {
-        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(graph);
-        ArgumentNullException.ThrowIfNull(composition);
+        ArgumentNullException.ThrowIfNull(limits);
         var builder = new OperationRegistryBuilder();
         var selected = graph.Extensions
             .Select(extension => extension.Id)
@@ -30,56 +27,71 @@ internal static class BuiltInOperationOwners
 
         if (selected.Contains(BuiltInExtensionIds.Protocol))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.Protocol);
+            var packages = capabilities.GetRequired<IPackageReadCapability>(
+                BuiltInCapabilityNames.PackagesMetadataRead);
             new ProtocolReadOperations(
-                services.GetRequiredService<IPackageStore>(),
-                services.GetRequiredService<IPackageCandidateStore>(),
-                services.GetRequiredService<PackageVisibilityPolicy>()).Register(builder);
+                packages).Register(builder);
             new RegistrationSearchOperations(
-                services.GetRequiredService<IPackageStore>(),
-                services.GetRequiredService<IPackageCandidateStore>(),
-                services.GetRequiredService<PackageVisibilityPolicy>(),
-                services.GetRequiredService<VulnerabilitySnapshotProvider>()).Register(builder);
+                packages,
+                capabilities.GetRequired<IVulnerabilityReadCapability>(
+                    BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.Publication))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.Publication);
             new PublicationOperations(
-                services.GetRequiredService<IPackageStore>(),
-                services.GetRequiredService<PackageSupplyChainService>(),
-                services.GetRequiredService<ServerDiagnostics>(),
-                services.GetRequiredService<PackageTransferLimits>()).Register(builder);
+                capabilities.GetRequired<IPackageReadCapability>(
+                    BuiltInCapabilityNames.PackagesMetadataRead),
+                capabilities.GetRequired<IPackageMutationCapability>(
+                    BuiltInCapabilityNames.PackagesContentWrite),
+                capabilities.GetRequired<IPublicationCapability>(
+                    BuiltInCapabilityNames.PackagesPublish),
+                capabilities.GetRequired<ITypedEventPublisher>(
+                    BuiltInCapabilityNames.EventsPublish),
+                limits).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.Vulnerabilities))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.Vulnerabilities);
             new VulnerabilityOperations(
-                services.GetRequiredService<VulnerabilitySnapshotProvider>()).Register(builder);
+                capabilities.GetRequired<IVulnerabilityReadCapability>(
+                    BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.SupplyChain))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.SupplyChain);
             new ModerationOperations(
-                services.GetRequiredService<PackageSupplyChainService>()).Register(builder);
+                capabilities.GetRequired<IModerationCapability>(
+                    BuiltInCapabilityNames.ModerationRead)).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.TestControl))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.TestControl);
             new ControlOperations(
-                services.GetRequiredService<IPackageStore>(),
-                services.GetRequiredService<PackageSupplyChainService>(),
-                services.GetRequiredService<FaultRuleStore>(),
-                services.GetRequiredService<RequestRecorder>(),
-                services.GetRequiredService<ServerDiagnostics>(),
-                services.GetRequiredService<PackageTransferLimits>()).Register(builder);
+                capabilities.GetRequired<IPackageReadCapability>(
+                    BuiltInCapabilityNames.PackagesMetadataRead),
+                capabilities.GetRequired<IPackageMutationCapability>(
+                    BuiltInCapabilityNames.PackagesMetadataWrite),
+                capabilities.GetRequired<IPublicationCapability>(
+                    BuiltInCapabilityNames.PackagesPublish),
+                capabilities.GetRequired<IControlInstrumentationCapability>(
+                    BuiltInCapabilityNames.ControlQuery),
+                capabilities.GetRequired<ITypedEventPublisher>(
+                    BuiltInCapabilityNames.EventsPublish),
+                limits).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.Operations))
         {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.Operations);
             new ServerOperationsOperations(
-                services.GetRequiredService<StorageHealth>(),
-                services.GetRequiredService<ServerDiagnostics>(),
-                composition.Hosting,
-                composition.StorageDirectory).Register(builder);
+                capabilities.GetRequired<IServerOperationsCapability>(
+                    BuiltInCapabilityNames.OperationsQuery)).Register(builder);
         }
 
         return builder.Build(graph);

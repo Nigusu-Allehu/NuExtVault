@@ -1,0 +1,1736 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using NuGet.Packaging;
+using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Faults;
+using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Operations;
+using NuGet.TestServer.Packages;
+using NuGet.TestServer.Requests;
+using NuGet.TestServer.Vulnerabilities;
+
+namespace NuGet.TestServer.Kernel.Capabilities;
+
+internal interface ICapabilityHandleIdentity
+{
+    string HostInstanceId { get; }
+
+    string OwnerId { get; }
+}
+
+internal enum CapabilityCallOutcome
+{
+    Succeeded,
+    Failed,
+    Cancelled,
+    QuotaExceeded
+}
+
+internal sealed record CapabilityAuditEntry(
+    long Sequence,
+    DateTimeOffset Timestamp,
+    string HostInstanceId,
+    string OwnerId,
+    string? OperationId,
+    string CapabilityName,
+    string Action,
+    CapabilityCallOutcome Outcome);
+
+internal sealed class CapabilityAuditLog
+{
+    private const int Capacity = 4096;
+    private readonly ConcurrentQueue<CapabilityAuditEntry> _entries = new();
+    private int _count;
+    private long _droppedCount;
+    private long _sequence;
+
+    public IReadOnlyList<CapabilityAuditEntry> Entries => _entries.ToArray();
+
+    public long DroppedCount => Interlocked.Read(ref _droppedCount);
+
+    internal void Record(
+        string hostInstanceId,
+        string ownerId,
+        string capabilityName,
+        string action,
+        CapabilityCallOutcome outcome)
+    {
+        _entries.Enqueue(new CapabilityAuditEntry(
+            Interlocked.Increment(ref _sequence),
+            DateTimeOffset.UtcNow,
+            hostInstanceId,
+            ownerId,
+            CapabilityOperationAttribution.Current,
+            capabilityName,
+            action,
+            outcome));
+        if (Interlocked.Increment(ref _count) <= Capacity)
+        {
+            return;
+        }
+
+        if (_entries.TryDequeue(out _))
+        {
+            Interlocked.Decrement(ref _count);
+            Interlocked.Increment(ref _droppedCount);
+        }
+    }
+}
+
+internal static class CapabilityOperationAttribution
+{
+    private static readonly AsyncLocal<string?> CurrentOperation = new();
+
+    public static string? Current => CurrentOperation.Value;
+
+    public static IDisposable Enter(string operationId)
+    {
+        var previous = CurrentOperation.Value;
+        CurrentOperation.Value = operationId;
+        return new Scope(previous);
+    }
+
+    private sealed class Scope(string? previous) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                CurrentOperation.Value = previous;
+            }
+        }
+    }
+}
+
+internal sealed record CapabilityLimits(
+    int MaximumConcurrentCalls = 64,
+    long MaximumStreamBytes = 256L * 1024 * 1024)
+{
+    public CapabilityLimits Validate()
+    {
+        if (MaximumConcurrentCalls <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaximumConcurrentCalls),
+                "Capability concurrency must be positive.");
+        }
+
+        if (MaximumStreamBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaximumStreamBytes),
+                "Capability stream limits must be positive.");
+        }
+
+        return this;
+    }
+}
+
+internal sealed class CapabilityDeniedException(string ownerId, string capabilityName)
+    : InvalidOperationException(
+        $"Owner '{ownerId}' was denied undeclared or ungranted capability '{capabilityName}'.")
+{
+    public string OwnerId { get; } = ownerId;
+
+    public string CapabilityName { get; } = capabilityName;
+}
+
+internal sealed class CapabilityQuotaExceededException(string capabilityName)
+    : InvalidOperationException($"Capability '{capabilityName}' exceeded its concurrency quota.");
+
+internal sealed class CapabilityStreamLimitExceededException(
+    long declaredLength,
+    long maximumLength)
+    : InvalidOperationException(
+        $"Capability stream length '{declaredLength}' exceeds limit '{maximumLength}'.")
+{
+    public long DeclaredLength { get; } = declaredLength;
+
+    public long MaximumLength { get; } = maximumLength;
+}
+
+internal static class CapabilityStreams
+{
+    public static Stream Bound(Stream source, long declaredLength, long maximumLength)
+        => Bound(source, declaredLength, maximumLength, CancellationToken.None, null);
+
+    internal static Stream Bound(
+        Stream source,
+        long declaredLength,
+        long maximumLength,
+        CancellationToken cancellationToken,
+        Action<CapabilityCallOutcome>? completed)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (declaredLength < 0 || declaredLength > maximumLength)
+        {
+            throw new CapabilityStreamLimitExceededException(declaredLength, maximumLength);
+        }
+
+        return new BoundedCapabilityReadStream(
+            source,
+            maximumLength,
+            cancellationToken,
+            completed);
+    }
+}
+
+internal sealed class BoundedCapabilityReadStream(
+    Stream inner,
+    long maximumLength,
+    CancellationToken cancellationToken,
+    Action<CapabilityCallOutcome>? completed) : Stream
+{
+    private long _read;
+    private int _completed;
+
+    public override bool CanRead => inner.CanRead;
+    public override bool CanSeek => inner.CanSeek;
+    public override bool CanWrite => false;
+    public override long Length => Math.Min(inner.Length, maximumLength);
+    public override long Position
+    {
+        get => inner.Position;
+        set => inner.Position = value;
+    }
+
+    public override void Flush() => inner.Flush();
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            return Track(inner.Read(buffer, offset, count));
+        }
+        catch (OperationCanceledException)
+        {
+            Complete(CapabilityCallOutcome.Cancelled);
+            throw;
+        }
+        catch
+        {
+            Complete(CapabilityCallOutcome.Failed);
+            throw;
+        }
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken token = default)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            token);
+        try
+        {
+            return Track(await inner.ReadAsync(buffer, linked.Token));
+        }
+        catch (OperationCanceledException)
+        {
+            Complete(CapabilityCallOutcome.Cancelled);
+            throw;
+        }
+        catch
+        {
+            Complete(CapabilityCallOutcome.Failed);
+            throw;
+        }
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) =>
+        throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            inner.Dispose();
+            Complete(CapabilityCallOutcome.Succeeded);
+        }
+
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await inner.DisposeAsync();
+        Complete(CapabilityCallOutcome.Succeeded);
+        GC.SuppressFinalize(this);
+    }
+
+    private int Track(int count)
+    {
+        _read += count;
+        if (_read > maximumLength)
+        {
+            Complete(CapabilityCallOutcome.Failed);
+            throw new CapabilityStreamLimitExceededException(_read, maximumLength);
+        }
+
+        if (count == 0)
+        {
+            Complete(CapabilityCallOutcome.Succeeded);
+        }
+
+        return count;
+    }
+
+    private void Complete(CapabilityCallOutcome outcome)
+    {
+        if (Interlocked.Exchange(ref _completed, 1) == 0)
+        {
+            completed?.Invoke(outcome);
+        }
+    }
+}
+
+internal sealed class CapabilityCallGate
+{
+    private readonly string _hostInstanceId;
+    private readonly string _ownerId;
+    private readonly string _capabilityName;
+    private readonly CapabilityAuditLog _audit;
+    private readonly CapabilityLimits _limits;
+    private int _activeCalls;
+
+    public CapabilityCallGate(
+        string hostInstanceId,
+        string ownerId,
+        string capabilityName,
+        CapabilityAuditLog audit,
+        CapabilityLimits limits)
+    {
+        _hostInstanceId = hostInstanceId;
+        _ownerId = ownerId;
+        _capabilityName = capabilityName;
+        _audit = audit;
+        _limits = limits.Validate();
+    }
+
+    public async ValueTask<T> InvokeAsync<T>(
+        string action,
+        Func<CancellationToken, ValueTask<T>> callback,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested)
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Cancelled);
+            token.ThrowIfCancellationRequested();
+        }
+        if (Interlocked.Increment(ref _activeCalls) > _limits.MaximumConcurrentCalls)
+        {
+            Interlocked.Decrement(ref _activeCalls);
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.QuotaExceeded);
+            throw new CapabilityQuotaExceededException(_capabilityName);
+        }
+
+        try
+        {
+            var result = await callback(token);
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Succeeded);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Cancelled);
+            throw;
+        }
+        catch
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Failed);
+            throw;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeCalls);
+        }
+    }
+
+    public Stream LeaseStream(
+        string action,
+        Stream source,
+        long declaredLength,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested)
+        {
+            source.Dispose();
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Cancelled);
+            token.ThrowIfCancellationRequested();
+        }
+
+        if (Interlocked.Increment(ref _activeCalls) > _limits.MaximumConcurrentCalls)
+        {
+            Interlocked.Decrement(ref _activeCalls);
+            source.Dispose();
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.QuotaExceeded);
+            throw new CapabilityQuotaExceededException(_capabilityName);
+        }
+
+        try
+        {
+            return CapabilityStreams.Bound(
+                source,
+                declaredLength,
+                _limits.MaximumStreamBytes,
+                token,
+                outcome =>
+                {
+                    _audit.Record(
+                        _hostInstanceId,
+                        _ownerId,
+                        _capabilityName,
+                        action,
+                        outcome);
+                    Interlocked.Decrement(ref _activeCalls);
+                });
+        }
+        catch
+        {
+            Interlocked.Decrement(ref _activeCalls);
+            source.Dispose();
+            throw;
+        }
+    }
+}
+
+internal interface IPackageReadCapability
+{
+    ValueTask<IReadOnlyList<CapabilityPackageMetadata>> GetAllAsync(CancellationToken token);
+
+    ValueTask<IReadOnlyList<CapabilityPackageMetadata>> FindByIdAsync(
+        string id,
+        CancellationToken token);
+
+    ValueTask<IReadOnlyList<CapabilityPackageMetadata>> FindReadableStoredByIdAsync(
+        string id,
+        PackageResourceClass resourceClass,
+        CancellationToken token);
+
+    ValueTask<CapabilityPackageMetadata?> FindReadableAsync(
+        string id,
+        string version,
+        PackageResourceClass resourceClass,
+        CancellationToken token);
+
+    ValueTask<CapabilityPackageMetadata?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token);
+
+    ValueTask<CapabilityPackageSearchPage> SearchAsync(
+        string query,
+        bool includePrerelease,
+        int skip,
+        int take,
+        string? packageType,
+        CancellationToken token);
+
+    ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token);
+
+    ValueTask<CapabilityPackageContent?> OpenContentAsync(
+        string id,
+        string version,
+        PackageResourceClass resourceClass,
+        CancellationToken token);
+
+}
+
+internal sealed record CapabilityPackageMetadata(
+    string Id,
+    NuGet.Versioning.NuGetVersion Version,
+    string NormalizedVersion,
+    ReadOnlyMemory<byte> NuspecContent,
+    string Description,
+    string Summary,
+    string Title,
+    string Authors,
+    string Tags,
+    Uri? ProjectUrl,
+    string Readme,
+    string Icon,
+    string LicenseExpression,
+    string LicenseFile,
+    Uri? LicenseUrl,
+    IReadOnlyList<PackageTypeMetadata> EffectivePackageTypes,
+    RepositoryMetadata? Repository,
+    string PackageHash,
+    PackageRepositoryMetadata RepositoryMetadata,
+    IReadOnlyList<PackageDependencyGroup> DependencyGroups,
+    DateTimeOffset Published,
+    bool IsListed);
+
+internal sealed record CapabilityPackageSearchPage(
+    int TotalHits,
+    IReadOnlyList<CapabilityPackageSearchItem> Items);
+
+internal sealed record CapabilityPackageSearchItem(
+    CapabilityPackageMetadata Package,
+    IReadOnlyList<CapabilityPackageMetadata> Versions);
+
+internal sealed record CapabilityPackageContent(
+    Stream Stream,
+    string Sha512,
+    long Length);
+
+internal interface IPackageMutationCapability
+{
+    ValueTask AddSymbolAsync(byte[] content, CancellationToken token);
+
+    ValueTask<bool> DeleteAsync(string id, string version, CancellationToken token);
+
+    ValueTask<bool> SetListedAsync(string id, string version, bool listed, CancellationToken token);
+
+    ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token);
+}
+
+internal interface IPublicationCapability
+{
+    ValueTask<PackagePublicationResult> PublishAsync(
+        PackagePublicationRequest request,
+        CancellationToken token);
+
+    ValueTask AddAsync(TestPackage package, CancellationToken token);
+
+    ValueTask ResetAsync(CancellationToken token);
+
+    ValueTask<bool> DeleteControlledAsync(
+        string id,
+        string version,
+        string actor,
+        string reason,
+        CancellationToken token);
+
+    ValueTask<string?> GetOwnerAsync(string packageId, CancellationToken token);
+}
+
+internal interface IModerationCapability
+{
+    ValueTask<bool> ModerateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        string actor,
+        string reason,
+        CancellationToken token);
+
+    ValueTask<bool> DeleteControlledAsync(
+        string id,
+        string version,
+        string actor,
+        string reason,
+        CancellationToken token);
+
+    ValueTask<IReadOnlyList<PackageSupplyChainAudit>> GetAuditHistoryAsync(
+        CancellationToken token);
+
+    ValueTask<IReadOnlyList<PackageValidationRecord>> GetValidationResultsAsync(
+        string id,
+        string version,
+        CancellationToken token);
+}
+
+internal interface IControlInstrumentationCapability
+{
+    int FaultCapacity { get; }
+
+    int RequestCapacity { get; }
+
+    long EvictedRequestCount { get; }
+
+    ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token);
+
+    ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token);
+
+    ValueTask ClearFaultsAsync(CancellationToken token);
+
+    ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token);
+
+    ValueTask ClearRequestsAsync(CancellationToken token);
+}
+
+internal sealed record CapabilityStorageReport(
+    bool Ready,
+    string Status,
+    string Dependency,
+    string? Reason,
+    int PackageCount,
+    long StorageBytes,
+    int VulnerabilitySnapshotCount,
+    int VulnerabilitySnapshotRetentionLimit);
+
+internal sealed record CapabilityDiagnosticsSnapshot(
+    long RequestCount,
+    long FailedRequestCount,
+    long PublishedPackageCount,
+    long StorageFailureCount);
+
+internal interface IServerOperationsCapability
+{
+    string Mode { get; }
+
+    ValueTask<CapabilityStorageReport> GetReadinessAsync(CancellationToken token);
+
+    ValueTask<CapabilityStorageReport> GetStorageReportAsync(CancellationToken token);
+
+    ValueTask<CapabilityDiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken token);
+
+    ValueTask<StorageBackupManifest?> CreateBackupAsync(
+        OperationExecutionContext context,
+        StreamHandle destination,
+        CancellationToken token);
+
+    ValueTask<StorageBackupManifest?> RestoreAsync(
+        OperationExecutionContext context,
+        StreamHandle source,
+        CancellationToken token);
+}
+
+internal interface IVulnerabilityReadCapability
+{
+    VulnerabilitySnapshot Active { get; }
+
+    bool TryGet(string snapshotId, out VulnerabilitySnapshot? snapshot);
+}
+
+internal enum KernelEventKind
+{
+    PackagePublished
+}
+
+internal interface ITypedEventPublisher
+{
+    ValueTask PublishAsync(KernelEventKind kind, CancellationToken token);
+}
+
+internal interface IExtensionStateCapability
+{
+    ValueTask<T?> ReadAsync<T>(string key, CancellationToken token);
+
+    ValueTask WriteAsync<T>(string key, T value, CancellationToken token);
+}
+
+internal interface IBackupParticipationCapability
+{
+    ValueTask ContributeAsync(string logicalName, Stream content, CancellationToken token);
+}
+
+internal interface IOutboundHttpCapability
+{
+    ValueTask<OutboundHttpResponse> SendAsync(
+        OutboundHttpRequest request,
+        CancellationToken token);
+}
+
+internal interface ISecretReferenceCapability
+{
+    ValueTask<SecretReferenceHandle> ResolveReferenceAsync(
+        string reference,
+        CancellationToken token);
+}
+
+internal sealed record OutboundHttpRequest(
+    Uri Uri,
+    string Method,
+    ImmutableDictionary<string, string> Headers,
+    long MaximumResponseBytes);
+
+internal sealed class OutboundHttpResponse(
+    int statusCode,
+    ImmutableDictionary<string, string> headers,
+    ImmutableArray<string> contentEncodings,
+    long? contentLength,
+    Stream content) : IAsyncDisposable
+{
+    public int StatusCode { get; } = statusCode;
+
+    public ImmutableDictionary<string, string> Headers { get; } = headers;
+
+    public ImmutableArray<string> ContentEncodings { get; } = contentEncodings;
+
+    public long? ContentLength { get; } = contentLength;
+
+    public Stream Content { get; } = content;
+
+    public ValueTask DisposeAsync() => Content.DisposeAsync();
+}
+
+internal sealed record SecretReferenceHandle(string Id);
+
+internal static class BuiltInOwnerCapabilityRequirements
+{
+    public static IReadOnlyDictionary<string, ImmutableArray<string>> All { get; } =
+        new Dictionary<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [BuiltInExtensionIds.Protocol] =
+            [
+                BuiltInCapabilityNames.PackagesIdentityRead,
+                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesContentRead,
+                BuiltInCapabilityNames.VulnerabilityStateRead
+            ],
+            [BuiltInExtensionIds.Publication] =
+            [
+                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesContentWrite,
+                BuiltInCapabilityNames.PackagesPublish,
+                BuiltInCapabilityNames.PackagesUnlist,
+                BuiltInCapabilityNames.PackagesRelist,
+                BuiltInCapabilityNames.PackagesDelete,
+                BuiltInCapabilityNames.EventsPublish
+            ],
+            [BuiltInExtensionIds.Vulnerabilities] =
+            [
+                BuiltInCapabilityNames.VulnerabilityStateRead
+            ],
+            [BuiltInExtensionIds.SupplyChain] =
+            [
+                BuiltInCapabilityNames.ModerationRead,
+                BuiltInCapabilityNames.ModerationDecide
+            ],
+            [BuiltInExtensionIds.TestControl] =
+            [
+                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesMetadataWrite,
+                BuiltInCapabilityNames.PackagesContentWrite,
+                BuiltInCapabilityNames.PackagesPublish,
+                BuiltInCapabilityNames.PackagesUnlist,
+                BuiltInCapabilityNames.PackagesRelist,
+                BuiltInCapabilityNames.PackagesDelete,
+                BuiltInCapabilityNames.ControlConfigure,
+                BuiltInCapabilityNames.ControlQuery,
+                BuiltInCapabilityNames.EventsPublish
+            ],
+            [BuiltInExtensionIds.Operations] =
+            [
+                BuiltInCapabilityNames.OperationsQuery,
+                BuiltInCapabilityNames.BackupInvoke,
+                BuiltInCapabilityNames.RestoreInvoke
+            ]
+        };
+}
+
+internal sealed class CapabilityBroker
+{
+    private readonly string _hostInstanceId;
+    private readonly ResolvedExtensionGraph _graph;
+    private readonly CapabilityAuditLog _audit;
+    private readonly CapabilityLimits _limits;
+    private readonly CapabilityServices _services;
+    private readonly ConcurrentDictionary<string, CapabilityOwnerContext> _contexts =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public CapabilityBroker(
+        string hostInstanceId,
+        ResolvedExtensionGraph graph,
+        CapabilityAuditLog audit,
+        CapabilityLimits limits,
+        CapabilityServices services)
+    {
+        _hostInstanceId = hostInstanceId;
+        _graph = graph;
+        _audit = audit;
+        _limits = limits.Validate();
+        _services = services;
+    }
+
+    public CapabilityOwnerContext ForOwner(string ownerId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
+        if (!_graph.Extensions.Any(extension =>
+                string.Equals(extension.Id, ownerId, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new CapabilityDeniedException(ownerId, "<owner-not-active>");
+        }
+
+        return _contexts.GetOrAdd(
+            ownerId,
+            static (id, state) => new CapabilityOwnerContext(
+                state.HostInstanceId,
+                id,
+                state.Graph.Capabilities
+                    .Where(capability =>
+                        capability.IsGranted &&
+                        string.Equals(capability.ExtensionId, id, StringComparison.OrdinalIgnoreCase))
+                    .Select(capability => capability.Name)
+                    .ToImmutableHashSet(StringComparer.Ordinal),
+                state.Audit,
+                state.Limits,
+                state.Services),
+            (HostInstanceId: _hostInstanceId, Graph: _graph, Audit: _audit, Limits: _limits, Services: _services));
+    }
+}
+
+internal sealed class CapabilityOwnerContext
+{
+    private readonly string _hostInstanceId;
+    private readonly string _ownerId;
+    private readonly ImmutableHashSet<string> _grants;
+    private readonly CapabilityAuditLog _audit;
+    private readonly CapabilityLimits _limits;
+    private readonly CapabilityServices _services;
+    private readonly ConcurrentDictionary<Type, object> _handles = new();
+
+    internal CapabilityOwnerContext(
+        string hostInstanceId,
+        string ownerId,
+        ImmutableHashSet<string> grants,
+        CapabilityAuditLog audit,
+        CapabilityLimits limits,
+        CapabilityServices services)
+    {
+        _hostInstanceId = hostInstanceId;
+        _ownerId = ownerId;
+        _grants = grants;
+        _audit = audit;
+        _limits = limits;
+        _services = services;
+    }
+
+    public IReadOnlyCollection<string> GrantedCapabilities => _grants;
+
+    public T GetRequired<T>(string capabilityName) where T : class
+    {
+        if (!_grants.Contains(capabilityName) ||
+            !CapabilityContracts.Supports(typeof(T), capabilityName))
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                capabilityName,
+                "acquire",
+                CapabilityCallOutcome.Failed);
+            throw new CapabilityDeniedException(_ownerId, capabilityName);
+        }
+
+        var handle = _handles.GetOrAdd(typeof(T), _ => CreateHandle<T>());
+        return (T)handle;
+    }
+
+    private T CreateHandle<T>() where T : class
+    {
+        object handle = typeof(T) switch
+        {
+            var type when type == typeof(IPackageReadCapability) =>
+                new PackageReadCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.PackageCandidates,
+                    _services.Visibility),
+            var type when type == typeof(IPackageMutationCapability) =>
+                new PackageMutationCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore),
+            var type when type == typeof(IPublicationCapability) =>
+                new PublicationCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.SupplyChain),
+            var type when type == typeof(IModerationCapability) =>
+                new ModerationCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.SupplyChain),
+            var type when type == typeof(IControlInstrumentationCapability) =>
+                new ControlInstrumentationCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Faults,
+                    _services.Requests),
+            var type when type == typeof(IServerOperationsCapability) =>
+                new ServerOperationsCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Storage,
+                    _services.Diagnostics,
+                    _services.Hosting,
+                    _services.StorageDirectory),
+            var type when type == typeof(IVulnerabilityReadCapability) =>
+                new VulnerabilityReadCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Vulnerabilities),
+            var type when type == typeof(ITypedEventPublisher) =>
+                new TypedEventPublisher(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Diagnostics),
+            var type when type == typeof(IOutboundHttpCapability) =>
+                new OutboundHttpCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.OutboundHttpClient),
+            _ => throw new InvalidOperationException(
+                $"Capability handle type '{typeof(T).FullName}' is not available.")
+        };
+        return (T)handle;
+    }
+}
+
+internal static class CapabilityContracts
+{
+    private static readonly IReadOnlyDictionary<Type, ImmutableHashSet<string>> Names =
+        new Dictionary<Type, ImmutableHashSet<string>>
+        {
+            [typeof(IPackageReadCapability)] = Set(
+                BuiltInCapabilityNames.PackagesIdentityRead,
+                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesContentRead),
+            [typeof(IPackageMutationCapability)] = Set(
+                BuiltInCapabilityNames.PackagesMetadataWrite,
+                BuiltInCapabilityNames.PackagesContentWrite,
+                BuiltInCapabilityNames.PackagesUnlist,
+                BuiltInCapabilityNames.PackagesRelist,
+                BuiltInCapabilityNames.PackagesDelete),
+            [typeof(IPublicationCapability)] = Set(
+                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesPublish,
+                BuiltInCapabilityNames.PackagesDelete),
+            [typeof(IModerationCapability)] = Set(
+                BuiltInCapabilityNames.ModerationRead,
+                BuiltInCapabilityNames.ModerationDecide),
+            [typeof(IControlInstrumentationCapability)] = Set(
+                BuiltInCapabilityNames.ControlConfigure,
+                BuiltInCapabilityNames.ControlQuery),
+            [typeof(IServerOperationsCapability)] = Set(
+                BuiltInCapabilityNames.OperationsQuery,
+                BuiltInCapabilityNames.BackupInvoke,
+                BuiltInCapabilityNames.RestoreInvoke),
+            [typeof(IVulnerabilityReadCapability)] = Set(
+                BuiltInCapabilityNames.VulnerabilityStateRead),
+            [typeof(ITypedEventPublisher)] = Set(BuiltInCapabilityNames.EventsPublish),
+            [typeof(IExtensionStateCapability)] = Set(
+                BuiltInCapabilityNames.ExtensionStateRead,
+                BuiltInCapabilityNames.ExtensionStateWrite),
+            [typeof(IBackupParticipationCapability)] = Set(
+                BuiltInCapabilityNames.BackupContribute),
+            [typeof(IOutboundHttpCapability)] = Set(BuiltInCapabilityNames.OutboundHttp),
+            [typeof(ISecretReferenceCapability)] = Set(
+                BuiltInCapabilityNames.SecretsResolveReference)
+        };
+
+    public static bool Supports(Type type, string capabilityName) =>
+        Names.TryGetValue(type, out var names) && names.Contains(capabilityName);
+
+    private static ImmutableHashSet<string> Set(params string[] names) =>
+        names.ToImmutableHashSet(StringComparer.Ordinal);
+}
+
+internal sealed record CapabilityServices(
+    IPackageStore PackageStore,
+    IPackageCandidateStore PackageCandidates,
+    PackageVisibilityPolicy Visibility,
+    PackageSupplyChainService SupplyChain,
+    FaultRuleStore Faults,
+    RequestRecorder Requests,
+    StorageHealth Storage,
+    ServerDiagnostics Diagnostics,
+    ServerHostingOptions Hosting,
+    string? StorageDirectory,
+    VulnerabilitySnapshotProvider Vulnerabilities,
+    HttpClient OutboundHttpClient);
+
+internal abstract class CapabilityHandle : ICapabilityHandleIdentity
+{
+    private readonly ConcurrentDictionary<string, CapabilityCallGate> _gates =
+        new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CapabilityCallGate> _streamGates =
+        new(StringComparer.Ordinal);
+    private readonly ImmutableHashSet<string> _grants;
+    private readonly CapabilityAuditLog _audit;
+    private readonly CapabilityLimits _limits;
+
+    protected CapabilityHandle(
+        string hostInstanceId,
+        string ownerId,
+        ImmutableHashSet<string> grants,
+        CapabilityAuditLog audit,
+        CapabilityLimits limits)
+    {
+        HostInstanceId = hostInstanceId;
+        OwnerId = ownerId;
+        _grants = grants;
+        _audit = audit;
+        _limits = limits;
+    }
+
+    public string HostInstanceId { get; }
+
+    public string OwnerId { get; }
+
+    protected long MaximumStreamBytes => _limits.MaximumStreamBytes;
+
+    protected CapabilityCallGate Gate(string capabilityName)
+    {
+        if (!_grants.Contains(capabilityName))
+        {
+            _audit.Record(
+                HostInstanceId,
+                OwnerId,
+                capabilityName,
+                "invoke",
+                CapabilityCallOutcome.Failed);
+            throw new CapabilityDeniedException(OwnerId, capabilityName);
+        }
+
+        return _gates.GetOrAdd(
+            capabilityName,
+            name => new CapabilityCallGate(HostInstanceId, OwnerId, name, _audit, _limits));
+    }
+
+    protected CapabilityCallGate StreamGate(string capabilityName)
+    {
+        _ = Gate(capabilityName);
+        return _streamGates.GetOrAdd(
+            capabilityName,
+            name => new CapabilityCallGate(HostInstanceId, OwnerId, name, _audit, _limits));
+    }
+}
+
+internal sealed class PackageReadCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    IPackageStore store,
+    IPackageCandidateStore candidates,
+    PackageVisibilityPolicy visibility)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IPackageReadCapability
+{
+    public ValueTask<IReadOnlyList<CapabilityPackageMetadata>> GetAllAsync(
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "get-all",
+                async ct => Map(await store.GetAllAsync(ct)),
+                token);
+
+    public ValueTask<IReadOnlyList<CapabilityPackageMetadata>> FindByIdAsync(
+        string id,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "find-by-id",
+                async ct => Map(await store.FindByIdAsync(id, ct)),
+                token);
+
+    public ValueTask<IReadOnlyList<CapabilityPackageMetadata>> FindReadableStoredByIdAsync(
+        string id,
+        PackageResourceClass resourceClass,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "find-readable-stored-by-id",
+                async ct => Map(
+                    (await candidates.FindStoredByIdAsync(id, ct))
+                    .Where(package => visibility.CanRead(package, resourceClass))),
+                token);
+
+    public ValueTask<CapabilityPackageMetadata?> FindReadableAsync(
+        string id,
+        string version,
+        PackageResourceClass resourceClass,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesIdentityRead)
+            .InvokeAsync(
+                "find-readable",
+                async ct =>
+                {
+                    var package = await store.FindAsync(id, version, ct);
+                    return package is not null && visibility.CanRead(package, resourceClass)
+                        ? Map(package)
+                        : null;
+                },
+                token);
+
+    public ValueTask<CapabilityPackageMetadata?> FindStoredAsync(
+        string id,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "find-stored",
+                async ct =>
+                {
+                    var package = await store.FindStoredAsync(id, version, ct);
+                    return package is null ? null : Map(package);
+                },
+                token);
+
+    public ValueTask<CapabilityPackageSearchPage> SearchAsync(
+        string query,
+        bool includePrerelease,
+        int skip,
+        int take,
+        string? packageType,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "search",
+                async ct =>
+                {
+                    var page = await store.SearchAsync(
+                        query,
+                        includePrerelease,
+                        skip,
+                        take,
+                        ct,
+                        packageType);
+                    return new CapabilityPackageSearchPage(
+                        page.TotalHits,
+                        [
+                            .. page.Items.Select(item => new CapabilityPackageSearchItem(
+                                Map(item.Package),
+                                Map(item.Versions)))
+                        ]);
+                },
+                token);
+
+    public ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesContentRead)
+            .InvokeAsync(
+                "find-symbol",
+                async ct =>
+                {
+                    var content = await store.FindSymbolAsync(id, version, ct);
+                    if (content is not null && content.LongLength > MaximumStreamBytes)
+                    {
+                        throw new CapabilityStreamLimitExceededException(
+                            content.LongLength,
+                            MaximumStreamBytes);
+                    }
+
+                    return content;
+                },
+                token);
+
+    public ValueTask<CapabilityPackageContent?> OpenContentAsync(
+        string id,
+        string version,
+        PackageResourceClass resourceClass,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesContentRead)
+            .InvokeAsync(
+                "open-content",
+                async ct =>
+                {
+                    var package = await store.FindAsync(id, version, ct);
+                    if (package is null || !visibility.CanRead(package, resourceClass))
+                    {
+                        return null;
+                    }
+
+                    return new CapabilityPackageContent(
+                        StreamGate(BuiltInCapabilityNames.PackagesContentRead).LeaseStream(
+                            "consume-content",
+                            package.OpenReadStream(),
+                            package.ContentLength,
+                            ct),
+                        package.PackageHash,
+                        package.ContentLength);
+                },
+                token);
+
+    private static IReadOnlyList<CapabilityPackageMetadata> Map(
+        IEnumerable<TestPackage> packages) =>
+        [.. packages.Select(Map)];
+
+    private static CapabilityPackageMetadata Map(TestPackage package) =>
+        new(
+            package.Identity.Id,
+            package.Identity.Version,
+            package.NormalizedVersion,
+            package.NuspecContent,
+            package.Description,
+            package.Summary,
+            package.Title,
+            package.Authors,
+            package.Tags,
+            package.ProjectUrl,
+            package.Readme,
+            package.Icon,
+            package.LicenseExpression,
+            package.LicenseFile,
+            package.LicenseUrl,
+            package.EffectivePackageTypes,
+            package.Repository,
+            package.PackageHash,
+            package.RepositoryMetadata,
+            package.DependencyGroups,
+            package.Published,
+            package.IsListed);
+}
+
+internal sealed class PackageMutationCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    IPackageStore store)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IPackageMutationCapability
+{
+    public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.PackagesContentWrite)
+            .InvokeAsync(
+                "add-symbol",
+                async ct =>
+                {
+                    await store.AddSymbolAsync(content, ct);
+                    return true;
+                },
+                token);
+
+    public ValueTask<bool> DeleteAsync(string id, string version, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesDelete)
+            .InvokeAsync("delete", ct => store.DeleteAsync(id, version, ct), token);
+
+    public ValueTask<bool> SetListedAsync(
+        string id,
+        string version,
+        bool listed,
+        CancellationToken token) =>
+        Gate(listed
+                ? BuiltInCapabilityNames.PackagesRelist
+                : BuiltInCapabilityNames.PackagesUnlist)
+            .InvokeAsync(
+                listed ? "relist" : "unlist",
+                ct => store.SetListedAsync(id, version, listed, ct),
+                token);
+
+    public ValueTask<bool> SetRepositoryMetadataAsync(
+        string id,
+        string version,
+        PackageRepositoryMetadata metadata,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataWrite)
+            .InvokeAsync(
+                "set-repository-metadata",
+                ct => store.SetRepositoryMetadataAsync(id, version, metadata, ct),
+                token);
+}
+
+internal sealed class PublicationCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    PackageSupplyChainService supplyChain)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IPublicationCapability
+{
+    public ValueTask<PackagePublicationResult> PublishAsync(
+        PackagePublicationRequest request,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesPublish)
+            .InvokeAsync("publish", ct => supplyChain.PublishAsync(request, ct), token);
+
+    public async ValueTask AddAsync(TestPackage package, CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.PackagesPublish)
+            .InvokeAsync(
+                "add",
+                async ct =>
+                {
+                    await supplyChain.AddAsync(package, ct);
+                    return true;
+                },
+                token);
+
+    public async ValueTask ResetAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.PackagesDelete)
+            .InvokeAsync(
+                "reset",
+                async ct =>
+                {
+                    await supplyChain.ResetAsync(ct);
+                    return true;
+                },
+                token);
+
+    public ValueTask<bool> DeleteControlledAsync(
+        string id,
+        string version,
+        string actor,
+        string reason,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesDelete)
+            .InvokeAsync(
+                "delete-controlled",
+                ct => supplyChain.DeleteControlledAsync(id, version, actor, reason, ct),
+                token);
+
+    public ValueTask<string?> GetOwnerAsync(string packageId, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync("get-owner", ct => supplyChain.GetOwnerAsync(packageId, ct), token);
+}
+
+internal sealed class ModerationCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    PackageSupplyChainService supplyChain)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IModerationCapability
+{
+    public ValueTask<bool> ModerateAsync(
+        string id,
+        string version,
+        PackageModerationState state,
+        string actor,
+        string reason,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ModerationDecide)
+            .InvokeAsync(
+                "decide",
+                ct => supplyChain.ModerateAsync(id, version, state, actor, reason, ct),
+                token);
+
+    public ValueTask<bool> DeleteControlledAsync(
+        string id,
+        string version,
+        string actor,
+        string reason,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ModerationDecide)
+            .InvokeAsync(
+                "delete",
+                ct => supplyChain.DeleteControlledAsync(id, version, actor, reason, ct),
+                token);
+
+    public ValueTask<IReadOnlyList<PackageSupplyChainAudit>> GetAuditHistoryAsync(
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ModerationRead)
+            .InvokeAsync("get-audit", supplyChain.GetAuditHistoryAsync, token);
+
+    public ValueTask<IReadOnlyList<PackageValidationRecord>> GetValidationResultsAsync(
+        string id,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ModerationRead)
+            .InvokeAsync(
+                "get-validations",
+                ct => supplyChain.GetValidationResultsAsync(id, version, ct),
+                token);
+}
+
+internal sealed class ControlInstrumentationCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    FaultRuleStore faults,
+    RequestRecorder requests)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IControlInstrumentationCapability
+{
+    public int FaultCapacity => faults.Capacity;
+
+    public int RequestCapacity => requests.Capacity;
+
+    public long EvictedRequestCount => requests.EvictedCount;
+
+    public ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlQuery)
+            .InvokeAsync(
+                "get-faults",
+                _ => ValueTask.FromResult(faults.GetAll()),
+                token);
+
+    public ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlConfigure)
+            .InvokeAsync(
+                "add-fault",
+                _ =>
+                {
+                    try
+                    {
+                        faults.Add(rule);
+                        return ValueTask.FromResult<string?>(null);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        return ValueTask.FromResult<string?>(exception.Message);
+                    }
+                },
+                token);
+
+    public async ValueTask ClearFaultsAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlConfigure)
+            .InvokeAsync(
+                "clear-faults",
+                _ =>
+                {
+                    faults.Reset();
+                    return ValueTask.FromResult(true);
+                },
+                token);
+
+    public ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ControlQuery)
+            .InvokeAsync(
+                "get-requests",
+                _ => ValueTask.FromResult(requests.GetAll()),
+                token);
+
+    public async ValueTask ClearRequestsAsync(CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.ControlConfigure)
+            .InvokeAsync(
+                "clear-requests",
+                _ =>
+                {
+                    requests.Reset();
+                    return ValueTask.FromResult(true);
+                },
+                token);
+}
+
+internal sealed class ServerOperationsCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    StorageHealth storage,
+    ServerDiagnostics diagnostics,
+    ServerHostingOptions hosting,
+    string? storageDirectory)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IServerOperationsCapability
+{
+    public string Mode => hosting.Mode.ToString().ToLowerInvariant();
+
+    public ValueTask<CapabilityStorageReport> GetReadinessAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.OperationsQuery)
+            .InvokeAsync("readiness", _ => ValueTask.FromResult(Map(storage.GetReadiness())), token);
+
+    public ValueTask<CapabilityStorageReport> GetStorageReportAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.OperationsQuery)
+            .InvokeAsync("storage-health", _ => ValueTask.FromResult(Map(storage.GetReport())), token);
+
+    public ValueTask<CapabilityDiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.OperationsQuery)
+            .InvokeAsync(
+                "diagnostics",
+                _ => ValueTask.FromResult(new CapabilityDiagnosticsSnapshot(
+                    diagnostics.RequestCount,
+                    diagnostics.FailedRequestCount,
+                    diagnostics.PublishedPackageCount,
+                    diagnostics.StorageFailureCount)),
+                token);
+
+    public ValueTask<StorageBackupManifest?> CreateBackupAsync(
+        OperationExecutionContext context,
+        StreamHandle destination,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.BackupInvoke)
+            .InvokeAsync(
+                "create",
+                async ct =>
+                {
+                    if (storageDirectory is null)
+                    {
+                        return null;
+                    }
+
+                    var file = context.Content.Resolve(destination).FilePath
+                        ?? throw new InvalidOperationException(
+                            "Backup requires a kernel-issued file handle.");
+                    return await StorageBackup.CreateAsync(storageDirectory, file, ct);
+                },
+                token);
+
+    public ValueTask<StorageBackupManifest?> RestoreAsync(
+        OperationExecutionContext context,
+        StreamHandle source,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.RestoreInvoke)
+            .InvokeAsync(
+                "restore",
+                async ct =>
+                {
+                    if (storageDirectory is null)
+                    {
+                        return null;
+                    }
+
+                    var file = context.Content.Resolve(source).FilePath
+                        ?? throw new InvalidOperationException(
+                            "Restore requires a kernel-issued file handle.");
+                    return await StorageBackup.RestoreAsync(file, storageDirectory, ct);
+                },
+                token);
+
+    private static CapabilityStorageReport Map(StorageHealthReport report) =>
+        new(
+            report.Ready,
+            report.Status,
+            report.Dependency,
+            report.Reason,
+            report.PackageCount,
+            report.StorageBytes,
+            report.VulnerabilitySnapshotCount,
+            report.VulnerabilitySnapshotRetentionLimit);
+}
+
+internal sealed class VulnerabilityReadCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    VulnerabilitySnapshotProvider snapshots)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IVulnerabilityReadCapability
+{
+    public VulnerabilitySnapshot Active =>
+        Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
+            .InvokeAsync(
+                "active",
+                _ => ValueTask.FromResult(snapshots.Active),
+                CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+
+    public bool TryGet(string snapshotId, out VulnerabilitySnapshot? snapshot)
+    {
+        var result = Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
+            .InvokeAsync(
+                "get",
+                _ =>
+                {
+                    var found = snapshots.TryGet(snapshotId, out var value);
+                    return ValueTask.FromResult((found, value));
+                },
+                CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        snapshot = result.value;
+        return result.found;
+    }
+}
+
+internal sealed class TypedEventPublisher(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    ServerDiagnostics diagnostics)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), ITypedEventPublisher
+{
+    public async ValueTask PublishAsync(KernelEventKind kind, CancellationToken token) =>
+        await Gate(BuiltInCapabilityNames.EventsPublish)
+            .InvokeAsync(
+                kind.ToString(),
+                _ =>
+                {
+                    if (kind == KernelEventKind.PackagePublished)
+                    {
+                        diagnostics.RecordPackagePublished();
+                    }
+
+                    return ValueTask.FromResult(true);
+                },
+                token);
+}
+
+internal sealed class OutboundHttpCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    HttpClient client)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IOutboundHttpCapability
+{
+    private const string AllowedHost = "api.nuget.org";
+
+    public ValueTask<OutboundHttpResponse> SendAsync(
+        OutboundHttpRequest request,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.OutboundHttp)
+            .InvokeAsync(
+                "send",
+                async ct =>
+                {
+                    if (request.Uri.Scheme != Uri.UriSchemeHttps ||
+                        !string.Equals(request.Uri.Host, AllowedHost, StringComparison.OrdinalIgnoreCase) ||
+                        !string.Equals(request.Method, HttpMethod.Get.Method, StringComparison.Ordinal) ||
+                        request.MaximumResponseBytes <= 0 ||
+                        request.MaximumResponseBytes > MaximumStreamBytes)
+                    {
+                        throw new CapabilityDeniedException(
+                            OwnerId,
+                            BuiltInCapabilityNames.OutboundHttp);
+                    }
+
+                    using var message = new HttpRequestMessage(HttpMethod.Get, request.Uri);
+                    foreach (var header in request.Headers)
+                    {
+                        message.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+
+                    var response = await client.SendAsync(
+                        message,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        ct);
+                    try
+                    {
+                        var declaredLength = response.Content.Headers.ContentLength;
+                        if (declaredLength > request.MaximumResponseBytes)
+                        {
+                            throw new CapabilityStreamLimitExceededException(
+                                declaredLength.Value,
+                                request.MaximumResponseBytes);
+                        }
+
+                        var content = await response.Content.ReadAsStreamAsync(ct);
+                        var lifetime = new ResponseLifetimeStream(content, response);
+                        var bounded = CapabilityStreams.Bound(
+                            lifetime,
+                            declaredLength ?? 0,
+                            request.MaximumResponseBytes,
+                            ct,
+                            null);
+                        var leased = StreamGate(BuiltInCapabilityNames.OutboundHttp).LeaseStream(
+                            "consume-response",
+                            bounded,
+                            declaredLength ?? 0,
+                            ct);
+                        return new OutboundHttpResponse(
+                            (int)response.StatusCode,
+                            response.Headers
+                                .Concat(response.Content.Headers)
+                                .ToImmutableDictionary(
+                                    header => header.Key,
+                                    header => string.Join(",", header.Value),
+                                    StringComparer.OrdinalIgnoreCase),
+                            [.. response.Content.Headers.ContentEncoding],
+                            declaredLength,
+                            leased);
+                    }
+                    catch
+                    {
+                        response.Dispose();
+                        throw;
+                    }
+                },
+                token);
+}
+
+internal sealed class ResponseLifetimeStream(Stream inner, IDisposable lifetime) : Stream
+{
+    public override bool CanRead => inner.CanRead;
+    public override bool CanSeek => inner.CanSeek;
+    public override bool CanWrite => inner.CanWrite;
+    public override long Length => inner.Length;
+    public override long Position
+    {
+        get => inner.Position;
+        set => inner.Position = value;
+    }
+
+    public override void Flush() => inner.Flush();
+    public override int Read(byte[] buffer, int offset, int count) =>
+        inner.Read(buffer, offset, count);
+    public override ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default) =>
+        inner.ReadAsync(buffer, cancellationToken);
+    public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+    public override void SetLength(long value) => inner.SetLength(value);
+    public override void Write(byte[] buffer, int offset, int count) =>
+        inner.Write(buffer, offset, count);
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            inner.Dispose();
+            lifetime.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await inner.DisposeAsync();
+        lifetime.Dispose();
+        GC.SuppressFinalize(this);
+    }
+}

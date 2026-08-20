@@ -180,6 +180,38 @@ public sealed class ExtensionCatalogTests
     }
 
     [Fact]
+    public void Ungranted_optional_capabilities_are_omitted_and_reported()
+    {
+        var catalog = Catalog(
+            Manifest(
+                "extension.consumer",
+                capabilities:
+                [
+                    new("packages.metadata.read", IsRequired: true),
+                    new("http.outbound", IsRequired: false)
+                ]));
+        var profile = new ServerProfile(
+            "test",
+            ServerProfileKind.Embedded,
+            [new ExtensionSelection("extension.consumer", [])],
+            [new CapabilityGrant("packages.metadata.read")]);
+
+        var graph = catalog.Resolve(profile);
+
+        var extension = Assert.Single(graph.Extensions);
+        Assert.Equal(["packages.metadata.read"], graph.Capabilities
+            .Where(capability => capability.ExtensionId == extension.Id && capability.IsGranted)
+            .Select(capability => capability.Name));
+        Assert.Equal(["http.outbound"], graph.Capabilities
+            .Where(capability => capability.ExtensionId == extension.Id && !capability.IsGranted)
+            .Select(capability => capability.Name));
+        Assert.Contains(
+            "omitted-optional=http.outbound",
+            graph.Diagnostics,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Resolution_order_and_diagnostics_are_stable_and_use_platform_neutral_newlines()
     {
         var manifests = new[]
@@ -207,9 +239,12 @@ public sealed class ExtensionCatalogTests
         Assert.DoesNotContain('\r', first.Diagnostics);
         Assert.Equal(
             "profile=test\n" +
-            "extension=extension.a version=1.0.0 capabilities=- routes=GET /a resources=-\n" +
-            "extension=extension.b version=1.0.0 capabilities=- routes=POST /b resources=-\n" +
-            "extension=extension.c version=1.0.0 capabilities=- routes=GET /c resources=-\n",
+            "extension=extension.a version=1.0.0 capabilities=- routes=GET /a resources=- " +
+            "omitted-optional=-\n" +
+            "extension=extension.b version=1.0.0 capabilities=- routes=POST /b resources=- " +
+            "omitted-optional=-\n" +
+            "extension=extension.c version=1.0.0 capabilities=- routes=GET /c resources=- " +
+            "omitted-optional=-\n",
             first.Diagnostics);
     }
 

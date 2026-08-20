@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel.Owners;
@@ -9,10 +10,7 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// Service-index and flat-container owners. They wrap the existing package store,
 /// visibility policy, and content streams without owning any HTTP concern.
 /// </summary>
-internal sealed class ProtocolReadOperations(
-    IPackageStore store,
-    IPackageCandidateStore candidates,
-    PackageVisibilityPolicy visibility)
+internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
 {
     private static readonly ImmutableArray<ServiceResourceDescriptor> Resources =
     [
@@ -116,12 +114,11 @@ internal sealed class ProtocolReadOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var packages = (await candidates.FindStoredByIdAsync(request.PackageId, token))
-            .Where(package => visibility.CanRead(
-                package,
-                PackageResourceClass.VersionEnumeration))
-            .ToArray();
-        if (packages.Length == 0)
+        var readablePackages = await packages.FindReadableStoredByIdAsync(
+            request.PackageId,
+            PackageResourceClass.VersionEnumeration,
+            token);
+        if (readablePackages.Count == 0)
         {
             return OperationResponse<GetPackageVersionsResponse>.Failure(
                 OperationErrorPolicy.NotFound(
@@ -129,7 +126,7 @@ internal sealed class ProtocolReadOperations(
         }
 
         var response = new GetPackageVersionsResponse(
-            [.. packages.Select(package => package.NormalizedVersion)]);
+            [.. readablePackages.Select(package => package.NormalizedVersion)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new { versions = response.Versions })));
@@ -141,29 +138,29 @@ internal sealed class ProtocolReadOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var package = await FindReadableAsync(
-            request.Package,
-            PackageResourceClass.ExactContent,
-            token);
-        if (package is null)
-        {
-            return OperationResponse<GetPackageResponse>.Failure(NotFound(request.Package));
-        }
-
-        Stream content;
+        CapabilityPackageContent? content;
         try
         {
-            content = package.OpenReadStream();
+            content = await packages.OpenContentAsync(
+                request.Package.Id,
+                request.Package.Version,
+                PackageResourceClass.ExactContent,
+                token);
         }
         catch (FileNotFoundException)
+        {
+            content = null;
+        }
+
+        if (content is null)
         {
             return OperationResponse<GetPackageResponse>.Failure(NotFound(request.Package));
         }
 
         var handle = context.Content.RegisterStream(
-            content,
+            content.Stream,
             "application/octet-stream",
-            package.ContentLength,
+            content.Length,
             supportsRanges: true);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
@@ -172,8 +169,8 @@ internal sealed class ProtocolReadOperations(
             new GetPackageResponse(
                 new ContentDescriptor(
                     handle,
-                    package.PackageHash,
-                    package.ContentLength,
+                    content.Sha512,
+                    content.Length,
                     SupportsRanges: true)));
     }
 
@@ -232,7 +229,7 @@ internal sealed class ProtocolReadOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var symbols = await store.FindSymbolAsync(
+        var symbols = await packages.FindSymbolAsync(
             request.Package.Id,
             request.Package.Version,
             token);
@@ -250,16 +247,11 @@ internal sealed class ProtocolReadOperations(
                 new ContentDescriptor(handle, null, symbols.Length, SupportsRanges: false)));
     }
 
-    private async ValueTask<TestPackage?> FindReadableAsync(
+    private ValueTask<CapabilityPackageMetadata?> FindReadableAsync(
         PackageIdentity identity,
         PackageResourceClass resourceClass,
-        CancellationToken token)
-    {
-        var package = await store.FindAsync(identity.Id, identity.Version, token);
-        return package is not null && visibility.CanRead(package, resourceClass)
-            ? package
-            : null;
-    }
+        CancellationToken token) =>
+        packages.FindReadableAsync(identity.Id, identity.Version, resourceClass, token);
 
     private static OperationError NotFound(PackageIdentity identity) =>
         OperationErrorPolicy.NotFound(

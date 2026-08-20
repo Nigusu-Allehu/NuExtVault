@@ -19,13 +19,31 @@ internal static class BuiltInExtensionIds
 
 internal static class BuiltInCapabilityNames
 {
-    public const string PackagesRead = "packages.read";
-    public const string PackagesWrite = "packages.write";
+    public const string PackagesIdentityRead = "packages.identity.read";
+    public const string PackagesMetadataRead = "packages.metadata.read";
+    public const string PackagesMetadataWrite = "packages.metadata.write";
+    public const string PackagesContentRead = "packages.content.read";
+    public const string PackagesContentWrite = "packages.content.write-staged";
+    public const string PackagesPublish = "packages.publish";
+    public const string PackagesUnlist = "packages.unlist";
+    public const string PackagesRelist = "packages.relist";
+    public const string PackagesDelete = "packages.delete";
+    public const string ModerationRead = "moderation.read";
+    public const string ModerationDecide = "moderation.decide";
+    public const string VulnerabilityStateRead = "extension-state.vulnerabilities.read";
+    public const string ExtensionStateRead = "extension-state.read";
+    public const string ExtensionStateWrite = "extension-state.write";
+    public const string EventsPublish = "events.publish";
+    public const string BackupContribute = "backup.contribute";
+    public const string BackupInvoke = "operations.backup.invoke";
+    public const string RestoreInvoke = "operations.restore.invoke";
+    public const string OperationsQuery = "operations.query";
+    public const string ControlConfigure = "control.instrumentation.configure";
+    public const string ControlQuery = "control.instrumentation.query";
     public const string DurableStorage = "storage.durable";
-    public const string Operations = "operations.execute";
-    public const string SupplyChainPolicy = "packages.supply-chain-policy";
     public const string TestInstrumentation = "test.instrumentation";
     public const string OutboundHttp = "network.outbound-http";
+    public const string SecretsResolveReference = "secrets.resolve-reference";
     public const string SidecarExecution = "extensions.sidecar-execution";
 }
 
@@ -54,24 +72,46 @@ internal static class ServerProfiles
 {
     private static readonly ExtensionSelection Protocol = Extension(
         BuiltInExtensionIds.Protocol,
-        Required(BuiltInCapabilityNames.PackagesRead));
+        Required(BuiltInCapabilityNames.PackagesIdentityRead),
+        Required(BuiltInCapabilityNames.PackagesMetadataRead),
+        Required(BuiltInCapabilityNames.PackagesContentRead),
+        Required(BuiltInCapabilityNames.VulnerabilityStateRead));
     private static readonly ExtensionSelection Publication = Extension(
         BuiltInExtensionIds.Publication,
-        Required(BuiltInCapabilityNames.PackagesWrite));
-    private static readonly ExtensionSelection Vulnerabilities =
-        Extension(BuiltInExtensionIds.Vulnerabilities);
+        Required(BuiltInCapabilityNames.PackagesMetadataRead),
+        Required(BuiltInCapabilityNames.PackagesContentWrite),
+        Required(BuiltInCapabilityNames.PackagesPublish),
+        Required(BuiltInCapabilityNames.PackagesUnlist),
+        Required(BuiltInCapabilityNames.PackagesRelist),
+        Required(BuiltInCapabilityNames.PackagesDelete),
+        Required(BuiltInCapabilityNames.EventsPublish));
+    private static readonly ExtensionSelection Vulnerabilities = Extension(
+        BuiltInExtensionIds.Vulnerabilities,
+        Required(BuiltInCapabilityNames.VulnerabilityStateRead));
     private static readonly ExtensionSelection TestControl = Extension(
         BuiltInExtensionIds.TestControl,
-        Required(BuiltInCapabilityNames.TestInstrumentation));
+        Required(BuiltInCapabilityNames.PackagesMetadataRead),
+        Required(BuiltInCapabilityNames.PackagesMetadataWrite),
+        Required(BuiltInCapabilityNames.PackagesContentWrite),
+        Required(BuiltInCapabilityNames.PackagesPublish),
+        Required(BuiltInCapabilityNames.PackagesUnlist),
+        Required(BuiltInCapabilityNames.PackagesRelist),
+        Required(BuiltInCapabilityNames.PackagesDelete),
+        Required(BuiltInCapabilityNames.ControlConfigure),
+        Required(BuiltInCapabilityNames.ControlQuery),
+        Required(BuiltInCapabilityNames.EventsPublish));
     private static readonly ExtensionSelection DurableStorage = Extension(
         BuiltInExtensionIds.DurableStorage,
         Required(BuiltInCapabilityNames.DurableStorage));
     private static readonly ExtensionSelection Operations = Extension(
         BuiltInExtensionIds.Operations,
-        Required(BuiltInCapabilityNames.Operations));
+        Required(BuiltInCapabilityNames.OperationsQuery),
+        Required(BuiltInCapabilityNames.BackupInvoke),
+        Required(BuiltInCapabilityNames.RestoreInvoke));
     private static readonly ExtensionSelection SupplyChain = Extension(
         BuiltInExtensionIds.SupplyChain,
-        Required(BuiltInCapabilityNames.SupplyChainPolicy));
+        Required(BuiltInCapabilityNames.ModerationRead),
+        Required(BuiltInCapabilityNames.ModerationDecide));
     private static readonly ExtensionSelection VulnerabilityRefresh = Extension(
         BuiltInExtensionIds.VulnerabilityRefresh,
         Required(BuiltInCapabilityNames.OutboundHttp));
@@ -81,11 +121,24 @@ internal static class ServerProfiles
         ServerProfileKind.Embedded,
         [Protocol, Publication, Vulnerabilities, TestControl, Operations, SupplyChain],
         Grants(
-            BuiltInCapabilityNames.PackagesRead,
-            BuiltInCapabilityNames.PackagesWrite,
-            BuiltInCapabilityNames.Operations,
-            BuiltInCapabilityNames.SupplyChainPolicy,
-            BuiltInCapabilityNames.TestInstrumentation));
+            BuiltInCapabilityNames.PackagesIdentityRead,
+            BuiltInCapabilityNames.PackagesMetadataRead,
+            BuiltInCapabilityNames.PackagesMetadataWrite,
+            BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesContentWrite,
+            BuiltInCapabilityNames.PackagesPublish,
+            BuiltInCapabilityNames.PackagesUnlist,
+            BuiltInCapabilityNames.PackagesRelist,
+            BuiltInCapabilityNames.PackagesDelete,
+            BuiltInCapabilityNames.ModerationRead,
+            BuiltInCapabilityNames.ModerationDecide,
+            BuiltInCapabilityNames.VulnerabilityStateRead,
+            BuiltInCapabilityNames.EventsPublish,
+            BuiltInCapabilityNames.BackupInvoke,
+            BuiltInCapabilityNames.RestoreInvoke,
+            BuiltInCapabilityNames.OperationsQuery,
+            BuiltInCapabilityNames.ControlConfigure,
+            BuiltInCapabilityNames.ControlQuery));
 
     public static ServerProfile Standard { get; } = new(
         "standard",
@@ -101,12 +154,26 @@ internal static class ServerProfiles
             VulnerabilityRefresh
         ],
         Grants(
-            BuiltInCapabilityNames.PackagesRead,
-            BuiltInCapabilityNames.PackagesWrite,
+            BuiltInCapabilityNames.PackagesIdentityRead,
+            BuiltInCapabilityNames.PackagesMetadataRead,
+            BuiltInCapabilityNames.PackagesMetadataWrite,
+            BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesContentWrite,
+            BuiltInCapabilityNames.PackagesPublish,
+            BuiltInCapabilityNames.PackagesUnlist,
+            BuiltInCapabilityNames.PackagesRelist,
+            BuiltInCapabilityNames.PackagesDelete,
+            BuiltInCapabilityNames.ModerationRead,
+            BuiltInCapabilityNames.ModerationDecide,
+            BuiltInCapabilityNames.VulnerabilityStateRead,
+            BuiltInCapabilityNames.EventsPublish,
+            BuiltInCapabilityNames.BackupContribute,
+            BuiltInCapabilityNames.BackupInvoke,
+            BuiltInCapabilityNames.RestoreInvoke,
+            BuiltInCapabilityNames.OperationsQuery,
+            BuiltInCapabilityNames.ControlConfigure,
+            BuiltInCapabilityNames.ControlQuery,
             BuiltInCapabilityNames.DurableStorage,
-            BuiltInCapabilityNames.Operations,
-            BuiltInCapabilityNames.SupplyChainPolicy,
-            BuiltInCapabilityNames.TestInstrumentation,
             BuiltInCapabilityNames.OutboundHttp));
 
     public static ServerProfile Production { get; } = new(
@@ -122,11 +189,23 @@ internal static class ServerProfiles
             VulnerabilityRefresh
         ],
         Grants(
-            BuiltInCapabilityNames.PackagesRead,
-            BuiltInCapabilityNames.PackagesWrite,
+            BuiltInCapabilityNames.PackagesIdentityRead,
+            BuiltInCapabilityNames.PackagesMetadataRead,
+            BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesContentWrite,
+            BuiltInCapabilityNames.PackagesPublish,
+            BuiltInCapabilityNames.PackagesUnlist,
+            BuiltInCapabilityNames.PackagesRelist,
+            BuiltInCapabilityNames.PackagesDelete,
+            BuiltInCapabilityNames.ModerationRead,
+            BuiltInCapabilityNames.ModerationDecide,
+            BuiltInCapabilityNames.VulnerabilityStateRead,
+            BuiltInCapabilityNames.EventsPublish,
+            BuiltInCapabilityNames.BackupContribute,
+            BuiltInCapabilityNames.BackupInvoke,
+            BuiltInCapabilityNames.RestoreInvoke,
+            BuiltInCapabilityNames.OperationsQuery,
             BuiltInCapabilityNames.DurableStorage,
-            BuiltInCapabilityNames.Operations,
-            BuiltInCapabilityNames.SupplyChainPolicy,
             BuiltInCapabilityNames.OutboundHttp));
 
     private static ExtensionSelection Extension(
