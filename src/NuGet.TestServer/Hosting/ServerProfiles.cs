@@ -154,6 +154,12 @@ internal sealed record ServerComposition(
     IPackagePolicyScanner? PackageScanner,
     TemporaryStorageLease? StorageLease)
 {
+    /// <summary>
+    /// Identifies this host instance. Kernel content handles, registries, and
+    /// diagnostics are scoped to it.
+    /// </summary>
+    public string InstanceId { get; } = Guid.NewGuid().ToString("N");
+
     public static ServerComposition Create(
         ServerProfile profile,
         string? url = null,
