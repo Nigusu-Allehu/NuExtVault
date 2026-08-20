@@ -2,7 +2,7 @@ namespace NuGet.TestServer.Operations;
 
 public sealed class StorageHealth(string? storageDirectory)
 {
-    public const int VulnerabilitySnapshotRetentionLimit = 3;
+    public const int VulnerabilitySnapshotRetentionLimit = 1;
 
     private readonly string? _root = storageDirectory is null
         ? null
@@ -61,9 +61,18 @@ public sealed class StorageHealth(string? storageDirectory)
                 file => file.EndsWith(".nupkg", StringComparison.OrdinalIgnoreCase));
             var bytes = files.Sum(file => new FileInfo(file).Length);
             var snapshotsDirectory = Path.Combine(_root, "vulnerabilities");
-            var snapshotCount = Directory.Exists(snapshotsDirectory)
+            var legacySnapshotCount = Directory.Exists(snapshotsDirectory)
                 ? Directory.EnumerateDirectories(snapshotsDirectory)
                     .Count(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal))
+                : 0;
+            var extensionStateDirectory = Path.Combine(_root, "extension-state");
+            var ownerStateCount = Directory.Exists(extensionStateDirectory) &&
+                                  Directory.EnumerateFiles(
+                                          extensionStateDirectory,
+                                          "*.json",
+                                          SearchOption.AllDirectories)
+                                      .Any()
+                ? 1
                 : 0;
             var rootPath = Path.GetPathRoot(_root);
             long? freeBytes = string.IsNullOrEmpty(rootPath)
@@ -78,7 +87,7 @@ public sealed class StorageHealth(string? storageDirectory)
                 PackageCount: packageCount,
                 StorageBytes: bytes,
                 FreeBytes: freeBytes,
-                VulnerabilitySnapshotCount: snapshotCount,
+                VulnerabilitySnapshotCount: ownerStateCount + legacySnapshotCount,
                 VulnerabilitySnapshotRetentionLimit);
         }
         catch (Exception exception) when (

@@ -105,15 +105,11 @@ public sealed class ServerProfileCompositionTests
             username: null,
             password: null,
             apiKey: "publish-key");
-        var vulnerabilities = new VulnerabilitySnapshotProvider(
-            EmbeddedVulnerabilitySnapshot.Load());
-
         var standard = CliServerProfileFactory.Create(
             production: false,
             url: "http://127.0.0.1:0",
             storageDirectory: standardStorage.Path,
             authentication,
-            vulnerabilities,
             PackageTransferLimits.Default,
             trustedProxies: null);
         var production = CliServerProfileFactory.Create(
@@ -121,14 +117,15 @@ public sealed class ServerProfileCompositionTests
             url: "http://127.0.0.1:0",
             storageDirectory: productionStorage.Path,
             authentication,
-            vulnerabilities,
             PackageTransferLimits.Default,
             new TrustedProxyOptions(["127.0.0.1"]));
 
         Assert.Same(ServerProfiles.Standard, standard.Profile);
         Assert.Equal(ServerMode.Test, standard.Hosting.Mode);
         Assert.Same(authentication, standard.Authentication);
-        Assert.Same(vulnerabilities, standard.Vulnerabilities);
+        Assert.Equal(
+            EmbeddedVulnerabilitySnapshot.Load().Id,
+            standard.Vulnerabilities.Active.Id);
         Assert.Same(ServerProfiles.Production, production.Profile);
         Assert.Equal(ServerMode.Production, production.Hosting.Mode);
         Assert.Equal(productionStorage.Path, production.StorageDirectory);

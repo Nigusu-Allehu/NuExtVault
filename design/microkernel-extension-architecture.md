@@ -2,8 +2,9 @@
 
 ## Status
 
-Selected architecture design. Migration Steps 1 through 9 are implemented; later
-feature extractions and the public extension SDK remain planned.
+Selected architecture design. Migration Steps 1 through 10 are implemented; later
+feature extractions and the public extension SDK remain planned. Step 10 has local
+validation only; cross-platform CI is not claimed here.
 
 This design supersedes the core-first proposal as the intended long-term
 architecture. Most NuTestServer features, including the default NuGet V3
@@ -324,6 +325,9 @@ authenticated and authorized kernel operations or capabilities.
 - Schema versions and migrations.
 - Optimistic concurrency and transactions.
 - Quotas.
+- Upgrade-only legacy imports use owner-configured logical file sets with bounded
+  file and total sizes; extensions receive logical names and bytes, never storage
+  paths or direct filesystem access.
 - Backup and restore participation.
 - Recovery after interrupted writes.
 

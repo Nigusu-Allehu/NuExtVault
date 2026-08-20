@@ -6,11 +6,10 @@ using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
 using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Storage;
-using NuGet.TestServer.Vulnerabilities;
 
 var arguments = args.ToList();
 if (arguments.Count == 0)
@@ -119,11 +118,6 @@ catch (Exception exception) when (
     return 2;
 }
 
-var vulnerabilityCache = new VulnerabilitySnapshotCache(
-    Path.Combine(storageDirectory, "vulnerabilities"));
-var vulnerabilitySnapshot = await vulnerabilityCache.LoadBestAsync(
-    EmbeddedVulnerabilitySnapshot.Load());
-var vulnerabilityProvider = new VulnerabilitySnapshotProvider(vulnerabilitySnapshot);
 AuthenticationCliOptions authentication;
 try
 {
@@ -162,7 +156,6 @@ try
         url: ReadOption(arguments, "--url") ?? $"http://127.0.0.1:{parsedPort}",
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
-        vulnerabilities: vulnerabilityProvider,
         packageLimits: packageLimits,
         trustedProxies: ParseTrustedProxies(arguments));
     app = ServerApplication.Build(composition);
@@ -229,24 +222,11 @@ Console.WriteLine($"Health:      {address}/__test/health");
 Console.WriteLine($"Liveness:    {address}/health/live");
 Console.WriteLine($"Readiness:   {address}/health/ready");
 Console.WriteLine($"Storage:     {Path.GetFullPath(storageDirectory)}");
+var vulnerabilityStatus = app.Services.GetRequiredService<VulnerabilityExtension>().Health;
 Console.WriteLine(
-    $"Vulnerabilities: {vulnerabilityProvider.Active.UpdatedAt:O} ({vulnerabilityProvider.Active.Id})");
-
-var outboundHttp = app.Services.GetRequiredService<CapabilityBroker>()
-    .ForOwner(BuiltInExtensionIds.VulnerabilityRefresh)
-    .GetRequired<IOutboundHttpCapability>(BuiltInCapabilityNames.OutboundHttp);
-var refresher = new VulnerabilitySnapshotRefresher(
-    vulnerabilityProvider,
-    vulnerabilityCache,
-    outboundHttp,
-    new Uri("https://api.nuget.org/v3/vulnerabilities/index.json"));
-var refreshTask =
-    DateTimeOffset.UtcNow - vulnerabilityProvider.Active.FetchedAt > TimeSpan.FromHours(6)
-        ? RefreshVulnerabilitiesAsync(refresher, app.Lifetime.ApplicationStopping)
-        : Task.CompletedTask;
+    $"Vulnerabilities: {vulnerabilityStatus.UpdatedAt:O} ({vulnerabilityStatus.SnapshotId})");
 
 await app.WaitForShutdownAsync();
-await refreshTask;
 await app.DisposeAsync();
 return 0;
 
@@ -329,25 +309,5 @@ static string ReadSecret(string prompt)
         {
             characters.Add(key.KeyChar);
         }
-    }
-}
-
-static async Task RefreshVulnerabilitiesAsync(
-    VulnerabilitySnapshotRefresher refresher,
-    CancellationToken token)
-{
-    try
-    {
-        if (await refresher.RefreshAsync(token))
-        {
-            Console.Error.WriteLine("Updated the cached nuget.org vulnerability snapshot.");
-        }
-    }
-    catch (OperationCanceledException) when (token.IsCancellationRequested)
-    {
-    }
-    catch (VulnerabilityRefreshException exception)
-    {
-        Console.Error.WriteLine($"Warning: {exception.Message}");
     }
 }

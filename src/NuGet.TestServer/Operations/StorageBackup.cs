@@ -10,7 +10,7 @@ public static class StorageBackup
     private const long MaximumManifestBytes = 10 * 1024 * 1024;
     private const long RestoreFreeSpaceReserveBytes = 256 * 1024 * 1024;
     private static readonly string[] IncludedDirectories =
-        ["packages", "security", "trash", "vulnerabilities"];
+        ["packages", "security", "trash", "vulnerabilities", "extension-state"];
     private static readonly string[] IncludedFiles =
     [
         "packages.db",

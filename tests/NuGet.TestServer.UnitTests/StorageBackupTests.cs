@@ -7,7 +7,7 @@ namespace NuGet.TestServer.UnitTests;
 public sealed class StorageBackupTests
 {
     [Fact]
-    public async Task Backup_restores_packages_and_vulnerability_cache_into_clean_storage()
+    public async Task Backup_restores_packages_extension_state_and_legacy_cache_into_clean_storage()
     {
         using var source = TemporaryDirectory.Create();
         using var destination = TemporaryDirectory.Create();
@@ -22,6 +22,13 @@ public sealed class StorageBackupTests
         await File.WriteAllTextAsync(
             Path.Combine(vulnerabilityDirectory, "metadata.json"),
             """{"id":"snapshot"}""");
+        var extensionState = Path.Combine(
+            source.Path,
+            "extension-state",
+            "owner",
+            "snapshot.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(extensionState)!);
+        await File.WriteAllTextAsync(extensionState, """{"state":"snapshot"}""");
         var backupPath = Path.Combine(source.Path, "backup.zip");
 
         var manifest = await StorageBackup.CreateAsync(source.Path, backupPath);
@@ -35,12 +42,23 @@ public sealed class StorageBackupTests
                 "vulnerabilities",
                 "snapshot",
                 "metadata.json")));
+        Assert.Equal(
+            """{"state":"snapshot"}""",
+            await File.ReadAllTextAsync(
+                Path.Combine(
+                    destination.Path,
+                    "extension-state",
+                    "owner",
+                    "snapshot.json")));
         Assert.Contains(
             manifest.Files,
             file => file.Path == "packages/recovered.package/1.2.3/recovered.package.1.2.3.nupkg");
         Assert.Contains(
             manifest.Files,
             file => file.Path == "vulnerabilities/snapshot/metadata.json");
+        Assert.Contains(
+            manifest.Files,
+            file => file.Path == "extension-state/owner/snapshot.json");
     }
 
     [Fact]

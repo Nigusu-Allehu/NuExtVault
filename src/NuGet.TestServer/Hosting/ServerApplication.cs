@@ -1,6 +1,9 @@
 using System.Diagnostics;
+using System.Collections.Immutable;
 using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -90,6 +93,7 @@ public static class ServerApplication
         var runtimeState = composition.RuntimeState;
         var packageLimits = composition.PackageLimits;
         var storageDirectory = composition.StorageDirectory;
+        var officialExtensions = OfficialExtensionComposition.Create(composition);
         builder.WebHost.UseUrls(hosting.Url);
         if (hosting.Mode == ServerMode.Production)
         {
@@ -143,19 +147,15 @@ public static class ServerApplication
         builder.Services.AddSingleton(new StorageHealth(storageDirectory));
         builder.Services.AddSingleton<ServerDiagnostics>();
         builder.Services.AddSingleton<KernelRequestInstrumentation>();
-        builder.Services.AddSingleton(
-            composition.Vulnerabilities);
-        builder.Services.AddSingleton(_ => new HttpClient(
-            new HttpClientHandler { AllowAutoRedirect = false })
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        });
+        officialExtensions.AddServices(builder.Services);
+        builder.Services.AddSingleton<KernelOutboundHttpClient>();
         builder.Services.AddSingleton<CapabilityAuditLog>();
         builder.Services.AddSingleton(new CapabilityLimits(
             MaximumConcurrentCalls: 64,
             MaximumStreamBytes: Math.Max(
                 packageLimits.MaxRequestBodyBytes,
                 packageLimits.MaxPackageBytes)));
+        builder.Services.AddSingleton(CreateExtensionStateStore(storageDirectory));
         builder.Services.AddSingleton(provider => new CapabilityBroker(
             composition.InstanceId,
             composition.ExtensionGraph,
@@ -171,14 +171,17 @@ public static class ServerApplication
                 provider.GetRequiredService<ServerDiagnostics>(),
                 composition.Hosting,
                 composition.StorageDirectory,
-                composition.Vulnerabilities,
-                provider.GetRequiredService<HttpClient>())));
+                officialExtensions.VulnerabilitySnapshots,
+                provider.GetRequiredService<ExtensionStateStore>(),
+                officialExtensions,
+                provider.GetRequiredService<KernelOutboundHttpClient>())));
         builder.Services.AddSingleton(_ =>
             ServiceIndexResourceRegistry.Create(composition.ExtensionGraph));
         builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
             provider.GetRequiredService<CapabilityBroker>(),
             composition.ExtensionGraph,
             provider.GetRequiredService<ServiceIndexResourceRegistry>(),
+            officialExtensions,
             packageLimits));
         builder.Services.AddSingleton(provider => new OperationDispatcher(
             provider.GetRequiredService<OperationRegistry>(),
@@ -218,6 +221,31 @@ public static class ServerApplication
         }
 
         return app;
+    }
+
+    private static ExtensionStateStore CreateExtensionStateStore(string? storageDirectory)
+    {
+        if (storageDirectory is null)
+        {
+            return new ExtensionStateStore(root: null);
+        }
+
+        var legacyVulnerabilities = new LegacyStateFileSetRegistration(
+            Path.Combine(storageDirectory, "vulnerabilities"),
+            MaximumFileBytes: 32L * 1024 * 1024,
+            MaximumTotalBytes: 512L * 1024 * 1024,
+            MaximumFileCount: 64).Validate();
+        return new ExtensionStateStore(
+            Path.Combine(storageDirectory, "extension-state"),
+            ImmutableDictionary<
+                    string,
+                    ImmutableDictionary<string, LegacyStateFileSetRegistration>>
+                .Empty
+                .Add(
+                    BuiltInExtensionIds.Vulnerabilities,
+                    ImmutableDictionary<string, LegacyStateFileSetRegistration>
+                        .Empty
+                        .Add(VulnerabilityExtension.LegacyStateName, legacyVulnerabilities)));
     }
 
     private static void MapMiddleware(WebApplication app)

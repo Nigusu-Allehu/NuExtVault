@@ -5,6 +5,9 @@
 Approved migration plan. Each implementation step still requires its own focused
 proposal and explicit approval under `AGENTS.md`.
 
+Implementation status: Steps 1 through 10 are implemented. Step 10 has local
+validation only; cross-platform CI remains a completion gate.
+
 Target architecture:
 [`design/microkernel-extension-architecture.md`](../design/microkernel-extension-architecture.md).
 
@@ -346,6 +349,8 @@ low-risk read-only feature.
   extension contract.
 - Keep embedded snapshots deterministic and network-free.
 - Use brokered extension state and outbound HTTP in CLI profiles.
+- Migrate the existing vulnerability cache through a bounded, owner-scoped logical
+  legacy-state reader without exposing storage paths to the extension.
 - Keep the official extension in-process.
 
 **Tests first:**

@@ -15,7 +15,6 @@ internal static class BuiltInExtensionIds
     public const string DurableStorage = "builtin.durable-storage";
     public const string Operations = "builtin.operations";
     public const string SupplyChain = "builtin.supply-chain";
-    public const string VulnerabilityRefresh = "builtin.vulnerability-refresh";
 }
 
 internal static class BuiltInCapabilityNames
@@ -87,9 +86,13 @@ internal static class ServerProfiles
         Required(BuiltInCapabilityNames.PackagesRelist),
         Required(BuiltInCapabilityNames.PackagesDelete),
         Required(BuiltInCapabilityNames.EventsPublish));
-    private static readonly ExtensionSelection Vulnerabilities = Extension(
+    private static readonly ExtensionSelection EmbeddedVulnerabilities =
+        Extension(BuiltInExtensionIds.Vulnerabilities);
+    private static readonly ExtensionSelection DurableVulnerabilities = Extension(
         BuiltInExtensionIds.Vulnerabilities,
-        Required(BuiltInCapabilityNames.VulnerabilityStateRead));
+        Required(BuiltInCapabilityNames.ExtensionStateRead),
+        Required(BuiltInCapabilityNames.ExtensionStateWrite),
+        Required(BuiltInCapabilityNames.OutboundHttp));
     private static readonly ExtensionSelection TestControl = Extension(
         BuiltInExtensionIds.TestControl,
         Required(BuiltInCapabilityNames.PackagesMetadataRead),
@@ -114,14 +117,18 @@ internal static class ServerProfiles
         BuiltInExtensionIds.SupplyChain,
         Required(BuiltInCapabilityNames.ModerationRead),
         Required(BuiltInCapabilityNames.ModerationDecide));
-    private static readonly ExtensionSelection VulnerabilityRefresh = Extension(
-        BuiltInExtensionIds.VulnerabilityRefresh,
-        Required(BuiltInCapabilityNames.OutboundHttp));
-
     public static ServerProfile Embedded { get; } = new(
         "embedded",
         ServerProfileKind.Embedded,
-        [Protocol, ServiceIndex, Publication, Vulnerabilities, TestControl, Operations, SupplyChain],
+        [
+            Protocol,
+            ServiceIndex,
+            Publication,
+            EmbeddedVulnerabilities,
+            TestControl,
+            Operations,
+            SupplyChain
+        ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
             BuiltInCapabilityNames.PackagesMetadataRead,
@@ -149,12 +156,11 @@ internal static class ServerProfiles
             Protocol,
             ServiceIndex,
             Publication,
-            Vulnerabilities,
+            DurableVulnerabilities,
             TestControl,
             DurableStorage,
             Operations,
-            SupplyChain,
-            VulnerabilityRefresh
+            SupplyChain
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
@@ -177,6 +183,8 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.ControlFaultsInject,
             BuiltInCapabilityNames.ControlRequestsRead,
             BuiltInCapabilityNames.DurableStorage,
+            BuiltInCapabilityNames.ExtensionStateRead,
+            BuiltInCapabilityNames.ExtensionStateWrite,
             BuiltInCapabilityNames.OutboundHttp));
 
     public static ServerProfile Production { get; } = new(
@@ -186,11 +194,10 @@ internal static class ServerProfiles
             Protocol,
             ServiceIndex,
             Publication,
-            Vulnerabilities,
+            DurableVulnerabilities,
             DurableStorage,
             Operations,
-            SupplyChain,
-            VulnerabilityRefresh
+            SupplyChain
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
@@ -210,6 +217,8 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.RestoreInvoke,
             BuiltInCapabilityNames.OperationsQuery,
             BuiltInCapabilityNames.DurableStorage,
+            BuiltInCapabilityNames.ExtensionStateRead,
+            BuiltInCapabilityNames.ExtensionStateWrite,
             BuiltInCapabilityNames.OutboundHttp));
 
     private static ExtensionSelection Extension(
@@ -235,7 +244,8 @@ internal sealed record ServerComposition(
     int MaximumAuthenticationFailures,
     SupplyChainOptions? SupplyChain,
     IPackagePolicyScanner? PackageScanner,
-    TemporaryStorageLease? StorageLease)
+    TemporaryStorageLease? StorageLease,
+    bool EnableVulnerabilityPersistence)
 {
     /// <summary>
     /// Identifies this host instance. Kernel content handles, registries, and
@@ -255,7 +265,8 @@ internal sealed record ServerComposition(
         int maximumAuthenticationFailures = 5,
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null,
-        TemporaryStorageLease? storageLease = null)
+        TemporaryStorageLease? storageLease = null,
+        bool enableVulnerabilityPersistence = false)
     {
         ArgumentNullException.ThrowIfNull(profile);
         authentication ??= AuthenticationConfiguration.Anonymous;
@@ -288,7 +299,8 @@ internal sealed record ServerComposition(
             maximumAuthenticationFailures,
             supplyChain,
             packageScanner,
-            storageLease);
+            storageLease,
+            enableVulnerabilityPersistence);
     }
 
     public static ServerComposition CreateProductionWithTemporaryStorage(
@@ -300,7 +312,8 @@ internal sealed record ServerComposition(
         TrustedProxyOptions? trustedProxies = null,
         int maximumAuthenticationFailures = 5,
         SupplyChainOptions? supplyChain = null,
-        IPackagePolicyScanner? packageScanner = null)
+        IPackagePolicyScanner? packageScanner = null,
+        bool enableVulnerabilityPersistence = false)
     {
         var lease = TemporaryStorageLease.Create();
         try
@@ -317,7 +330,8 @@ internal sealed record ServerComposition(
                 maximumAuthenticationFailures,
                 supplyChain,
                 packageScanner,
-                lease);
+                lease,
+                enableVulnerabilityPersistence);
         }
         catch
         {

@@ -1,4 +1,5 @@
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
 using NuGet.TestServer.Packages;
@@ -16,11 +17,13 @@ internal static class BuiltInOperationOwners
         CapabilityBroker broker,
         ResolvedExtensionGraph graph,
         ServiceIndexResourceRegistry resources,
+        OfficialExtensionComposition officialExtensions,
         PackageTransferLimits limits)
     {
         ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resources);
+        ArgumentNullException.ThrowIfNull(officialExtensions);
         ArgumentNullException.ThrowIfNull(limits);
         var builder = new OperationRegistryBuilder();
         var selected = graph.Extensions
@@ -60,13 +63,7 @@ internal static class BuiltInOperationOwners
                 limits).Register(builder);
         }
 
-        if (selected.Contains(BuiltInExtensionIds.Vulnerabilities))
-        {
-            var capabilities = broker.ForOwner(BuiltInExtensionIds.Vulnerabilities);
-            new VulnerabilityOperations(
-                capabilities.GetRequired<IVulnerabilityReadCapability>(
-                    BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
-        }
+        officialExtensions.RegisterOperations(builder);
 
         if (selected.Contains(BuiltInExtensionIds.SupplyChain))
         {

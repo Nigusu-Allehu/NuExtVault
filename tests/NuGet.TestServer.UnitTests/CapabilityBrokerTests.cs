@@ -1,11 +1,13 @@
 using System.Reflection;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
+using NuGet.TestServer.Operations;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.UnitTests;
@@ -197,7 +199,7 @@ public sealed class CapabilityBrokerTests
     {
         using var host = TestServerApplication.Build(ServerProfiles.Standard);
         var outbound = host.Services.GetRequiredService<CapabilityBroker>()
-            .ForOwner(BuiltInExtensionIds.VulnerabilityRefresh)
+            .ForOwner(BuiltInExtensionIds.Vulnerabilities)
             .GetRequired<IOutboundHttpCapability>(BuiltInCapabilityNames.OutboundHttp);
 
         await Assert.ThrowsAsync<CapabilityDeniedException>(
@@ -208,6 +210,158 @@ public sealed class CapabilityBrokerTests
                     ImmutableDictionary<string, string>.Empty,
                     1024),
                 CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task Extension_state_is_owner_namespaced_atomic_and_integrity_protected()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new ExtensionStateStore(directory.Path);
+        var grants = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            BuiltInCapabilityNames.ExtensionStateRead,
+            BuiltInCapabilityNames.ExtensionStateWrite);
+        var first = new ExtensionStateCapability(
+            "host",
+            "owner.first",
+            grants,
+            new CapabilityAuditLog(),
+            new CapabilityLimits(),
+            store);
+        var second = new ExtensionStateCapability(
+            "host",
+            "owner.second",
+            grants,
+            new CapabilityAuditLog(),
+            new CapabilityLimits(),
+            store);
+
+        await first.WriteAsync("snapshot", new StateValue("first"), CancellationToken.None);
+        Assert.Equal("first", (await first.ReadAsync<StateValue>(
+            "snapshot",
+            CancellationToken.None))!.Value);
+        Assert.Null(await second.ReadAsync<StateValue>("snapshot", CancellationToken.None));
+
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => first.WriteAsync(
+                "snapshot",
+                new StateValue("cancelled"),
+                cancellation.Token).AsTask());
+        Assert.Equal("first", (await first.ReadAsync<StateValue>(
+            "snapshot",
+            CancellationToken.None))!.Value);
+
+        var stateFile = Assert.Single(Directory.EnumerateFiles(
+            directory.Path,
+            "*.json",
+            SearchOption.AllDirectories));
+        await File.AppendAllTextAsync(stateFile, "corrupt");
+        await Assert.ThrowsAsync<ExtensionStateException>(
+            () => first.ReadAsync<StateValue>("snapshot", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task Legacy_state_file_sets_are_logical_bounded_and_owner_scoped()
+    {
+        using var stateDirectory = new TemporaryDirectory();
+        using var legacyDirectory = new TemporaryDirectory();
+        Directory.CreateDirectory(Path.Combine(legacyDirectory.Path, "snapshot"));
+        await File.WriteAllTextAsync(
+            Path.Combine(legacyDirectory.Path, "snapshot", "metadata.json"),
+            "metadata");
+        var registrations = ImmutableDictionary<
+                string,
+                ImmutableDictionary<string, LegacyStateFileSetRegistration>>
+            .Empty.Add(
+                "owner.first",
+                ImmutableDictionary<string, LegacyStateFileSetRegistration>.Empty.Add(
+                    "legacy",
+                    new LegacyStateFileSetRegistration(
+                        legacyDirectory.Path,
+                        MaximumFileBytes: 16,
+                        MaximumTotalBytes: 16).Validate()));
+        var store = new ExtensionStateStore(stateDirectory.Path, registrations);
+        var grants = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            BuiltInCapabilityNames.ExtensionStateRead);
+        var first = new ExtensionStateCapability(
+            "host",
+            "owner.first",
+            grants,
+            new CapabilityAuditLog(),
+            new CapabilityLimits(),
+            store);
+        var second = new ExtensionStateCapability(
+            "host",
+            "owner.second",
+            grants,
+            new CapabilityAuditLog(),
+            new CapabilityLimits(),
+            store);
+
+        var fileSet = await first.ReadLegacyFileSetAsync("legacy", CancellationToken.None);
+
+        var file = Assert.Single(fileSet!.Files);
+        Assert.Equal("snapshot/metadata.json", file.LogicalName);
+        Assert.Equal("metadata", System.Text.Encoding.UTF8.GetString(file.Content));
+        Assert.Null(await second.ReadLegacyFileSetAsync("legacy", CancellationToken.None));
+        await File.WriteAllBytesAsync(
+            Path.Combine(legacyDirectory.Path, "snapshot", "oversized.json"),
+            new byte[17]);
+        await Assert.ThrowsAsync<CapabilityStreamLimitExceededException>(
+            () => first.ReadLegacyFileSetAsync("legacy", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public void Extension_state_capability_contract_exposes_no_filesystem_paths()
+    {
+        var contractTypes = new[]
+        {
+            typeof(IExtensionStateCapability),
+            typeof(ExtensionStateFile),
+            typeof(ExtensionStateFileSet)
+        };
+
+        Assert.DoesNotContain(
+            contractTypes.SelectMany(type => type.GetMembers()),
+            member => member.Name.Contains("Directory", StringComparison.OrdinalIgnoreCase) ||
+                      member.Name.Contains("Root", StringComparison.OrdinalIgnoreCase) ||
+                      member.Name.Contains("StoragePath", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Degraded_extension_health_is_ready_but_visible_in_readiness()
+    {
+        var capability = new ServerOperationsCapability(
+            "host",
+            BuiltInExtensionIds.Operations,
+            ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                BuiltInCapabilityNames.OperationsQuery),
+            new CapabilityAuditLog(),
+            new CapabilityLimits(),
+            new Operations.StorageHealth(storageDirectory: null),
+            new ServerDiagnostics(new Packages.InMemoryPackageStore()),
+            ServerHostingOptions.Create(
+                ServerMode.Test,
+                "http://127.0.0.1:0",
+                Authentication.AuthenticationConfiguration.Anonymous,
+                trustedProxies: null),
+            storageDirectory: null,
+            new StubExtensionHealthSource(
+                new ExtensionHealthSnapshot(
+                    Ready: true,
+                    Status: "degraded",
+                    Reason: "refresh failed")));
+
+        var readiness = await capability.GetReadinessAsync(CancellationToken.None);
+
+        Assert.True(readiness.Ready);
+        Assert.Equal("degraded", readiness.Status);
+        Assert.Equal("extensions", readiness.Dependency);
+        Assert.Equal("refresh failed", readiness.Reason);
     }
 
     [Fact]
@@ -332,5 +486,14 @@ public sealed class CapabilityBrokerTests
             WasDisposed = true;
             base.Dispose(disposing);
         }
+
+    }
+
+    private sealed record StateValue(string Value);
+
+    private sealed class StubExtensionHealthSource(ExtensionHealthSnapshot health)
+        : IExtensionHealthSource
+    {
+        public ExtensionHealthSnapshot GetHealth() => health;
     }
 }
