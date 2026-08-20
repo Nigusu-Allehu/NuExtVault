@@ -9,3 +9,10 @@ public sealed record RequestRecord(
     long DurationMilliseconds,
     string? FaultRuleId,
     string? AuthenticatedUser);
+
+internal sealed record CapturedRequestRecord(
+    RequestRecord Record,
+    IReadOnlyDictionary<string, string> Headers)
+{
+    public bool BodyStored => false;
+}

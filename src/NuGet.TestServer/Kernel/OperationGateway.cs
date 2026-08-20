@@ -12,9 +12,13 @@ namespace NuGet.TestServer.Kernel;
 internal sealed class OperationGateway(
     OperationDispatcher dispatcher,
     ISecurityAuditSink audits,
-    string hostInstanceId)
+    string hostInstanceId,
+    KernelRequestInstrumentation instrumentation)
 {
     public string HostInstanceId { get; } = hostInstanceId;
+
+    public Task InstrumentAsync(HttpContext context, RequestDelegate next) =>
+        instrumentation.InvokeAsync(context, next);
 
     public OperationExecutionContext CreateExecution(HttpContext context)
     {

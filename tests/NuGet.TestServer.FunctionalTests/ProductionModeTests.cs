@@ -22,13 +22,14 @@ public sealed class ProductionModeTests
         await using var server = await NuGetTestServerHost.StartAsync(
             ServerMode.Production,
             authentication);
-        await server.Faults.AddAsync(new FaultRule(
-            Id: "disabled",
-            Method: "GET",
-            PathContains: "/v3/index.json",
-            StatusCode: HttpStatusCode.ServiceUnavailable,
-            RemainingMatches: 1,
-            Delay: TimeSpan.Zero));
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => server.Faults.AddAsync(new FaultRule(
+                Id: "disabled",
+                Method: "GET",
+                PathContains: "/v3/index.json",
+                StatusCode: HttpStatusCode.ServiceUnavailable,
+                RemainingMatches: 1,
+                Delay: TimeSpan.Zero)).AsTask());
 
         var health = await server.HttpClient.GetFromJsonAsync<JsonElement>("/__test/health");
         using var index = await server.HttpClient.GetAsync("/v3/index.json");
@@ -46,7 +47,8 @@ public sealed class ProductionModeTests
         Assert.Equal(HttpStatusCode.NotFound, packages.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, requests.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, faults.StatusCode);
-        Assert.Empty(await server.Requests.GetAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => server.Requests.GetAsync().AsTask());
     }
 
     [Fact]

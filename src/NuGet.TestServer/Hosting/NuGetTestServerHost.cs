@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
 using NuGet.TestServer.Vulnerabilities;
@@ -26,10 +27,23 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         Packages = new PackageControlClient(
             application.Services.GetRequiredService<IPackageStore>(),
             application.Services.GetRequiredService<PackageSupplyChainService>());
-        Faults = new FaultControlClient(
-            application.Services.GetRequiredService<FaultRuleStore>());
-        Requests = new RequestControlClient(
-            application.Services.GetRequiredService<RequestRecorder>());
+        if (composition.ExtensionGraph.Extensions.Any(
+                extension => extension.Id == BuiltInExtensionIds.TestControl))
+        {
+            var capabilities = application.Services.GetRequiredService<CapabilityBroker>()
+                .ForOwner(BuiltInExtensionIds.TestControl);
+            Faults = new FaultControlClient(
+                capabilities.GetRequired<IFaultInjectionCapability>(
+                    BuiltInCapabilityNames.ControlFaultsInject));
+            Requests = new RequestControlClient(
+                capabilities.GetRequired<IRequestRecordingCapability>(
+                    BuiltInCapabilityNames.ControlRequestsRead));
+        }
+        else
+        {
+            Faults = new FaultControlClient((IFaultInjectionCapability?)null);
+            Requests = new RequestControlClient((IRequestRecordingCapability?)null);
+        }
     }
 
     public Uri BaseUrl { get; }
@@ -315,8 +329,11 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public async Task ResetAsync(CancellationToken token = default)
     {
         await Packages.ResetAsync(token);
-        Faults.Reset();
-        Requests.Reset();
+        if (Faults.IsAvailable)
+        {
+            Faults.Reset();
+            Requests.Reset();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -350,25 +367,108 @@ public sealed class PackageControlClient(
         supplyChain.ResetAsync(token);
 }
 
-public sealed class FaultControlClient(FaultRuleStore store)
+public sealed class FaultControlClient
 {
+    private readonly IFaultInjectionCapability? _capability;
+    private readonly FaultRuleStore? _legacyStore;
+
+    internal FaultControlClient(IFaultInjectionCapability? capability)
+    {
+        _capability = capability;
+    }
+
+    public FaultControlClient(FaultRuleStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        _legacyStore = store;
+    }
+
+    internal bool IsAvailable => _capability is not null || _legacyStore is not null;
+
     public ValueTask AddAsync(FaultRule rule, CancellationToken token = default)
     {
-        token.ThrowIfCancellationRequested();
-        store.Add(rule);
-        return ValueTask.CompletedTask;
+        return AddCoreAsync(rule, token);
     }
 
-    public void Reset() => store.Reset();
-}
+    public void Reset() =>
+        ResetCoreAsync().AsTask().GetAwaiter().GetResult();
 
-public sealed class RequestControlClient(RequestRecorder recorder)
-{
-    public ValueTask<IReadOnlyList<RequestRecord>> GetAsync(CancellationToken token = default)
+    private async ValueTask AddCoreAsync(FaultRule rule, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(recorder.GetAll());
+        if (_legacyStore is not null)
+        {
+            _legacyStore.Add(rule);
+            return;
+        }
+
+        var conflict = await GetCapability().TryAddFaultAsync(rule, token);
+        if (conflict is not null)
+        {
+            throw new InvalidOperationException(conflict);
+        }
     }
 
-    public void Reset() => recorder.Reset();
+    private ValueTask ResetCoreAsync(CancellationToken token = default)
+    {
+        if (_legacyStore is not null)
+        {
+            token.ThrowIfCancellationRequested();
+            _legacyStore.Reset();
+            return ValueTask.CompletedTask;
+        }
+
+        return GetCapability().ClearFaultsAsync(token);
+    }
+
+    private IFaultInjectionCapability GetCapability() =>
+        _capability ?? throw new InvalidOperationException(
+            "Fault injection is not available in this server profile.");
+}
+
+public sealed class RequestControlClient
+{
+    private readonly IRequestRecordingCapability? _capability;
+    private readonly RequestRecorder? _legacyRecorder;
+
+    internal RequestControlClient(IRequestRecordingCapability? capability)
+    {
+        _capability = capability;
+    }
+
+    public RequestControlClient(RequestRecorder recorder)
+    {
+        ArgumentNullException.ThrowIfNull(recorder);
+        _legacyRecorder = recorder;
+    }
+
+    public ValueTask<IReadOnlyList<RequestRecord>> GetAsync(CancellationToken token = default)
+    {
+        if (_legacyRecorder is not null)
+        {
+            token.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(_legacyRecorder.GetAll());
+        }
+
+        return GetCapability().GetRequestsAsync(token);
+    }
+
+    public void Reset() =>
+        ResetCoreAsync().AsTask().GetAwaiter().GetResult();
+
+    private ValueTask ResetCoreAsync(CancellationToken token = default)
+    {
+        if (_legacyRecorder is not null)
+        {
+            token.ThrowIfCancellationRequested();
+            _legacyRecorder.Reset();
+            return ValueTask.CompletedTask;
+        }
+
+        return GetCapability().ClearRequestsAsync(token);
+    }
+
+    private IRequestRecordingCapability GetCapability() =>
+        _capability ?? throw new InvalidOperationException(
+            "Request recording is not available in this server profile.");
 }

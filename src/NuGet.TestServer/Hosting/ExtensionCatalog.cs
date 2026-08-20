@@ -347,13 +347,17 @@ internal sealed class ExtensionCatalog
 
         string[] denied =
         [
-            BuiltInCapabilityNames.TestInstrumentation,
-            BuiltInCapabilityNames.ControlConfigure,
-            BuiltInCapabilityNames.ControlQuery,
+            BuiltInCapabilityNames.ControlFaultsInject,
+            BuiltInCapabilityNames.ControlRequestsRead,
             BuiltInCapabilityNames.SecretsResolveReference,
             BuiltInCapabilityNames.SidecarExecution
         ];
-        var violation = denied.FirstOrDefault(granted.Contains);
+        var requested = profile.Extensions
+            .SelectMany(extension => extension.RequestedCapabilities)
+            .Select(request => request.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var violation = denied.FirstOrDefault(
+            capability => granted.Contains(capability) || requested.Contains(capability));
         if (violation is not null)
         {
             throw Failure(
@@ -671,8 +675,8 @@ internal static class BuiltInExtensionCatalog
                 Required(BuiltInCapabilityNames.PackagesUnlist),
                 Required(BuiltInCapabilityNames.PackagesRelist),
                 Required(BuiltInCapabilityNames.PackagesDelete),
-                Required(BuiltInCapabilityNames.ControlConfigure),
-                Required(BuiltInCapabilityNames.ControlQuery),
+                Required(BuiltInCapabilityNames.ControlFaultsInject),
+                Required(BuiltInCapabilityNames.ControlRequestsRead),
                 Required(BuiltInCapabilityNames.EventsPublish)
             ]),
         Manifest(

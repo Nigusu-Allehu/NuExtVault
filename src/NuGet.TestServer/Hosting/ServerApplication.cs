@@ -1,13 +1,11 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
-using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
-using NuGet.TestServer.Requests;
 using NuGet.TestServer.Vulnerabilities;
 
 namespace NuGet.TestServer.Hosting;
@@ -144,8 +142,7 @@ public static class ServerApplication
             provider.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton(new StorageHealth(storageDirectory));
         builder.Services.AddSingleton<ServerDiagnostics>();
-        builder.Services.AddSingleton<FaultRuleStore>();
-        builder.Services.AddSingleton<RequestRecorder>();
+        builder.Services.AddSingleton<KernelRequestInstrumentation>();
         builder.Services.AddSingleton(
             composition.Vulnerabilities);
         builder.Services.AddSingleton(_ => new HttpClient(
@@ -169,8 +166,7 @@ public static class ServerApplication
                 provider.GetRequiredService<IPackageCandidateStore>(),
                 provider.GetRequiredService<PackageVisibilityPolicy>(),
                 provider.GetRequiredService<PackageSupplyChainService>(),
-                provider.GetRequiredService<FaultRuleStore>(),
-                provider.GetRequiredService<RequestRecorder>(),
+                provider.GetRequiredService<KernelRequestInstrumentation>(),
                 provider.GetRequiredService<StorageHealth>(),
                 provider.GetRequiredService<ServerDiagnostics>(),
                 composition.Hosting,
@@ -187,7 +183,8 @@ public static class ServerApplication
         builder.Services.AddSingleton(provider => new OperationGateway(
             provider.GetRequiredService<OperationDispatcher>(),
             provider.GetRequiredService<ISecurityAuditSink>(),
-            composition.InstanceId));
+            composition.InstanceId,
+            provider.GetRequiredService<KernelRequestInstrumentation>()));
 
         var app = builder.Build();
         try
@@ -208,7 +205,7 @@ public static class ServerApplication
             throw;
         }
 
-        MapMiddleware(app, hosting.Mode);
+        MapMiddleware(app);
         ProtocolEndpoints.Map(app);
         ModerationEndpoints.Map(app);
         HealthEndpoints.Map(app);
@@ -220,7 +217,7 @@ public static class ServerApplication
         return app;
     }
 
-    private static void MapMiddleware(WebApplication app, ServerMode mode)
+    private static void MapMiddleware(WebApplication app)
     {
         app.Use(async (context, next) =>
         {
@@ -258,61 +255,15 @@ public static class ServerApplication
             }
         });
 
-        if (mode == ServerMode.Test)
+        app.Use((context, next) =>
         {
-            app.Use(async (context, next) =>
-            {
-                var recorder = context.RequestServices.GetRequiredService<RequestRecorder>();
-                var faults = context.RequestServices.GetRequiredService<FaultRuleStore>();
-                var sequence = recorder.NextSequence();
-                var started = Stopwatch.GetTimestamp();
-                string? faultRuleId = null;
-
-                try
-                {
-                    var fault = context.Request.Path.StartsWithSegments("/__test")
-                        ? null
-                        : faults.Match(context.Request.Method, context.Request.Path);
-                    if (fault is not null)
-                    {
-                        faultRuleId = fault.Id;
-                        if (fault.Delay > TimeSpan.Zero)
-                        {
-                            await Task.Delay(fault.Delay, context.RequestAborted);
-                        }
-
-                        context.Response.StatusCode = (int)fault.StatusCode;
-                        return;
-                    }
-
-                    await next(context);
-                }
-                finally
-                {
-                    if (!ClearsRequestHistory(context.Request))
-                    {
-                        recorder.Add(new RequestRecord(
-                            sequence,
-                            recorder.UtcNow,
-                            context.Request.Method,
-                            context.Request.Path,
-                            context.Response.StatusCode,
-                            (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                            faultRuleId,
-                            context.User.Identity?.Name));
-                    }
-                }
-            });
-        }
+            var gateway = context.RequestServices.GetRequiredService<OperationGateway>();
+            return gateway.InstrumentAsync(context, next);
+        });
 
         app.UseMiddleware<NuGetAuthenticationMiddleware>();
     }
 
     public sealed record PackageContentRequest(string? Content);
 
-    private static bool ClearsRequestHistory(HttpRequest request) =>
-        (HttpMethods.IsPost(request.Method) &&
-         request.Path.Equals("/__test/reset", StringComparison.OrdinalIgnoreCase)) ||
-        (HttpMethods.IsDelete(request.Method) &&
-         request.Path.Equals("/__test/requests", StringComparison.OrdinalIgnoreCase));
 }

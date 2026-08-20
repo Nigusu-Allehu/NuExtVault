@@ -574,22 +574,19 @@ internal interface IModerationCapability
         CancellationToken token);
 }
 
-internal interface IControlInstrumentationCapability
+internal interface IFaultInjectionCapability
 {
     int FaultCapacity { get; }
-
-    int RequestCapacity { get; }
-
-    long EvictedRequestCount { get; }
-
     ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token);
-
     ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token);
-
     ValueTask ClearFaultsAsync(CancellationToken token);
+}
 
+internal interface IRequestRecordingCapability
+{
+    int RequestCapacity { get; }
+    long EvictedRequestCount { get; }
     ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token);
-
     ValueTask ClearRequestsAsync(CancellationToken token);
 }
 
@@ -741,8 +738,8 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.PackagesUnlist,
                 BuiltInCapabilityNames.PackagesRelist,
                 BuiltInCapabilityNames.PackagesDelete,
-                BuiltInCapabilityNames.ControlConfigure,
-                BuiltInCapabilityNames.ControlQuery,
+                BuiltInCapabilityNames.ControlFaultsInject,
+                BuiltInCapabilityNames.ControlRequestsRead,
                 BuiltInCapabilityNames.EventsPublish
             ],
             [BuiltInExtensionIds.Operations] =
@@ -889,15 +886,22 @@ internal sealed class CapabilityOwnerContext
                     _audit,
                     _limits,
                     _services.SupplyChain),
-            var type when type == typeof(IControlInstrumentationCapability) =>
-                new ControlInstrumentationCapability(
+            var type when type == typeof(IFaultInjectionCapability) =>
+                new FaultInjectionCapability(
                     _hostInstanceId,
                     _ownerId,
                     _grants,
                     _audit,
                     _limits,
-                    _services.Faults,
-                    _services.Requests),
+                    _services.Instrumentation),
+            var type when type == typeof(IRequestRecordingCapability) =>
+                new RequestRecordingCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Instrumentation),
             var type when type == typeof(IServerOperationsCapability) =>
                 new ServerOperationsCapability(
                     _hostInstanceId,
@@ -962,9 +966,10 @@ internal static class CapabilityContracts
             [typeof(IModerationCapability)] = Set(
                 BuiltInCapabilityNames.ModerationRead,
                 BuiltInCapabilityNames.ModerationDecide),
-            [typeof(IControlInstrumentationCapability)] = Set(
-                BuiltInCapabilityNames.ControlConfigure,
-                BuiltInCapabilityNames.ControlQuery),
+            [typeof(IFaultInjectionCapability)] = Set(
+                BuiltInCapabilityNames.ControlFaultsInject),
+            [typeof(IRequestRecordingCapability)] = Set(
+                BuiltInCapabilityNames.ControlRequestsRead),
             [typeof(IServerOperationsCapability)] = Set(
                 BuiltInCapabilityNames.OperationsQuery,
                 BuiltInCapabilityNames.BackupInvoke,
@@ -994,8 +999,7 @@ internal sealed record CapabilityServices(
     IPackageCandidateStore PackageCandidates,
     PackageVisibilityPolicy Visibility,
     PackageSupplyChainService SupplyChain,
-    FaultRuleStore Faults,
-    RequestRecorder Requests,
+    KernelRequestInstrumentation Instrumentation,
     StorageHealth Storage,
     ServerDiagnostics Diagnostics,
     ServerHostingOptions Hosting,
@@ -1388,39 +1392,34 @@ internal sealed class ModerationCapability(
                 token);
 }
 
-internal sealed class ControlInstrumentationCapability(
+internal sealed class FaultInjectionCapability(
     string hostInstanceId,
     string ownerId,
     ImmutableHashSet<string> grants,
     CapabilityAuditLog audit,
     CapabilityLimits limits,
-    FaultRuleStore faults,
-    RequestRecorder requests)
+    KernelRequestInstrumentation instrumentation)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
-        IControlInstrumentationCapability
+        IFaultInjectionCapability
 {
-    public int FaultCapacity => faults.Capacity;
-
-    public int RequestCapacity => requests.Capacity;
-
-    public long EvictedRequestCount => requests.EvictedCount;
+    public int FaultCapacity => instrumentation.FaultCapacity;
 
     public ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.ControlQuery)
+        Gate(BuiltInCapabilityNames.ControlFaultsInject)
             .InvokeAsync(
                 "get-faults",
-                _ => ValueTask.FromResult(faults.GetAll()),
+                _ => ValueTask.FromResult(instrumentation.GetFaults()),
                 token);
 
     public ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.ControlConfigure)
+        Gate(BuiltInCapabilityNames.ControlFaultsInject)
             .InvokeAsync(
                 "add-fault",
                 _ =>
                 {
                     try
                     {
-                        faults.Add(rule);
+                        instrumentation.AddFault(rule);
                         return ValueTask.FromResult<string?>(null);
                     }
                     catch (InvalidOperationException exception)
@@ -1431,30 +1430,48 @@ internal sealed class ControlInstrumentationCapability(
                 token);
 
     public async ValueTask ClearFaultsAsync(CancellationToken token) =>
-        await Gate(BuiltInCapabilityNames.ControlConfigure)
+        await Gate(BuiltInCapabilityNames.ControlFaultsInject)
             .InvokeAsync(
                 "clear-faults",
                 _ =>
                 {
-                    faults.Reset();
+                    instrumentation.ClearFaults();
                     return ValueTask.FromResult(true);
                 },
                 token);
+}
+
+internal sealed class RequestRecordingCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    KernelRequestInstrumentation instrumentation)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IRequestRecordingCapability
+{
+    public int RequestCapacity => instrumentation.RequestCapacity;
+    public long EvictedRequestCount => instrumentation.EvictedRequestCount;
 
     public ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.ControlQuery)
+        Gate(BuiltInCapabilityNames.ControlRequestsRead)
             .InvokeAsync(
                 "get-requests",
-                _ => ValueTask.FromResult(requests.GetAll()),
+                async ct =>
+                {
+                    await instrumentation.WaitForCompletedRequestsAsync(ct);
+                    return instrumentation.GetRequests();
+                },
                 token);
 
     public async ValueTask ClearRequestsAsync(CancellationToken token) =>
-        await Gate(BuiltInCapabilityNames.ControlConfigure)
+        await Gate(BuiltInCapabilityNames.ControlRequestsRead)
             .InvokeAsync(
                 "clear-requests",
                 _ =>
                 {
-                    requests.Reset();
+                    instrumentation.ClearRequests();
                     return ValueTask.FromResult(true);
                 },
                 token);
