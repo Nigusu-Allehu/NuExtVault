@@ -142,6 +142,7 @@ internal static class ServerProfiles
 
 internal sealed record ServerComposition(
     ServerProfile Profile,
+    ResolvedExtensionGraph ExtensionGraph,
     ServerHostingOptions Hosting,
     string? StorageDirectory,
     AuthenticationConfiguration Authentication,
@@ -173,6 +174,9 @@ internal sealed record ServerComposition(
         runtimeState ??= new RuntimeStateConfiguration();
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
 
+        var extensionGraph = BuiltInExtensionCatalog.Instance.Resolve(
+            profile,
+            authentication.Profile == AuthenticationProfile.Production);
         ValidateProfile(profile, storageDirectory, authentication, supplyChain);
         var mode = profile.Kind == ServerProfileKind.Production
             ? ServerMode.Production
@@ -185,6 +189,7 @@ internal sealed record ServerComposition(
 
         return new ServerComposition(
             profile,
+            extensionGraph,
             hosting,
             storageDirectory,
             authentication,
@@ -238,16 +243,6 @@ internal sealed record ServerComposition(
         AuthenticationConfiguration authentication,
         SupplyChainOptions? supplyChain)
     {
-        var grants = profile.Grants.Select(grant => grant.Name).ToHashSet(StringComparer.Ordinal);
-        var missingGrant = profile.Extensions
-            .SelectMany(extension => extension.RequestedCapabilities)
-            .FirstOrDefault(request => request.IsRequired && !grants.Contains(request.Name));
-        if (missingGrant is not null)
-        {
-            throw new ServerHostingConfigurationException(
-                $"Profile '{profile.Name}' does not grant required capability '{missingGrant.Name}'.");
-        }
-
         if (profile.Kind != ServerProfileKind.Production)
         {
             return;
