@@ -151,7 +151,23 @@ public sealed class ExtensionCatalogTests
         var catalog = Catalog(
             Manifest(
                 "extension.consumer",
-                resources: [new("SearchQueryService/3.5.0", ["RegistrationsBaseUrl/3.6.0"])]));
+                operations: ["NuGet.Search.Query"],
+                routes: [new("GET", "/query")],
+                resources:
+                [
+                    new ServiceResourceContribution(
+                        "SearchQueryService",
+                        "3.5.0",
+                        new OperationId("NuGet.Search.Query"),
+                        "/query",
+                        ServiceResourceVisibility.Advertised,
+                        ServiceResourceAccess.Read,
+                        [],
+                        ["RegistrationsBaseUrl/3.6.0"],
+                        null,
+                        10,
+                        ServiceResourceReadiness.Ready)
+                ]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
             () => catalog.Resolve(Profile("extension.consumer")));
@@ -262,7 +278,7 @@ public sealed class ExtensionCatalogTests
         ImmutableArray<ExtensionDependency> dependencies = default,
         ImmutableArray<string> operations = default,
         ImmutableArray<RouteDescriptor> routes = default,
-        ImmutableArray<ServiceIndexResourceDescriptor> resources = default,
+        ImmutableArray<ServiceResourceContribution> resources = default,
         ImmutableArray<CapabilityRequest> capabilities = default) =>
         new(
             SchemaVersion: 1,

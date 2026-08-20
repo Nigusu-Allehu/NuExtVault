@@ -8,6 +8,7 @@ namespace NuGet.TestServer.Hosting;
 internal static class BuiltInExtensionIds
 {
     public const string Protocol = "builtin.protocol";
+    public const string ServiceIndex = "builtin.service-index";
     public const string Publication = "builtin.publication";
     public const string Vulnerabilities = "builtin.vulnerabilities";
     public const string TestControl = "builtin.test-control";
@@ -75,6 +76,8 @@ internal static class ServerProfiles
         Required(BuiltInCapabilityNames.PackagesMetadataRead),
         Required(BuiltInCapabilityNames.PackagesContentRead),
         Required(BuiltInCapabilityNames.VulnerabilityStateRead));
+    private static readonly ExtensionSelection ServiceIndex =
+        Extension(BuiltInExtensionIds.ServiceIndex);
     private static readonly ExtensionSelection Publication = Extension(
         BuiltInExtensionIds.Publication,
         Required(BuiltInCapabilityNames.PackagesMetadataRead),
@@ -118,7 +121,7 @@ internal static class ServerProfiles
     public static ServerProfile Embedded { get; } = new(
         "embedded",
         ServerProfileKind.Embedded,
-        [Protocol, Publication, Vulnerabilities, TestControl, Operations, SupplyChain],
+        [Protocol, ServiceIndex, Publication, Vulnerabilities, TestControl, Operations, SupplyChain],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
             BuiltInCapabilityNames.PackagesMetadataRead,
@@ -144,6 +147,7 @@ internal static class ServerProfiles
         ServerProfileKind.Standard,
         [
             Protocol,
+            ServiceIndex,
             Publication,
             Vulnerabilities,
             TestControl,
@@ -180,6 +184,7 @@ internal static class ServerProfiles
         ServerProfileKind.Production,
         [
             Protocol,
+            ServiceIndex,
             Publication,
             Vulnerabilities,
             DurableStorage,

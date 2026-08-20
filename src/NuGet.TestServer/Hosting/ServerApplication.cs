@@ -173,9 +173,12 @@ public static class ServerApplication
                 composition.StorageDirectory,
                 composition.Vulnerabilities,
                 provider.GetRequiredService<HttpClient>())));
+        builder.Services.AddSingleton(_ =>
+            ServiceIndexResourceRegistry.Create(composition.ExtensionGraph));
         builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
             provider.GetRequiredService<CapabilityBroker>(),
             composition.ExtensionGraph,
+            provider.GetRequiredService<ServiceIndexResourceRegistry>(),
             packageLimits));
         builder.Services.AddSingleton(provider => new OperationDispatcher(
             provider.GetRequiredService<OperationRegistry>(),

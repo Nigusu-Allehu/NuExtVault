@@ -12,53 +12,9 @@ namespace NuGet.TestServer.Kernel.Owners;
 /// </summary>
 internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
 {
-    private static readonly ImmutableArray<ServiceResourceDescriptor> Resources =
-    [
-        new(
-            "PackageBaseAddress/3.0.0",
-            "3.0.0",
-            new OperationId(OperationIds.FlatContainerGetVersions),
-            "/flatcontainer/"),
-        new(
-            "RegistrationsBaseUrl/3.6.0",
-            "3.6.0",
-            new OperationId(OperationIds.RegistrationGetIndex),
-            "/registration/"),
-        new(
-            "SearchQueryService/3.0.0-beta",
-            "3.0.0-beta",
-            new OperationId(OperationIds.SearchQuery),
-            "/query"),
-        new(
-            "SearchQueryService/3.5.0",
-            "3.5.0",
-            new OperationId(OperationIds.SearchQuery),
-            "/query"),
-        new(
-            "PackagePublish/2.0.0",
-            "2.0.0",
-            new OperationId(OperationIds.PackageManagementPush),
-            "/package"),
-        new(
-            "SymbolPackagePublish/4.9.0",
-            "4.9.0",
-            new OperationId(OperationIds.PackageManagementPushSymbols),
-            "/symbolpackage"),
-        new(
-            "VulnerabilityInfo/6.7.0",
-            "6.7.0",
-            new OperationId(OperationIds.VulnerabilitiesGetIndex),
-            "/v3/vulnerabilities/index.json")
-    ];
-
     public void Register(OperationRegistryBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        builder.Register(
-            BuiltInExtensionIds.Protocol,
-            new DelegateOperationOwner<GetServiceIndexRequest, GetServiceIndexResponse>(
-                OperationIds.ServiceIndexGet,
-                GetServiceIndexAsync));
         builder.Register(
             BuiltInExtensionIds.Protocol,
             new DelegateOperationOwner<GetPackageVersionsRequest, GetPackageVersionsResponse>(
@@ -84,29 +40,6 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
             new DelegateOperationOwner<GetSymbolRequest, GetSymbolResponse>(
                 OperationIds.FlatContainerGetSymbol,
                 GetSymbolAsync));
-    }
-
-    private ValueTask<OperationResponse<GetServiceIndexResponse>> GetServiceIndexAsync(
-        GetServiceIndexRequest request,
-        OperationExecutionContext context,
-        CancellationToken token)
-    {
-        token.ThrowIfCancellationRequested();
-        var response = new GetServiceIndexResponse("3.0.0", Resources);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new Dictionary<string, object?>
-            {
-                ["version"] = response.Version,
-                ["resources"] = response.Resources
-                    .Select(resource => new Dictionary<string, string>
-                    {
-                        ["@id"] = $"{request.BaseAddress}{resource.RouteName}",
-                        ["@type"] = resource.ResourceType
-                    })
-                    .ToArray()
-            })));
-        return ValueTask.FromResult(OperationResponse<GetServiceIndexResponse>.Success(response));
     }
 
     private async ValueTask<OperationResponse<GetPackageVersionsResponse>> GetVersionsAsync(

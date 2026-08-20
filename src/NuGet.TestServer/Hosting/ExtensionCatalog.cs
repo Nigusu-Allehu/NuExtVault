@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Text;
+using NuGet.Versioning;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Kernel;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -51,10 +53,6 @@ internal sealed record RouteDescriptor(
         !RequiresProductionIdentity || hasProductionIdentity;
 }
 
-internal sealed record ServiceIndexResourceDescriptor(
-    string ResourceType,
-    ImmutableArray<string> RequiresResourceTypes);
-
 internal sealed record ExtensionManifest(
     int SchemaVersion,
     string Id,
@@ -63,14 +61,16 @@ internal sealed record ExtensionManifest(
     ImmutableArray<ExtensionDependency> Dependencies,
     ImmutableArray<string> Operations,
     ImmutableArray<RouteDescriptor> Routes,
-    ImmutableArray<ServiceIndexResourceDescriptor> Resources,
+    ImmutableArray<ServiceResourceContribution> Resources,
     ImmutableArray<CapabilityRequest> RequestedCapabilities);
 
 internal sealed record ResolvedOperation(string OperationId, string ExtensionId);
 
 internal sealed record ResolvedRoute(string Method, string Path, string ExtensionId);
 
-internal sealed record ResolvedServiceIndexResource(string ResourceType, string ExtensionId);
+internal sealed record ResolvedServiceIndexResource(
+    ServiceResourceContribution Contribution,
+    string ExtensionId);
 
 internal sealed record ResolvedCapability(
     string Name,
@@ -141,8 +141,8 @@ internal sealed class ExtensionCatalog
 
         var operations = ResolveOperations(ordered);
         var routes = ResolveRoutes(ordered, hasProductionIdentity);
-        var resources = ResolveResources(ordered);
-        ValidateResourceLinks(ordered, resources);
+        var resources = ResolveResources(ordered, operations, routes);
+        ValidateResourceLinks(resources);
         var diagnostics = CreateDiagnostics(profile, ordered, routes, resources, capabilities);
 
         return new ResolvedExtensionGraph(
@@ -430,56 +430,173 @@ internal sealed class ExtensionCatalog
     }
 
     private static ImmutableArray<ResolvedServiceIndexResource> ResolveResources(
-        IReadOnlyList<ExtensionManifest> manifests)
+        IReadOnlyList<ExtensionManifest> manifests,
+        ImmutableArray<ResolvedOperation> operations,
+        ImmutableArray<ResolvedRoute> routes)
     {
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
+        var operationOwners = operations.ToDictionary(
+            operation => operation.OperationId,
+            operation => operation.ExtensionId,
+            StringComparer.Ordinal);
         foreach (var manifest in manifests.OrderBy(value => value.Id, ExtensionIdComparer.Instance))
         {
             foreach (var resource in manifest.Resources.OrderBy(
-                         value => value.ResourceType,
+                         value => value.AdvertisedType,
                          StringComparer.Ordinal))
             {
-                if (owners.TryGetValue(resource.ResourceType, out var existingOwner))
+                ValidateResourceContribution(manifest, resource, operationOwners, routes);
+                if (owners.TryGetValue(resource.AdvertisedType, out var existingOwner))
                 {
                     throw Failure(
                         "resource-owner-conflict",
-                        $"Resource '{resource.ResourceType}' is owned by " +
+                        $"Resource '{resource.AdvertisedType}' is owned by " +
                         $"'{existingOwner}' and '{manifest.Id}'.");
                 }
 
-                owners.Add(resource.ResourceType, manifest.Id);
+                owners.Add(resource.AdvertisedType, manifest.Id);
             }
         }
 
         return
         [
-            .. owners.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => new ResolvedServiceIndexResource(pair.Key, pair.Value))
+            .. manifests
+                .SelectMany(manifest => manifest.Resources.Select(resource =>
+                    new ResolvedServiceIndexResource(resource, manifest.Id)))
+                .Where(resource =>
+                    resource.Contribution.Visibility == ServiceResourceVisibility.Advertised)
+                .OrderBy(resource => resource.Contribution.Order)
+                .ThenBy(resource => resource.Contribution.AdvertisedType, StringComparer.Ordinal)
+                .ThenBy(resource => resource.ExtensionId, StringComparer.Ordinal)
         ];
     }
 
+    private static void ValidateResourceContribution(
+        ExtensionManifest manifest,
+        ServiceResourceContribution resource,
+        IReadOnlyDictionary<string, string> operationOwners,
+        ImmutableArray<ResolvedRoute> routes)
+    {
+        if (string.IsNullOrWhiteSpace(resource.ResourceType) ||
+            resource.ResourceType.Contains('/', StringComparison.Ordinal) ||
+            !NuGetVersion.TryParse(resource.Version, out _) ||
+            !resource.RouteName.StartsWith("/", StringComparison.Ordinal) ||
+            resource.Order < 0)
+        {
+            throw Failure(
+                "invalid-resource",
+                $"Extension '{manifest.Id}' declares invalid resource " +
+                $"'{resource.AdvertisedType}'.");
+        }
+
+        if (WellKnownResourceVersions.TryGetValue(resource.ResourceType, out var supported) &&
+            !supported.Contains(resource.Version))
+        {
+            throw Failure(
+                "unsupported-resource-version",
+                $"Resource '{resource.ResourceType}' does not support version " +
+                $"'{resource.Version}'.");
+        }
+
+        if (resource.Readiness != ServiceResourceReadiness.Ready)
+        {
+            throw Failure(
+                "resource-not-ready",
+                $"Selected resource '{resource.AdvertisedType}' from " +
+                $"'{manifest.Id}' is not ready.");
+        }
+
+        if (!operationOwners.TryGetValue(resource.OperationId.Value, out var operationOwner))
+        {
+            throw Failure(
+                "missing-resource-operation",
+                $"Resource '{resource.AdvertisedType}' from '{manifest.Id}' requires missing " +
+                $"operation '{resource.OperationId.Value}'.");
+        }
+
+        if (!StringComparer.OrdinalIgnoreCase.Equals(operationOwner, manifest.Id))
+        {
+            throw Failure(
+                "resource-operation-owner-mismatch",
+                $"Resource '{resource.AdvertisedType}' is contributed by '{manifest.Id}', but " +
+                $"operation '{resource.OperationId.Value}' is owned by '{operationOwner}'.");
+        }
+
+        var ownedRoutes = routes
+            .Where(route =>
+                StringComparer.OrdinalIgnoreCase.Equals(route.ExtensionId, manifest.Id) &&
+                RouteMatches(resource.RouteName, route.Path))
+            .ToArray();
+        if (ownedRoutes.Length == 0)
+        {
+            throw Failure(
+                "missing-resource-route",
+                $"Resource '{resource.AdvertisedType}' from '{manifest.Id}' requires missing " +
+                $"route name '{resource.RouteName}'.");
+        }
+
+        if (!ownedRoutes.Any(route => RouteSupportsAccess(route.Method, resource.RequiredAccess)))
+        {
+            throw Failure(
+                "resource-access-mismatch",
+                $"Resource '{resource.AdvertisedType}' declares access " +
+                $"'{resource.RequiredAccess}', but route name '{resource.RouteName}' has no " +
+                "compatible method.");
+        }
+
+        if (RequiredResourceAccess.TryGetValue(resource.OperationId.Value, out var required) &&
+            required != resource.RequiredAccess)
+        {
+            throw Failure(
+                "resource-access-mismatch",
+                $"Resource '{resource.AdvertisedType}' declares access " +
+                $"'{resource.RequiredAccess}', but operation '{resource.OperationId.Value}' " +
+                $"requires '{required}'.");
+        }
+    }
+
+    private static bool RouteMatches(string routeName, string route) =>
+        StringComparer.Ordinal.Equals(routeName, route) ||
+        routeName.EndsWith("/", StringComparison.Ordinal) &&
+        route.StartsWith(routeName, StringComparison.Ordinal);
+
+    private static bool RouteSupportsAccess(string method, ServiceResourceAccess access) =>
+        access switch
+        {
+            ServiceResourceAccess.Read => method is "GET" or "HEAD",
+            ServiceResourceAccess.Write or ServiceResourceAccess.PackagePublish =>
+                method is "PUT" or "POST",
+            _ => false
+        };
+
     private static void ValidateResourceLinks(
-        IReadOnlyList<ExtensionManifest> manifests,
         ImmutableArray<ResolvedServiceIndexResource> resources)
     {
         var available = resources
-            .Select(resource => resource.ResourceType)
+            .Select(resource => resource.Contribution.AdvertisedType)
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var manifest in manifests.OrderBy(value => value.Id, ExtensionIdComparer.Instance))
+        foreach (var resource in resources)
         {
-            foreach (var resource in manifest.Resources.OrderBy(
-                         value => value.ResourceType,
-                         StringComparer.Ordinal))
+            foreach (var required in resource.Contribution.RequiresResourceTypes.Order(StringComparer.Ordinal))
             {
-                foreach (var required in resource.RequiresResourceTypes.Order(StringComparer.Ordinal))
+                if (!available.Contains(required))
                 {
-                    if (!available.Contains(required))
-                    {
-                        throw Failure(
-                            "missing-linked-resource",
-                            $"Resource '{resource.ResourceType}' from '{manifest.Id}' requires " +
-                            $"missing resource '{required}'.");
-                    }
+                    throw Failure(
+                        "missing-linked-resource",
+                        $"Resource '{resource.Contribution.AdvertisedType}' from " +
+                        $"'{resource.ExtensionId}' requires missing resource '{required}'.");
+                }
+            }
+
+            foreach (var produced in resource.Contribution.ProducesUrlsFor.Order(StringComparer.Ordinal))
+            {
+                if (!available.Contains(produced))
+                {
+                    throw Failure(
+                        "missing-produced-resource",
+                        $"Resource '{resource.Contribution.AdvertisedType}' from " +
+                        $"'{resource.ExtensionId}' produces URLs for missing resource " +
+                        $"'{produced}'.");
                 }
             }
         }
@@ -512,7 +629,7 @@ internal sealed class ExtensionCatalog
                 .ToArray();
             var ownedResources = resources
                 .Where(resource => resource.ExtensionId == manifest.Id)
-                .Select(resource => resource.ResourceType)
+                .Select(resource => resource.Contribution.AdvertisedType)
                 .Order(StringComparer.Ordinal)
                 .ToArray();
             var omittedOptional = resolvedCapabilities
@@ -541,6 +658,30 @@ internal sealed class ExtensionCatalog
 
     private static ServerHostingConfigurationException Failure(string code, string message) =>
         new($"catalog.{code}: {message}");
+
+    private static IReadOnlyDictionary<string, IReadOnlySet<string>> WellKnownResourceVersions
+        { get; } = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+        {
+            ["PackageBaseAddress"] = new HashSet<string>(["3.0.0"], StringComparer.Ordinal),
+            ["RegistrationsBaseUrl"] = new HashSet<string>(["3.6.0"], StringComparer.Ordinal),
+            ["SearchQueryService"] = new HashSet<string>(
+                ["3.0.0-beta", "3.5.0"],
+                StringComparer.Ordinal),
+            ["PackagePublish"] = new HashSet<string>(["2.0.0"], StringComparer.Ordinal),
+            ["SymbolPackagePublish"] = new HashSet<string>(["4.9.0"], StringComparer.Ordinal),
+            ["VulnerabilityInfo"] = new HashSet<string>(["6.7.0"], StringComparer.Ordinal)
+        };
+
+    private static IReadOnlyDictionary<string, ServiceResourceAccess> RequiredResourceAccess
+        { get; } = new Dictionary<string, ServiceResourceAccess>(StringComparer.Ordinal)
+        {
+            [OperationIds.FlatContainerGetVersions] = ServiceResourceAccess.Read,
+            [OperationIds.RegistrationGetIndex] = ServiceResourceAccess.Read,
+            [OperationIds.SearchQuery] = ServiceResourceAccess.Read,
+            [OperationIds.PackageManagementPush] = ServiceResourceAccess.PackagePublish,
+            [OperationIds.PackageManagementPushSymbols] = ServiceResourceAccess.Write,
+            [OperationIds.VulnerabilitiesGetIndex] = ServiceResourceAccess.Read
+        };
 
     private enum VisitState
     {
@@ -573,14 +714,12 @@ internal static class BuiltInExtensionCatalog
         Manifest(
             BuiltInExtensionIds.Protocol,
             operations: Operations(
-                OperationFamily.ServiceIndex,
                 OperationFamily.FlatContainer,
                 OperationFamily.Registration,
                 OperationFamily.Search),
             routes:
             [
                 .. ReadRoutes(
-                    "/v3/index.json",
                     "/flatcontainer/{id}/index.json",
                     "/flatcontainer/{id}/{version}/{fileName}",
                     "/registration/{id}/index.json",
@@ -590,14 +729,42 @@ internal static class BuiltInExtensionCatalog
             ],
             resources:
             [
-                new("PackageBaseAddress/3.0.0", []),
-                new("RegistrationsBaseUrl/3.6.0", ["PackageBaseAddress/3.0.0"]),
-                new(
-                    "SearchQueryService/3.0.0-beta",
-                    ["PackageBaseAddress/3.0.0", "RegistrationsBaseUrl/3.6.0"]),
-                new(
-                    "SearchQueryService/3.5.0",
-                    ["PackageBaseAddress/3.0.0", "RegistrationsBaseUrl/3.6.0"])
+                Resource(
+                    "PackageBaseAddress",
+                    "3.0.0",
+                    OperationIds.FlatContainerGetVersions,
+                    "/flatcontainer/",
+                    order: 10),
+                Resource(
+                    "RegistrationsBaseUrl",
+                    "3.6.0",
+                    OperationIds.RegistrationGetIndex,
+                    "/registration/",
+                    producesUrlsFor: ["PackageBaseAddress/3.0.0"],
+                    requiresResourceTypes: ["PackageBaseAddress/3.0.0"],
+                    order: 20),
+                Resource(
+                    "SearchQueryService",
+                    "3.0.0-beta",
+                    OperationIds.SearchQuery,
+                    "/query",
+                    requiresResourceTypes:
+                    [
+                        "PackageBaseAddress/3.0.0",
+                        "RegistrationsBaseUrl/3.6.0"
+                    ],
+                    order: 30),
+                Resource(
+                    "SearchQueryService",
+                    "3.5.0",
+                    OperationIds.SearchQuery,
+                    "/query",
+                    requiresResourceTypes:
+                    [
+                        "PackageBaseAddress/3.0.0",
+                        "RegistrationsBaseUrl/3.6.0"
+                    ],
+                    order: 40)
             ],
             capabilities:
             [
@@ -606,6 +773,10 @@ internal static class BuiltInExtensionCatalog
                 Required(BuiltInCapabilityNames.PackagesContentRead),
                 Required(BuiltInCapabilityNames.VulnerabilityStateRead)
             ]),
+        Manifest(
+            BuiltInExtensionIds.ServiceIndex,
+            operations: Operations(OperationFamily.ServiceIndex),
+            routes: [.. ReadRoutes("/v3/index.json")]),
         Manifest(
             BuiltInExtensionIds.Publication,
             dependencies: [Dependency(BuiltInExtensionIds.Protocol)],
@@ -622,8 +793,20 @@ internal static class BuiltInExtensionCatalog
             ],
             resources:
             [
-                new("PackagePublish/2.0.0", []),
-                new("SymbolPackagePublish/4.9.0", [])
+                Resource(
+                    "PackagePublish",
+                    "2.0.0",
+                    OperationIds.PackageManagementPush,
+                    "/package",
+                    ServiceResourceAccess.PackagePublish,
+                    order: 50),
+                Resource(
+                    "SymbolPackagePublish",
+                    "4.9.0",
+                    OperationIds.PackageManagementPushSymbols,
+                    "/symbolpackage",
+                    ServiceResourceAccess.Write,
+                    order: 60)
             ],
             capabilities:
             [
@@ -644,7 +827,15 @@ internal static class BuiltInExtensionCatalog
                     "/v3/vulnerabilities/index.json",
                     "/v3/vulnerabilities/{snapshotId}/{pageName}.json")
             ],
-            resources: [new("VulnerabilityInfo/6.7.0", [])],
+            resources:
+            [
+                Resource(
+                    "VulnerabilityInfo",
+                    "6.7.0",
+                    OperationIds.VulnerabilitiesGetIndex,
+                    "/v3/vulnerabilities/index.json",
+                    order: 70)
+            ],
             capabilities: [Required(BuiltInCapabilityNames.VulnerabilityStateRead)]),
         Manifest(
             BuiltInExtensionIds.TestControl,
@@ -728,7 +919,7 @@ internal static class BuiltInExtensionCatalog
         ImmutableArray<ExtensionDependency> dependencies = default,
         ImmutableArray<string> operations = default,
         ImmutableArray<RouteDescriptor> routes = default,
-        ImmutableArray<ServiceIndexResourceDescriptor> resources = default,
+        ImmutableArray<ServiceResourceContribution> resources = default,
         ImmutableArray<CapabilityRequest> capabilities = default) =>
         new(
             1,
@@ -744,6 +935,29 @@ internal static class BuiltInExtensionCatalog
     private static ExtensionDependency Dependency(string id) => new(id, Compatibility);
 
     private static CapabilityRequest Required(string capability) => new(capability, true);
+
+    private static ServiceResourceContribution Resource(
+        string resourceType,
+        string version,
+        string operationId,
+        string routeName,
+        ServiceResourceAccess access = ServiceResourceAccess.Read,
+        ImmutableArray<string> producesUrlsFor = default,
+        ImmutableArray<string> requiresResourceTypes = default,
+        string? comment = null,
+        int order = 0) =>
+        new(
+            resourceType,
+            version,
+            new OperationId(operationId),
+            routeName,
+            ServiceResourceVisibility.Advertised,
+            access,
+            producesUrlsFor.IsDefault ? [] : producesUrlsFor,
+            requiresResourceTypes.IsDefault ? [] : requiresResourceTypes,
+            comment,
+            order,
+            ServiceResourceReadiness.Ready);
 
     private static ImmutableArray<string> Operations(params OperationFamily[] families) =>
     [

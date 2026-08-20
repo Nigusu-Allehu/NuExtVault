@@ -2,7 +2,8 @@
 
 ## Status
 
-Selected architecture design. Implementation has not started.
+Selected architecture design. Migration Steps 1 through 9 are implemented; later
+feature extractions and the public extension SDK remain planned.
 
 This design supersedes the core-first proposal as the intended long-term
 architecture. Most NuTestServer features, including the default NuGet V3
@@ -1040,6 +1041,21 @@ Rules:
    type is absent, unless that contract defines an explicit degradation.
 9. The project publishes named client-viable minimal profiles rather than claiming
    that every arbitrary resource subset is usable by NuGet clients.
+
+The Step 9 implementation uses an internal typed contribution for each selected
+built-in resource. Contributions carry the resource type and version, owning
+operation, route name, visibility, required access, readiness, linked-resource
+requirements, URL-production links, optional stable comment, and deterministic
+order. The resolved graph rejects invalid or unsupported
+versions, duplicate advertised types, missing or mismatched owners and routes,
+dangling links, access mismatches, and advertised owners that are not ready.
+
+`builtin.service-index` is the sole owner of `NuGet.ServiceIndex.Get`. It receives a
+kernel-created resource registry rather than `HttpContext` or mutable JSON. The
+kernel projects absolute URLs and the fixed service-index document fields after
+trusted-proxy and access processing. Existing flat-container, registration, search,
+publication, vulnerability, control, operations, supply-chain, and package-management
+implementations remain unextracted.
 
 ## Package Staging example
 
