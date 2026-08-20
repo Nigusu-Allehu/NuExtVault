@@ -2,9 +2,17 @@
 
 ## Status
 
-Selected architecture design. Migration Steps 1 through 11 are implemented; later
-feature extractions and the public extension SDK remain planned. Step 11 has local
-validation only; cross-platform CI is not claimed here.
+Selected architecture design, revised from implementation evidence through merged
+PR #62. Migration Steps 1 through 11 are implemented and have passed Windows,
+Ubuntu, and macOS CI. Steps 11A through 11D are blocking prerequisites before the
+paused Step 12 can resume.
+
+The current implementation is a closed built-in modular system. It has per-instance
+profiles, a validated built-in catalog, one-owner operation dispatch, deny-by-default
+capabilities, kernel instrumentation, resource projection, and extracted
+vulnerability and control owners. It is not yet an independently loadable extension
+platform: endpoint binding remains static, several contracts carry host-derived URLs,
+and some owners use kernel-specific rendering state.
 
 This design supersedes the core-first proposal as the intended long-term
 architecture. Most NuTestServer features, including the default NuGet V3
@@ -37,9 +45,10 @@ Everything else is composed as an extension:
 - Package staging.
 - Future organization-specific resources.
 
-The default CLI installs and activates an official extension bundle, so the normal
-user experience remains a complete NuGet server. A minimal profile activates only
-the kernel and explicitly selected extensions.
+The intended default CLI installs and activates an official extension bundle, so the
+normal user experience remains a complete NuGet server. A minimal profile activates
+only the kernel and explicitly selected extensions. External discovery, dynamic
+loading, sidecars, and the public SDK remain proposed.
 
 Official and third-party extensions use the same manifests, contribution points,
 capability broker, lifecycle, ordering, and tests. Official extensions do not get
@@ -178,6 +187,9 @@ References:
 10. **Compatibility is checked before activation, not discovered by failure.**
 11. **Isolation is not confused with trust.**
 12. **Existing NuGet behavior remains compatible during migration.**
+13. **Routes and absolute URLs are kernel projections, never extension privileges.**
+14. **Capabilities describe serializable actions, not owner-shaped service facades.**
+15. **The initial scalability target is one process and one node.**
 
 ## Normative invariants
 
@@ -200,6 +212,10 @@ These rules take precedence over extension configuration:
    integrity, publication policy, or audit attribution.
 7. Programmatic hosts remain deterministic, isolated, parallel-safe, and in-memory
    by default.
+8. Route tables are generated from validated descriptors and frozen before listening.
+   Extensions never mutate routes at runtime.
+9. Host-derived absolute URLs are projected by the kernel using trusted-proxy-aware
+   request facts. Extension contracts carry route references and parameters.
 
 ## System overview
 
@@ -258,6 +274,36 @@ grants, routes, state handles, cancellation, and diagnostics remain per host.
 
 Extensions never receive `WebApplication`, `IEndpointRouteBuilder`, or unrestricted
 middleware registration.
+
+Each route descriptor is typed and transport-neutral. It declares:
+
+- HTTP method and semantic path template.
+- Parameter, body, and stream binding.
+- HEAD policy.
+- Access policy and limits.
+- Stable operation ID.
+- Request, response, error, and rendering contract versions.
+
+The kernel validates semantic path collisions, reserved prefixes, route and operation
+ownership, contract compatibility, and binding completeness before it generates the
+startup route table. Route generation is deterministic and frozen before listening.
+Runtime route mutation is out of scope.
+
+The closed-world proof is a separately compiled test module that contributes an
+operation, route, codec or binder, service-index resource, and requested capabilities
+without kernel source edits. The sample route is `/flavors/index.json`. This is an
+internal conformance proof, not public SDK publication or external package discovery.
+If this proof requires a kernel edit, NuTestServer must describe the design as a
+modular monolith rather than a third-party extension platform.
+
+### URL projection
+
+Extension operations return route references plus typed route parameters. The kernel
+resolves those references against the validated route table and projects absolute
+URLs after trusted-proxy processing. Operation, registration, and search contracts
+must not accept a request base address or return host-derived absolute URLs before
+their extraction. Service-index projection is the implemented precedent; the same
+rule applies to all resource links.
 
 ### Capability system
 
@@ -568,8 +614,8 @@ extension code.
   ],
   "capabilities": [
     "packages.metadata.read",
-    "extensionState.read",
-    "extensionState.write"
+    "extension-state.read",
+    "extension-state.write"
   ],
   "contributes": {
     "documentContributors": [
@@ -767,7 +813,7 @@ Example taxonomy:
 packages.identity.read
 packages.metadata.read
 packages.content.read
-packages.content.writeStaged
+packages.content.write-staged
 packages.publish
 packages.unlist
 packages.relist
@@ -779,11 +825,11 @@ moderation.read
 moderation.decide
 search.index.read
 search.index.write
-extensionState.read
-extensionState.write
+extension-state.read
+extension-state.write
 events.publish
-http.outbound
-secrets.resolveReference
+network.outbound-http
+secrets.resolve-reference
 backup.contribute
 operations.backup.invoke
 operations.restore.invoke
@@ -805,6 +851,11 @@ Rules:
    storage-root paths, or raw secrets.
 9. Sensitive capabilities require production-policy approval.
 10. Capability denial is explicit and never converted into success.
+11. Capability interfaces are action-scoped. Their signatures cannot expose
+    `OperationExecutionContext`, `TestPackage`, `StorageBackupManifest`, concrete
+    stores, filesystem paths, dependency injection, or kernel types.
+12. An owner-shaped capability is a stop condition. Decompose it into bounded,
+    serializable actions before extracting another owner or publishing the SDK.
 
 ## Data ownership rules
 
@@ -850,7 +901,9 @@ contracts explicitly permit it.
 
 ## Event model
 
-The kernel publishes typed durable events after successful transactions:
+Durable extension events are proposed, not implemented. Build them only when a real
+projection consumer requires them. The intended kernel contract publishes typed
+durable events after successful transactions:
 
 ```text
 PackageAccepted
@@ -894,10 +947,11 @@ Rules:
 `AssemblyLoadContext` provides dependency and unload isolation. It is not a security
 boundary.
 
-## Sidecar execution
+## Proposed sidecar execution
 
-Sidecars are the default for third-party code that should not execute inside the
-server process.
+Sidecars are deferred until a concrete extension requires process isolation or
+another implementation language. If built, they are the intended mode for
+third-party code that should not execute inside the server process.
 
 ### Handshake
 
@@ -941,25 +995,22 @@ restricted identities, or operating-system sandboxing.
 
 ## Activation and lifecycle
 
-Lifecycle:
+The intended v1 lifecycle is restart-required and limited to:
 
 ```text
-Discovered
-  -> Validated
-  -> Resolved
-  -> Starting
-  -> Ready <-> Degraded
-  -> Stopping
-  -> Stopped
+Validated -> Started -> Ready -> Stopped
+                  \-> Failed
 ```
 
-Any state except `Stopped` may transition to `Failed`. A recovered extension may
-transition from `Degraded` to `Ready`. Required request-path extensions entering
-`Failed` make the host unready; optional resource extensions are removed from the
-next service-index document, although clients may retain cached indexes and must
-receive an explicit unavailable response from their existing URLs.
+The current built-in system does not implement an extension lifecycle state machine.
+When trusted loading is added, installation, update, enable, disable, and unload
+require restart. A full
+`Degraded`/recovery lifecycle is not implemented and must not be promised until an
+optional extension supplies a concrete need and failure semantics. Required
+request-path extension failure prevents readiness. Optional-extension startup
+failure semantics remain an explicit pre-SDK decision.
 
-Activation may be:
+Future activation may include:
 
 - `onStartup`
 - `onEvent:<event-type>`
@@ -1079,11 +1130,11 @@ It requests:
 
 ```text
 packages.identity.read
-packages.content.writeStaged
+packages.content.write-staged
 publication.request
 publication.status.read
-extensionState.read
-extensionState.write
+extension-state.read
+extension-state.write
 events.publish
 ```
 
@@ -1098,9 +1149,19 @@ It does not:
 Staging and supply-chain states remain orthogonal. Publication is requested through
 the kernel and succeeds only when all core and configured policy requirements pass.
 
-## Backup and restore
+## Transactional extension state, backup, and restore
 
-The kernel coordinates backup.
+The kernel will coordinate extension state and backup; the complete protocol is not
+implemented. Before health, backup, and restore ownership moves, the kernel must
+provide:
+
+- Namespaced schema versions and explicit migrations.
+- Optimistic concurrency tokens or ETags.
+- Per-record and per-owner quotas with bounded buffering and streaming.
+- Bounded lock cardinality.
+- A backup participant/checkpoint protocol integrated with package and publication
+  transactions.
+- Crash-safe staged restore with one kernel commit point.
 
 Required backup state must use the kernel-provided transactional extension store.
 External extension stores and derived projections may participate only as
@@ -1204,10 +1265,40 @@ Startup diagnostics should display:
 ```text
 Extension                     Version  Mode     State  Capabilities
 NuGet.Search                  1.0.0    inproc   Ready  packages.metadata.read
-Contoso.PackageLabels         1.2.0    sidecar  Ready  extensionState.*, packages.metadata.read
+Contoso.PackageLabels         1.2.0    sidecar  Ready  extension-state.*, packages.metadata.read
 ```
 
 ## Testing strategy
+
+### Scalability and flexibility budgets
+
+Establish a measured current baseline before ratifying budgets. Initial targets are
+provisional and may be revised from evidence rather than treated as universal
+constants:
+
+- The initial candidate gateway and capability overhead target is at most 5% at p95
+  versus the baseline for metadata reads, with a controlled allocation budget.
+- At 512 concurrent flat-container reads, overload either waits within a deadline or
+  maps to typed `503 Service Unavailable` with `Retry-After`; quota exceptions never
+  escape.
+- Every stream-handle type uses constant memory, enforces its declared limit, and
+  releases leases on EOF, disposal, and cancellation.
+- Record embedded-host startup cost and run 100 parallel hosts without shared mutable
+  state.
+- Measure deterministic catalog resolution at 8, 50, and 200 manifests/routes.
+- Health and readiness have bounded latency and never synchronously enumerate all
+  storage on a request.
+- Extension-state tests cover per-record and per-owner quotas, bounded buffering,
+  concurrency tokens, migrations, and bounded lock cardinality.
+- Hot read-path audits are sampled or aggregated unless full audit is proven to have
+  bounded allocation and latency. Privileged mutations remain fully audited.
+- A concurrent-mutation and crash matrix proves one backup checkpoint or explicit
+  unavailability.
+- CI records suite-growth cost and runs the separately compiled conformance sample.
+
+These gates target per-process, single-node operation and many parallel embedded
+hosts. Multi-node coordination, distributed storage, and remote sidecars are not v1
+goals.
 
 ### Kernel tests
 
@@ -1263,54 +1354,39 @@ Every current unit and functional behavior moves with its owning extension:
 
 The migration must avoid a flag-day rewrite.
 
-### Phase 1: Characterize and define
+### Completed foundation
 
-1. Inventory the live durable storage, publication, moderation, security, backup,
-   embedded-host, and protocol behavior.
-2. Freeze externally observable behavior with characterization tests.
-3. Specify and test the normative package-authority facts, transitions, and
-   public-resource grant table.
-4. Define typed operation IDs and contracts.
-5. Create kernel-facing adapters around current implementation.
-6. Publish no third-party SDK yet and make no compatibility commitment.
+Steps 1 through 11 characterized compatibility, centralized visibility, introduced
+contracts, profiles, catalog validation, one-owner dispatch, capabilities, kernel
+instrumentation, service-index projection, and vulnerability and control extraction.
 
-### Phase 2: Build the kernel path
+### Blocking correction
 
-7. Add the operation registry and typed gateway.
-8. Add manifests, profiles, dependency resolution, and capabilities.
-9. Add per-instance embedded-host composition.
-10. Route existing behavior through registered internal handlers.
-11. Prove no URL or response change and define a rollback criterion.
+1. Step 11A generates startup-frozen routes from typed descriptors.
+2. Step 11B moves absolute URL projection into the kernel.
+3. Step 11C proves separately compiled composition and enforces architecture fitness,
+   including zero rendering escapes.
+4. Step 11D establishes and ratifies scalability and backpressure budgets.
 
-### Phase 3: Extract official extensions
+### Extraction lanes
 
-12. Extract service index.
-13. Extract flat container.
-14. Extract registration.
-15. Extract search.
-16. Extract package management.
-17. Extract vulnerabilities and the control API facade.
-18. Extract operations and supply-chain policy while keeping authoritative state and
-    gateway instrumentation in the kernel.
+- Lane A implements transactional state/checkpoints in 12A, then extracts operations,
+  health, backup, and restore in 12B.
+- Lane B extracts flat container in Step 13, mechanically separates registration and
+  search code, then permits Steps 14 and 15 in parallel after URL projection.
+- Lane C extracts supply-chain policy in Step 16.
+- Step 17 package management waits for the read and policy lanes.
 
-Each extraction is a separate tests-first PR. Old and new paths do not coexist
-indefinitely; each operation has one owner. Every extraction defines and tests a
-rollback point before removing the previous owner.
+Each extraction is a tests-first PR with one active owner and a tested rollback point.
+Step 18 performs the physical official assembly split.
 
-### Phase 4: Publish the SDK
+### Public platform and optional isolation
 
-19. Stabilize manifests and contribution contracts.
-20. Add package validation and developer tooling.
-21. Publish `NuGet.TestServer.Extensions.Abstractions`.
-22. Add trusted in-process third-party loading.
-
-### Phase 5: Isolate and demonstrate
-
-23. Add the sidecar protocol and supervision after an out-of-repository extension
-    requirement is confirmed.
-24. Implement Package Staging as the reference extension.
-25. Add replacement and contributor samples.
-26. Document compatibility and support policy.
+Step 19 stabilizes and publishes no SDK until the route, URL, rendering, capability,
+contract identity, support, signing, replacement, manifest, and target-framework
+decisions are complete. Step 20 adds trusted in-process loading. Step 21 adds sidecars
+only for a concrete consumer and after transport-neutral parity. Step 22 Package
+Staging depends on Step 20 and on Step 21 only when isolation is required.
 
 ## Acceptance criteria
 
@@ -1327,7 +1403,7 @@ The architecture is successful when:
 7. An approved non-authoritative operation can be replaced without bypassing kernel
    security.
 8. Official and third-party extensions use the same public contracts.
-9. A crashing sidecar does not crash or corrupt the server.
+9. If sidecars are built, a crashing sidecar does not crash or corrupt the server.
 10. A denied extension cannot read package content or mutate publication state.
 11. Backup and restore produce one consistent checkpoint for all required state.
 12. Startup rejects incompatible, conflicting, dangling-resource, or under-granted
@@ -1338,7 +1414,8 @@ The architecture is successful when:
 
 ### Advantages
 
-- Genuine extension-first architecture.
+- A path to a genuine extension-first architecture, conditional on the separately
+  compiled route-contribution proof.
 - Smaller kernel and clearer ownership.
 - Default features continuously validate public extension contracts.
 - Better test composition.
