@@ -140,8 +140,13 @@ internal sealed class PublicationOperations(
             ]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
-            new JsonResponseBody(
-                response.Packages.Select(ControlOperations.RenderSummary).ToArray())));
+            new JsonResponseBody(response.Packages.Select(package => new
+            {
+                id = package.Package.Id,
+                version = package.Package.Version,
+                listed = package.Listed,
+                published = package.Published
+            }).ToArray())));
         return OperationResponse<ListPackagesResponse>.Success(response);
     }
 

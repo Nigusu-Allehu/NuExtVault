@@ -349,6 +349,8 @@ internal sealed class ExtensionCatalog
         [
             BuiltInCapabilityNames.ControlFaultsInject,
             BuiltInCapabilityNames.ControlRequestsRead,
+            BuiltInCapabilityNames.ControlPackagesManage,
+            BuiltInCapabilityNames.ControlInstrumentationManage,
             BuiltInCapabilityNames.SecretsResolveReference,
             BuiltInCapabilityNames.SidecarExecution
         ];
@@ -859,16 +861,8 @@ internal static class BuiltInExtensionCatalog
             ],
             capabilities:
             [
-                Required(BuiltInCapabilityNames.PackagesMetadataRead),
-                Required(BuiltInCapabilityNames.PackagesMetadataWrite),
-                Required(BuiltInCapabilityNames.PackagesContentWrite),
-                Required(BuiltInCapabilityNames.PackagesPublish),
-                Required(BuiltInCapabilityNames.PackagesUnlist),
-                Required(BuiltInCapabilityNames.PackagesRelist),
-                Required(BuiltInCapabilityNames.PackagesDelete),
-                Required(BuiltInCapabilityNames.ControlFaultsInject),
-                Required(BuiltInCapabilityNames.ControlRequestsRead),
-                Required(BuiltInCapabilityNames.EventsPublish)
+                Required(BuiltInCapabilityNames.ControlPackagesManage),
+                Required(BuiltInCapabilityNames.ControlInstrumentationManage)
             ]),
         Manifest(
             BuiltInExtensionIds.DurableStorage,

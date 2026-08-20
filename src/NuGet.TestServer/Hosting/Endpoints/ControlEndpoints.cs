@@ -1,9 +1,9 @@
 using System.Text.Json;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Owners;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Hosting.Endpoints;

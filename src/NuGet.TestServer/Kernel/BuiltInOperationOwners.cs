@@ -63,7 +63,7 @@ internal static class BuiltInOperationOwners
                 limits).Register(builder);
         }
 
-        officialExtensions.RegisterOperations(builder);
+        officialExtensions.RegisterOperations(builder, broker);
 
         if (selected.Contains(BuiltInExtensionIds.SupplyChain))
         {
@@ -71,25 +71,6 @@ internal static class BuiltInOperationOwners
             new ModerationOperations(
                 capabilities.GetRequired<IModerationCapability>(
                     BuiltInCapabilityNames.ModerationRead)).Register(builder);
-        }
-
-        if (selected.Contains(BuiltInExtensionIds.TestControl))
-        {
-            var capabilities = broker.ForOwner(BuiltInExtensionIds.TestControl);
-            new ControlOperations(
-                capabilities.GetRequired<IPackageReadCapability>(
-                    BuiltInCapabilityNames.PackagesMetadataRead),
-                capabilities.GetRequired<IPackageMutationCapability>(
-                    BuiltInCapabilityNames.PackagesMetadataWrite),
-                capabilities.GetRequired<IPublicationCapability>(
-                    BuiltInCapabilityNames.PackagesPublish),
-                capabilities.GetRequired<IFaultInjectionCapability>(
-                    BuiltInCapabilityNames.ControlFaultsInject),
-                capabilities.GetRequired<IRequestRecordingCapability>(
-                    BuiltInCapabilityNames.ControlRequestsRead),
-                capabilities.GetRequired<ITypedEventPublisher>(
-                    BuiltInCapabilityNames.EventsPublish),
-                limits).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.Operations))

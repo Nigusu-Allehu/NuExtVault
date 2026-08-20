@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
@@ -16,13 +17,17 @@ internal sealed class OfficialExtensionComposition : IExtensionHealthSource
 
     private OfficialExtensionComposition(
         ResolvedExtensionGraph graph,
+        ControlExtension control,
         VulnerabilityExtension vulnerabilities,
         bool enableVulnerabilityPersistence)
     {
         _graph = graph;
+        Control = control;
         Vulnerabilities = vulnerabilities;
         _enableVulnerabilityPersistence = enableVulnerabilityPersistence;
     }
+
+    public ControlExtension Control { get; }
 
     public VulnerabilityExtension Vulnerabilities { get; }
 
@@ -33,6 +38,7 @@ internal sealed class OfficialExtensionComposition : IExtensionHealthSource
         ArgumentNullException.ThrowIfNull(composition);
         return new OfficialExtensionComposition(
             composition.ExtensionGraph,
+            new ControlExtension(),
             new VulnerabilityExtension(
                 composition.Vulnerabilities.Active,
                 state: null,
@@ -71,8 +77,22 @@ internal sealed class OfficialExtensionComposition : IExtensionHealthSource
         });
     }
 
-    public void RegisterOperations(OperationRegistryBuilder builder)
+    public void RegisterOperations(
+        OperationRegistryBuilder builder,
+        CapabilityBroker broker)
     {
+        if (_graph.Extensions.Any(extension =>
+                extension.Id == BuiltInExtensionIds.TestControl))
+        {
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.TestControl);
+            Control.RegisterOperations(
+                builder,
+                capabilities.GetRequired<IPackageControlCapability>(
+                    BuiltInCapabilityNames.ControlPackagesManage),
+                capabilities.GetRequired<IKernelInstrumentationControlCapability>(
+                    BuiltInCapabilityNames.ControlInstrumentationManage));
+        }
+
         if (_graph.Extensions.Any(extension =>
                 extension.Id == BuiltInExtensionIds.Vulnerabilities))
         {

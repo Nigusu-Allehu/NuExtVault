@@ -40,6 +40,8 @@ internal static class BuiltInCapabilityNames
     public const string OperationsQuery = "operations.query";
     public const string ControlFaultsInject = "control.faults.inject";
     public const string ControlRequestsRead = "control.requests.read";
+    public const string ControlPackagesManage = "control.packages.manage";
+    public const string ControlInstrumentationManage = "control.instrumentation.manage";
     public const string DurableStorage = "storage.durable";
     public const string OutboundHttp = "network.outbound-http";
     public const string SecretsResolveReference = "secrets.resolve-reference";
@@ -95,16 +97,8 @@ internal static class ServerProfiles
         Required(BuiltInCapabilityNames.OutboundHttp));
     private static readonly ExtensionSelection TestControl = Extension(
         BuiltInExtensionIds.TestControl,
-        Required(BuiltInCapabilityNames.PackagesMetadataRead),
-        Required(BuiltInCapabilityNames.PackagesMetadataWrite),
-        Required(BuiltInCapabilityNames.PackagesContentWrite),
-        Required(BuiltInCapabilityNames.PackagesPublish),
-        Required(BuiltInCapabilityNames.PackagesUnlist),
-        Required(BuiltInCapabilityNames.PackagesRelist),
-        Required(BuiltInCapabilityNames.PackagesDelete),
-        Required(BuiltInCapabilityNames.ControlFaultsInject),
-        Required(BuiltInCapabilityNames.ControlRequestsRead),
-        Required(BuiltInCapabilityNames.EventsPublish));
+        Required(BuiltInCapabilityNames.ControlPackagesManage),
+        Required(BuiltInCapabilityNames.ControlInstrumentationManage));
     private static readonly ExtensionSelection DurableStorage = Extension(
         BuiltInExtensionIds.DurableStorage,
         Required(BuiltInCapabilityNames.DurableStorage));
@@ -146,8 +140,8 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.BackupInvoke,
             BuiltInCapabilityNames.RestoreInvoke,
             BuiltInCapabilityNames.OperationsQuery,
-            BuiltInCapabilityNames.ControlFaultsInject,
-            BuiltInCapabilityNames.ControlRequestsRead));
+            BuiltInCapabilityNames.ControlPackagesManage,
+            BuiltInCapabilityNames.ControlInstrumentationManage));
 
     public static ServerProfile Standard { get; } = new(
         "standard",
@@ -180,8 +174,8 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.BackupInvoke,
             BuiltInCapabilityNames.RestoreInvoke,
             BuiltInCapabilityNames.OperationsQuery,
-            BuiltInCapabilityNames.ControlFaultsInject,
-            BuiltInCapabilityNames.ControlRequestsRead,
+            BuiltInCapabilityNames.ControlPackagesManage,
+            BuiltInCapabilityNames.ControlInstrumentationManage,
             BuiltInCapabilityNames.DurableStorage,
             BuiltInCapabilityNames.ExtensionStateRead,
             BuiltInCapabilityNames.ExtensionStateWrite,

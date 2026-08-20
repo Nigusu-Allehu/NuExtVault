@@ -767,6 +767,12 @@ The `/__test` control endpoints are test-only and are never advertised in the
 NuGet service index. Production-safe mode maps only `/__test/health`; all
 control endpoints below are absent.
 
+The internal official `NuTest.Control` extension owns the authenticated package,
+fault, request-history, and reset operations in embedded and standard profiles. It
+can act only through host-scoped package-control and kernel-instrumentation
+capabilities. Production profiles neither select the extension nor grant those
+capabilities, and invalid production compositions are rejected at startup.
+
 `POST /__test/packages` accepts `application/octet-stream` for memory-safe
 package uploads. The existing JSON `{ "content": "<base64>" }` format remains
 available for compatibility and is limited to 4 MiB of decoded package content;
@@ -857,8 +863,9 @@ await server.Faults.AddAsync(new FaultRule(
 
 After exercising the client, inspect `server.Requests.GetAsync()` or `GET /__test/requests` to verify attempts, response codes, durations, and matched fault rules.
 
-Fault injection and request recording are owned by the kernel gateway. The request
-order is:
+`NuTest.Control` owns fault configuration and request-history queries; the kernel
+gateway exclusively owns raw-request matching, delay, short-circuiting, redaction,
+and capture. The request order is:
 
 ```text
 Kestrel transport/body-size limits

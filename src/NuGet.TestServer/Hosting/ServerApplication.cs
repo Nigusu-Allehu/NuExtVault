@@ -174,7 +174,8 @@ public static class ServerApplication
                 officialExtensions.VulnerabilitySnapshots,
                 provider.GetRequiredService<ExtensionStateStore>(),
                 officialExtensions,
-                provider.GetRequiredService<KernelOutboundHttpClient>())));
+                provider.GetRequiredService<KernelOutboundHttpClient>(),
+                packageLimits)));
         builder.Services.AddSingleton(_ =>
             ServiceIndexResourceRegistry.Create(composition.ExtensionGraph));
         builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
@@ -215,10 +216,7 @@ public static class ServerApplication
         ProtocolEndpoints.Map(app);
         ModerationEndpoints.Map(app);
         HealthEndpoints.Map(app);
-        if (hosting.Mode == ServerMode.Test)
-        {
-            ControlEndpoints.Map(app);
-        }
+        OfficialExtensionEndpointBindings.Map(app, officialExtensions);
 
         return app;
     }
