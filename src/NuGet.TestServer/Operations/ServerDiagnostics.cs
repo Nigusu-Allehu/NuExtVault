@@ -13,6 +13,12 @@ public sealed class ServerDiagnostics : IDisposable
     private readonly Histogram<double> _requestDuration;
     private readonly Counter<long> _packagesPublished;
     private readonly Counter<long> _storageFailures;
+    private readonly Counter<long> _operations;
+    private readonly Histogram<double> _operationDuration;
+    private long _requestCount;
+    private long _failedRequestCount;
+    private long _publishedPackageCount;
+    private long _storageFailureCount;
 
     public ServerDiagnostics(IPackageStore packages)
     {
@@ -23,6 +29,10 @@ public sealed class ServerDiagnostics : IDisposable
             "ms");
         _packagesPublished = _meter.CreateCounter<long>("nuget.server.packages.published");
         _storageFailures = _meter.CreateCounter<long>("nuget.server.storage.failures");
+        _operations = _meter.CreateCounter<long>("nuget.server.operations");
+        _operationDuration = _meter.CreateHistogram<double>(
+            "nuget.server.operation.duration",
+            "ms");
         _meter.CreateObservableGauge(
             "nuget.server.packages",
             () => packages switch
@@ -33,6 +43,14 @@ public sealed class ServerDiagnostics : IDisposable
             },
             description: "Current package count.");
     }
+
+    public long RequestCount => Interlocked.Read(ref _requestCount);
+
+    public long FailedRequestCount => Interlocked.Read(ref _failedRequestCount);
+
+    public long PublishedPackageCount => Interlocked.Read(ref _publishedPackageCount);
+
+    public long StorageFailureCount => Interlocked.Read(ref _storageFailureCount);
 
     public Activity? StartRequest(HttpContext context)
     {
@@ -50,10 +68,12 @@ public sealed class ServerDiagnostics : IDisposable
             { "http.response.status_code", context.Response.StatusCode }
         };
         _requests.Add(1, tags);
+        Interlocked.Increment(ref _requestCount);
         _requestDuration.Record(duration.TotalMilliseconds, tags);
         if (context.Response.StatusCode >= StatusCodes.Status500InternalServerError)
         {
             _errors.Add(1, tags);
+            Interlocked.Increment(ref _failedRequestCount);
         }
     }
 
@@ -64,9 +84,28 @@ public sealed class ServerDiagnostics : IDisposable
             new KeyValuePair<string, object?>("http.request.method", context.Request.Method));
     }
 
-    public void RecordPackagePublished() => _packagesPublished.Add(1);
+    internal void RecordOperation(string operationId, string outcome, TimeSpan duration)
+    {
+        var tags = new TagList
+        {
+            { "nuget.operation.id", operationId },
+            { "nuget.operation.outcome", outcome }
+        };
+        _operations.Add(1, tags);
+        _operationDuration.Record(duration.TotalMilliseconds, tags);
+    }
 
-    public void RecordStorageFailure() => _storageFailures.Add(1);
+    public void RecordPackagePublished()
+    {
+        _packagesPublished.Add(1);
+        Interlocked.Increment(ref _publishedPackageCount);
+    }
+
+    public void RecordStorageFailure()
+    {
+        _storageFailures.Add(1);
+        Interlocked.Increment(ref _storageFailureCount);
+    }
 
     public void Dispose()
     {
