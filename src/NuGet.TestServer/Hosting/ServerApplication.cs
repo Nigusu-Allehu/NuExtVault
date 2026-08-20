@@ -119,6 +119,7 @@ public static class ServerApplication
         }
         builder.Services.AddSingleton(composition);
         builder.Services.AddSingleton(composition.Profile);
+        builder.Services.AddSingleton(composition.ExtensionGraph);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
         builder.Services.AddSingleton(

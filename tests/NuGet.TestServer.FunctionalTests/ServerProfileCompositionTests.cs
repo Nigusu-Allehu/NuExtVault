@@ -87,6 +87,13 @@ public sealed class ServerProfileCompositionTests
         Assert.NotNull(productionWithoutStorage.Composition.StorageDirectory);
         Assert.Same(ServerProfiles.Production, productionIdentity.Composition.Profile);
         Assert.NotNull(productionIdentity.Composition.StorageDirectory);
+        Assert.Contains(
+            productionIdentity.Composition.ExtensionGraph.Routes,
+            route => route is
+            {
+                Method: "DELETE",
+                Path: "/package/{id}/{version}/hard"
+            });
     }
 
     [Fact]
@@ -161,6 +168,27 @@ public sealed class ServerProfileCompositionTests
 
         Assert.Equal("test", embeddedHealth.GetProperty("mode").GetString());
         Assert.Equal(HttpStatusCode.NotFound, productionControlResponse.StatusCode);
+    }
+
+    [Fact]
+    public void Composition_resolves_the_extension_graph_before_an_application_can_listen()
+    {
+        var composition = ServerComposition.Create(ServerProfiles.Embedded);
+
+        Assert.Equal(
+            ServerProfiles.Embedded.Extensions.Length,
+            composition.ExtensionGraph.Extensions.Length);
+        Assert.StartsWith("profile=embedded\n", composition.ExtensionGraph.Diagnostics);
+
+        var invalidProfile = ServerProfiles.Embedded with
+        {
+            Grants = ServerProfiles.Embedded.Grants.RemoveAll(
+                grant => grant.Name == BuiltInCapabilityNames.PackagesRead)
+        };
+        var exception = Assert.Throws<ServerHostingConfigurationException>(
+            () => ServerComposition.Create(invalidProfile));
+
+        Assert.Contains("catalog.missing-capability-grant", exception.Message);
     }
 
     [Fact]

@@ -15,6 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
     <InternalsVisibleTo Include="NuGet.TestServer.Cli" />
     <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
