@@ -12,9 +12,13 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
 {
     private readonly WebApplication _application;
 
-    private NuGetTestServerHost(WebApplication application, Uri baseUrl)
+    private NuGetTestServerHost(
+        WebApplication application,
+        Uri baseUrl,
+        ServerComposition composition)
     {
         _application = application;
+        Composition = composition;
         BaseUrl = baseUrl;
         ServiceIndexUrl = new Uri(baseUrl, "/v3/index.json");
         ControlUrl = new Uri(baseUrl, "/__test");
@@ -38,6 +42,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public RequestControlClient Requests { get; }
     public IReadOnlyList<SecurityAuditEvent> SecurityAudits =>
         _application.Services.GetRequiredService<ISecurityAuditSink>().GetAll();
+    internal ServerComposition Composition { get; }
 
     public static async Task<NuGetTestServerHost> StartAsync(
         CancellationToken token = default)
@@ -51,29 +56,14 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(security);
-        var application = ServerApplication.Build(
+        var composition = ServerComposition.CreateProductionWithTemporaryStorage(
             authentication: AuthenticationConfiguration.CreateProduction(security),
             vulnerabilities: new VulnerabilitySnapshotProvider(
                 EmbeddedVulnerabilitySnapshot.Load()),
-            mode: ServerMode.Production,
             trustedProxies: new TrustedProxyOptions(["127.0.0.1"]),
-            maximumAuthenticationFailures: maximumAuthenticationFailures);
-        try
-        {
-            await application.StartAsync(token);
-            var address = application.Services
-                .GetRequiredService<IServer>()
-                .Features.Get<IServerAddressesFeature>()?
-                .Addresses.SingleOrDefault()
-                ?? throw new InvalidOperationException(
-                    "Kestrel did not publish a listening address.");
-            return new NuGetTestServerHost(application, new Uri(address));
-        }
-        catch
-        {
-            await application.DisposeAsync();
-            throw;
-        }
+            maximumAuthenticationFailures: maximumAuthenticationFailures,
+            supplyChain: new SupplyChainOptions());
+        return await StartCompositionAsync(composition, token);
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -121,27 +111,14 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(supplyChain);
-        var application = ServerApplication.Build(
+        var composition = ServerComposition.Create(
+            ServerProfiles.Embedded,
             authentication: AuthenticationConfiguration.Anonymous,
             vulnerabilities: new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()),
             packageLimits: PackageTransferLimits.Default,
             supplyChain: supplyChain,
             packageScanner: scanner);
-        try
-        {
-            await application.StartAsync(token);
-            var address = application.Services
-                .GetRequiredService<IServer>()
-                .Features.Get<IServerAddressesFeature>()?
-                .Addresses.SingleOrDefault()
-                ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
-            return new NuGetTestServerHost(application, new Uri(address));
-        }
-        catch
-        {
-            await application.DisposeAsync();
-            throw;
-        }
+        return await StartCompositionAsync(composition, token);
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -151,26 +128,13 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
         ArgumentNullException.ThrowIfNull(packageLimits);
-        var application = ServerApplication.Build(
+        var composition = ServerComposition.Create(
+            ServerProfiles.Embedded,
             storageDirectory: storageDirectory,
             authentication: AuthenticationConfiguration.Anonymous,
             vulnerabilities: new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()),
             packageLimits: packageLimits);
-        try
-        {
-            await application.StartAsync(token);
-            var address = application.Services
-                .GetRequiredService<IServer>()
-                .Features.Get<IServerAddressesFeature>()?
-                .Addresses.SingleOrDefault()
-                ?? throw new InvalidOperationException("Kestrel did not publish a listening address.");
-            return new NuGetTestServerHost(application, new Uri(address));
-        }
-        catch
-        {
-            await application.DisposeAsync();
-            throw;
-        }
+        return await StartCompositionAsync(composition, token);
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -246,11 +210,15 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         CancellationToken token = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
-        var application = ServerApplication.Build(
+        var profile = mode == ServerMode.Production
+            ? ServerProfiles.Production
+            : ServerProfiles.Embedded;
+        var composition = ServerComposition.Create(
+            profile,
             storageDirectory: storageDirectory,
             authentication: authentication,
-            mode: mode);
-        return await StartApplicationAsync(application, token);
+            supplyChain: mode == ServerMode.Production ? new SupplyChainOptions() : null);
+        return await StartCompositionAsync(composition, token);
     }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -296,19 +264,30 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(vulnerabilities);
         ArgumentNullException.ThrowIfNull(packageLimits);
         ArgumentNullException.ThrowIfNull(runtimeState);
-        var application = ServerApplication.Build(
-            authentication: authentication,
-            vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
-            mode: mode,
-            runtimeState: runtimeState,
-            packageLimits: packageLimits);
-        return await StartApplicationAsync(application, token);
+        var profile = mode == ServerMode.Production
+            ? ServerProfiles.Production
+            : ServerProfiles.Embedded;
+        var composition = mode == ServerMode.Production
+            ? ServerComposition.CreateProductionWithTemporaryStorage(
+                authentication: authentication,
+                vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
+                runtimeState: runtimeState,
+                packageLimits: packageLimits,
+                supplyChain: new SupplyChainOptions())
+            : ServerComposition.Create(
+                profile,
+                authentication: authentication,
+                vulnerabilities: new VulnerabilitySnapshotProvider(vulnerabilities),
+                runtimeState: runtimeState,
+                packageLimits: packageLimits);
+        return await StartCompositionAsync(composition, token);
     }
 
-    private static async Task<NuGetTestServerHost> StartApplicationAsync(
-        WebApplication application,
+    private static async Task<NuGetTestServerHost> StartCompositionAsync(
+        ServerComposition composition,
         CancellationToken token)
     {
+        var application = ServerApplication.Build(composition);
         try
         {
             await application.StartAsync(token);
@@ -321,7 +300,10 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
                 throw new InvalidOperationException("Kestrel did not publish a listening address.");
             }
 
-            return new NuGetTestServerHost(application, new Uri(address));
+            return new NuGetTestServerHost(
+                application,
+                new Uri(address),
+                composition);
         }
         catch
         {

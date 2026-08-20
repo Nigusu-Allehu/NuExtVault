@@ -32,16 +32,72 @@ public static class ServerApplication
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null)
     {
-        var hosting = ServerHostingOptions.Create(
-            mode,
-            url ?? "http://127.0.0.1:0",
-            authentication ?? AuthenticationConfiguration.Anonymous,
-            trustedProxies);
         var builder = WebApplication.CreateBuilder(args ?? []);
         runtimeState ??= RuntimeStateConfiguration.FromConfiguration(builder.Configuration);
-        packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
+        var profile = mode == ServerMode.Production
+            ? ServerProfiles.Production
+            : storageDirectory is null
+                ? ServerProfiles.Embedded
+                : ServerProfiles.Standard;
+        var composition = mode == ServerMode.Production && storageDirectory is null
+            ? ServerComposition.CreateProductionWithTemporaryStorage(
+                url,
+                authentication,
+                vulnerabilities,
+                runtimeState,
+                packageLimits,
+                trustedProxies,
+                maximumAuthenticationFailures,
+                supplyChain ?? new SupplyChainOptions(),
+                packageScanner)
+            : ServerComposition.Create(
+                profile,
+                url,
+                storageDirectory,
+                authentication,
+                vulnerabilities,
+                runtimeState,
+                packageLimits,
+                trustedProxies,
+                maximumAuthenticationFailures,
+                supplyChain ?? (mode == ServerMode.Production ? new SupplyChainOptions() : null),
+                packageScanner);
+        return BuildWithOwnership(builder, composition);
+    }
+
+    internal static WebApplication Build(
+        ServerComposition composition,
+        string[]? args = null)
+    {
+        ArgumentNullException.ThrowIfNull(composition);
+        return BuildWithOwnership(WebApplication.CreateBuilder(args ?? []), composition);
+    }
+
+    private static WebApplication BuildWithOwnership(
+        WebApplicationBuilder builder,
+        ServerComposition composition)
+    {
+        try
+        {
+            return Build(builder, composition);
+        }
+        catch
+        {
+            composition.StorageLease?.Dispose();
+            throw;
+        }
+    }
+
+    private static WebApplication Build(
+        WebApplicationBuilder builder,
+        ServerComposition composition)
+    {
+        var hosting = composition.Hosting;
+        var runtimeState = composition.RuntimeState;
+        var packageLimits = composition.PackageLimits;
+        var storageDirectory = composition.StorageDirectory;
         builder.WebHost.UseUrls(hosting.Url);
-        if (mode == ServerMode.Production)
+        if (hosting.Mode == ServerMode.Production)
         {
             builder.Logging.ClearProviders();
             builder.Logging.AddJsonConsole();
@@ -57,11 +113,17 @@ public static class ServerApplication
             options.MultipartBodyLengthLimit = packageLimits.MaxRequestBodyBytes;
         });
         builder.Services.AddSingleton(TimeProvider.System);
+        if (composition.StorageLease is not null)
+        {
+            builder.Services.AddSingleton<TemporaryStorageLease>(_ => composition.StorageLease);
+        }
+        builder.Services.AddSingleton(composition);
+        builder.Services.AddSingleton(composition.Profile);
         builder.Services.AddSingleton(hosting);
         builder.Services.AddSingleton(hosting.Authentication);
         builder.Services.AddSingleton(
             new AuthenticationAttemptLimiter(
-                maximumAuthenticationFailures,
+                composition.MaximumAuthenticationFailures,
                 TimeSpan.FromMinutes(1),
                 TimeProvider.System));
         builder.Services.AddSingleton<ISecurityAuditSink>(
@@ -80,20 +142,23 @@ public static class ServerApplication
         builder.Services.AddSingleton(provider => new PackageSupplyChainService(
             provider.GetRequiredService<IPackageStore>(),
             storageDirectory,
-            supplyChain,
-            packageScanner,
+            composition.SupplyChain,
+            composition.PackageScanner,
             provider.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton(new StorageHealth(storageDirectory));
         builder.Services.AddSingleton<ServerDiagnostics>();
         builder.Services.AddSingleton<FaultRuleStore>();
         builder.Services.AddSingleton<RequestRecorder>();
         builder.Services.AddSingleton(
-            vulnerabilities ??
-            new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load()));
+            composition.Vulnerabilities);
 
         var app = builder.Build();
         try
         {
+            if (composition.StorageLease is not null)
+            {
+                _ = app.Services.GetRequiredService<TemporaryStorageLease>();
+            }
             _ = app.Services.GetRequiredService<IPackageStore>();
             _ = app.Services.GetRequiredService<PackageSupplyChainService>();
         }
@@ -103,11 +168,11 @@ public static class ServerApplication
             throw;
         }
 
-        MapMiddleware(app, mode);
+        MapMiddleware(app, hosting.Mode);
         MapProtocolEndpoints(app);
         MapModerationEndpoints(app);
-        MapHealthEndpoints(app, mode);
-        if (mode == ServerMode.Test)
+        MapHealthEndpoints(app, hosting.Mode);
+        if (hosting.Mode == ServerMode.Test)
         {
             MapControlEndpoints(app);
         }
