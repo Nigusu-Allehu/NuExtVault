@@ -279,6 +279,12 @@ public sealed class CapabilityBrokerTests
     [Fact]
     public void Embedded_and_production_profiles_deny_test_network_secret_and_sidecar_escalation()
     {
+        Assert.Contains(
+            ServerProfiles.Embedded.Grants,
+            grant => grant.Name == BuiltInCapabilityNames.ControlFaultsInject);
+        Assert.Contains(
+            ServerProfiles.Embedded.Grants,
+            grant => grant.Name == BuiltInCapabilityNames.ControlRequestsRead);
         Assert.DoesNotContain(
             ServerProfiles.Embedded.Grants,
             grant => grant.Name is BuiltInCapabilityNames.OutboundHttp
@@ -286,14 +292,15 @@ public sealed class CapabilityBrokerTests
                 or BuiltInCapabilityNames.SidecarExecution);
         Assert.DoesNotContain(
             ServerProfiles.Production.Grants,
-            grant => grant.Name is BuiltInCapabilityNames.TestInstrumentation
+            grant => grant.Name is BuiltInCapabilityNames.ControlFaultsInject
+                or BuiltInCapabilityNames.ControlRequestsRead
                 or BuiltInCapabilityNames.SecretsResolveReference
                 or BuiltInCapabilityNames.SidecarExecution);
 
         var unsafeProduction = ServerProfiles.Production with
         {
             Grants = ServerProfiles.Production.Grants.Add(
-                new CapabilityGrant(BuiltInCapabilityNames.TestInstrumentation))
+                new CapabilityGrant(BuiltInCapabilityNames.ControlFaultsInject))
         };
         var exception = Assert.Throws<ServerHostingConfigurationException>(
             () => BuiltInExtensionCatalog.Instance.Resolve(unsafeProduction));

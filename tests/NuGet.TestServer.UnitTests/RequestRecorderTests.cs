@@ -53,6 +53,16 @@ public sealed class RequestRecorderTests
         Assert.Equal(0, recorder.EvictedCount);
     }
 
+    [Fact]
+    public void Captured_headers_do_not_change_public_request_record_equality()
+    {
+        var first = CreateRecord(1);
+        var second = CreateRecord(1);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
     private static RequestRecorder CreateRecorder(int capacity) =>
         new(
             TimeProvider.System,

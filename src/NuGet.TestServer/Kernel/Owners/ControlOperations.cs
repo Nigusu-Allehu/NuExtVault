@@ -16,7 +16,8 @@ internal sealed class ControlOperations(
     IPackageReadCapability packages,
     IPackageMutationCapability mutations,
     IPublicationCapability publication,
-    IControlInstrumentationCapability instrumentation,
+    IFaultInjectionCapability faults,
+    IRequestRecordingCapability requests,
     ITypedEventPublisher events,
     PackageTransferLimits limits)
 {
@@ -104,15 +105,15 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var storedPackages = await packages.GetAllAsync(token);
-        var faults = await instrumentation.GetFaultsAsync(token);
-        var requests = await instrumentation.GetRequestsAsync(token);
+        var faultRules = await faults.GetFaultsAsync(token);
+        var requestRecords = await requests.GetRequestsAsync(token);
         var response = new GetControlStateResponse(
             storedPackages.Count,
-            faults.Count,
-            instrumentation.FaultCapacity,
-            requests.Count,
-            instrumentation.RequestCapacity,
-            instrumentation.EvictedRequestCount);
+            faultRules.Count,
+            faults.FaultCapacity,
+            requestRecords.Count,
+            requests.RequestCapacity,
+            requests.EvictedRequestCount);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new
@@ -133,8 +134,8 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         await publication.ResetAsync(token);
-        await instrumentation.ClearFaultsAsync(token);
-        await instrumentation.ClearRequestsAsync(token);
+        await faults.ClearFaultsAsync(token);
+        await requests.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ResetControlStateResponse>.Success(new ResetControlStateResponse());
     }
@@ -279,7 +280,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var records = await instrumentation.GetRequestsAsync(token);
+        var records = await requests.GetRequestsAsync(token);
         var response = new GetRequestsResponse(
             [
                 .. records.Select(record => new RequestRecordDocument(
@@ -303,7 +304,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await instrumentation.ClearRequestsAsync(token);
+        await requests.ClearRequestsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ClearRequestsResponse>.Success(new ClearRequestsResponse());
     }
@@ -313,7 +314,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        var rules = await instrumentation.GetFaultsAsync(token);
+        var rules = await faults.GetFaultsAsync(token);
         var response = new GetFaultsResponse([.. rules.Select(CreateFaultDocument)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
@@ -327,7 +328,7 @@ internal sealed class ControlOperations(
         CancellationToken token)
     {
         var rule = CreateFaultRule(request.Fault);
-        var conflict = await instrumentation.TryAddFaultAsync(rule, token);
+        var conflict = await faults.TryAddFaultAsync(rule, token);
         if (conflict is not null)
         {
             return OperationResponse<AddFaultResponse>.Failure(
@@ -347,7 +348,7 @@ internal sealed class ControlOperations(
         OperationExecutionContext context,
         CancellationToken token)
     {
-        await instrumentation.ClearFaultsAsync(token);
+        await faults.ClearFaultsAsync(token);
         context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<ClearFaultsResponse>.Success(new ClearFaultsResponse());
     }

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
@@ -308,6 +309,104 @@ public sealed class PublishAndControlTests
         Assert.Equal(3, attempts.Length);
         Assert.Equal(["fail-twice", "fail-twice", null], attempts.Select(r => r.FaultRuleId));
         Assert.Equal([503, 503, 200], attempts.Select(r => r.StatusCode));
+    }
+
+    [Fact]
+    public async Task Fault_instrumentation_short_circuits_before_binding_without_duplicate_recording()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Faults.AddAsync(new FaultRule(
+            Id: "pre-binding",
+            Method: "PUT",
+            PathContains: "/package",
+            StatusCode: HttpStatusCode.ServiceUnavailable,
+            RemainingMatches: 1,
+            Delay: TimeSpan.Zero));
+
+        using var response = await server.HttpClient.PutAsync(
+            "/package",
+            new StringContent("not a NuGet package"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var request = Assert.Single(
+            await server.Requests.GetAsync(),
+            record => record.Path == "/package");
+        Assert.Equal("pre-binding", request.FaultRuleId);
+        Assert.Equal((int)HttpStatusCode.ServiceUnavailable, request.StatusCode);
+    }
+
+    [Fact]
+    public async Task Fault_delay_honors_cancellation_and_consumes_the_selected_rule()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        await server.Faults.AddAsync(new FaultRule(
+            Id: "cancel-delay",
+            Method: "GET",
+            PathContains: "/v3/index.json",
+            StatusCode: HttpStatusCode.ServiceUnavailable,
+            RemainingMatches: 1,
+            Delay: TimeSpan.FromSeconds(30)));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => server.HttpClient.GetAsync("/v3/index.json", cancellation.Token));
+        using var next = await server.HttpClient.GetAsync("/v3/index.json");
+
+        Assert.Equal(HttpStatusCode.OK, next.StatusCode);
+    }
+
+    [Fact]
+    public async Task Fault_stage_precedes_authentication_and_is_isolated_per_host()
+    {
+        var authentication = AuthenticationConfiguration.Create(
+            "test-user",
+            "test-password",
+            apiKey: null);
+        await using var first = await NuGetTestServerHost.StartAsync(authentication);
+        await using var second = await NuGetTestServerHost.StartAsync(authentication);
+        await first.Faults.AddAsync(new FaultRule(
+            Id: "before-auth",
+            Method: "GET",
+            PathContains: "/v3/index.json",
+            StatusCode: HttpStatusCode.ServiceUnavailable,
+            RemainingMatches: 1,
+            Delay: TimeSpan.Zero));
+
+        using var injected = await first.HttpClient.GetAsync("/v3/index.json");
+        using var unauthorized = await second.HttpClient.GetAsync("/v3/index.json");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, injected.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+        Assert.Single(
+            await first.Requests.GetAsync(),
+            record => record.Path == "/v3/index.json");
+        Assert.Single(
+            await second.Requests.GetAsync(),
+            record => record.Path == "/v3/index.json");
+    }
+
+    [Fact]
+    public async Task Concurrent_request_history_queries_do_not_wait_on_each_other()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync();
+        using var first = await server.HttpClient.GetAsync("/__test/requests")
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        var reads = Enumerable.Range(0, 8)
+            .Select(_ => server.HttpClient.GetAsync("/__test/requests"))
+            .ToArray();
+
+        var responses = await Task.WhenAll(reads).WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        }
+        finally
+        {
+            foreach (var response in responses)
+            {
+                response.Dispose();
+            }
+        }
     }
 
     [Fact]

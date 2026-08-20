@@ -79,8 +79,10 @@ internal static class BuiltInOperationOwners
                     BuiltInCapabilityNames.PackagesMetadataWrite),
                 capabilities.GetRequired<IPublicationCapability>(
                     BuiltInCapabilityNames.PackagesPublish),
-                capabilities.GetRequired<IControlInstrumentationCapability>(
-                    BuiltInCapabilityNames.ControlQuery),
+                capabilities.GetRequired<IFaultInjectionCapability>(
+                    BuiltInCapabilityNames.ControlFaultsInject),
+                capabilities.GetRequired<IRequestRecordingCapability>(
+                    BuiltInCapabilityNames.ControlRequestsRead),
                 capabilities.GetRequired<ITypedEventPublisher>(
                     BuiltInCapabilityNames.EventsPublish),
                 limits).Register(builder);

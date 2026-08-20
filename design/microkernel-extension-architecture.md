@@ -416,6 +416,14 @@ capabilities. Captured requests are redacted by the kernel before storage or
 extension access; authorization, API-key, cookie, and configured sensitive headers
 are never exposed.
 
+The concrete gateway order is Kestrel transport and body-size enforcement, outer
+diagnostics, test instrumentation, identity and authorization/throttling, endpoint
+binding and operation limits, registry dispatch, then response serialization.
+Instrumentation intentionally precedes identity and binding so a test can match raw
+method/path and short-circuit malformed or unauthorized requests without consuming
+their bodies. Diagnostics remains outside the stage so injected responses and
+canceled delays are observable. Bodies are never retained by instrumentation.
+
 ## Profiles and the default CLI
 
 The CLI composes extensions through named profiles.
@@ -466,8 +474,8 @@ composition entry point. Its default `embedded` profile:
 
 - Uses in-memory package and extension state.
 - Activates the standard protocol resources eagerly.
-- Denies outbound HTTP, secret resolution, restore, and test-instrumentation access
-  unless explicitly enabled.
+- Denies outbound HTTP, secret resolution, and sidecar execution; test
+  instrumentation is granted only to the built-in control owner.
 - Uses per-instance extension catalogs, grants, diagnostics, and cancellation.
 - Supports parallel hosts in one process without shared mutable state.
 - Uses in-process official extensions by default.

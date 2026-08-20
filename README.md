@@ -827,6 +827,30 @@ await server.Faults.AddAsync(new FaultRule(
 
 After exercising the client, inspect `server.Requests.GetAsync()` or `GET /__test/requests` to verify attempts, response codes, durations, and matched fault rules.
 
+Fault injection and request recording are owned by the kernel gateway. The request
+order is:
+
+```text
+Kestrel transport/body-size limits
+  -> diagnostics/tracing
+  -> raw method/path fault match, delay, and optional injected response
+  -> redacted request capture
+  -> authentication, authorization, and authentication-failure throttling
+  -> endpoint binding and operation limits
+  -> registry dispatch
+  -> response
+```
+
+Matching occurs before authentication and binding so tests can deliberately inject
+the same response for malformed or unauthorized requests without reading a request
+body. Kestrel limits remain outermost, diagnostics observes injected responses, and
+request cancellation aborts fault delays. Request history never stores bodies.
+`Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`,
+`X-NuGet-ApiKey`, other API-key spellings, and names configured under
+`RuntimeState:SensitiveHeaders` are replaced with `[REDACTED]` before bounded
+request metadata is retained. Production profiles cannot request or receive the
+`control.faults.inject` or `control.requests.read` capabilities.
+
 ## Supported NuGet operations
 
 The current implementation supports:

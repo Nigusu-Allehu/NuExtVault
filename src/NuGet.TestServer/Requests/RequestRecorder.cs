@@ -7,7 +7,7 @@ public sealed class RequestRecorder(
     RuntimeStateConfiguration configuration)
 {
     private readonly object _gate = new();
-    private readonly SortedDictionary<long, RequestRecord> _requests = [];
+    private readonly SortedDictionary<long, CapturedRequestRecord> _requests = [];
     private long _evictedCount;
     private long _minimumSequence;
     private long _sequence;
@@ -21,18 +21,23 @@ public sealed class RequestRecorder(
     {
     }
 
-    public void Add(RequestRecord request)
+    public void Add(RequestRecord request) =>
+        Add(new CapturedRequestRecord(
+            request,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)));
+
+    internal void Add(CapturedRequestRecord request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         lock (_gate)
         {
-            if (request.Sequence < _minimumSequence)
+            if (request.Record.Sequence < _minimumSequence)
             {
                 return;
             }
 
-            _requests.Add(request.Sequence, request);
+            _requests.Add(request.Record.Sequence, request);
             if (_requests.Count > Capacity)
             {
                 _requests.Remove(_requests.First().Key);
@@ -42,6 +47,14 @@ public sealed class RequestRecorder(
     }
 
     public IReadOnlyList<RequestRecord> GetAll()
+    {
+        lock (_gate)
+        {
+            return _requests.Values.Select(request => request.Record).ToArray();
+        }
+    }
+
+    internal IReadOnlyList<CapturedRequestRecord> GetCaptured()
     {
         lock (_gate)
         {
