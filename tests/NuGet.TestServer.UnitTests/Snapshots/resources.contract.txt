@@ -1,4 +1,4 @@
-resource=PackageBaseAddress/3.0.0 owner=builtin.protocol operation=NuGet.FlatContainer.GetVersions route=/flatcontainer/ access=Read visibility=Advertised readiness=Ready order=10 requires=- produces=-
+resource=PackageBaseAddress/3.0.0 owner=builtin.flat-container operation=NuGet.FlatContainer.GetVersions route=/flatcontainer/ access=Read visibility=Advertised readiness=Ready order=10 requires=- produces=-
 resource=RegistrationsBaseUrl/3.6.0 owner=builtin.protocol operation=NuGet.Registration.GetIndex route=/registration/ access=Read visibility=Advertised readiness=Ready order=20 requires=PackageBaseAddress/3.0.0 produces=PackageBaseAddress/3.0.0
 resource=SearchQueryService/3.0.0-beta owner=builtin.protocol operation=NuGet.Search.Query route=/query access=Read visibility=Advertised readiness=Ready order=30 requires=PackageBaseAddress/3.0.0,RegistrationsBaseUrl/3.6.0 produces=-
 resource=SearchQueryService/3.5.0 owner=builtin.protocol operation=NuGet.Search.Query route=/query access=Read visibility=Advertised readiness=Ready order=40 requires=PackageBaseAddress/3.0.0,RegistrationsBaseUrl/3.6.0 produces=-

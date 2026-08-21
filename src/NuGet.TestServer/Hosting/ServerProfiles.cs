@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
@@ -26,6 +27,7 @@ internal static class BuiltInCapabilityNames
     public const string PackagesMetadataRead = "packages.metadata.read";
     public const string PackagesMetadataWrite = "packages.metadata.write";
     public const string PackagesContentRead = "packages.content.read";
+    public const string PackagesSymbolsRead = "packages.symbols.read";
     public const string PackagesContentWrite = "packages.content.write-staged";
     public const string PackagesPublish = "packages.publish";
     public const string PackagesUnlist = "packages.unlist";
@@ -87,7 +89,6 @@ internal static class ServerProfiles
         BuiltInExtensionIds.Protocol,
         Required(BuiltInCapabilityNames.PackagesIdentityRead),
         Required(BuiltInCapabilityNames.PackagesMetadataRead),
-        Required(BuiltInCapabilityNames.PackagesContentRead),
         Required(BuiltInCapabilityNames.VulnerabilityStateRead));
     private static readonly ExtensionSelection ServiceIndex =
         Extension(BuiltInExtensionIds.ServiceIndex);
@@ -158,13 +159,15 @@ internal static class ServerProfiles
             TestControl,
             Operations,
             SupplyChain,
-            SupplyChainPolicy
+            SupplyChainPolicy,
+            .. OfficialExtensionModules.Selections
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
             BuiltInCapabilityNames.PackagesMetadataRead,
             BuiltInCapabilityNames.PackagesMetadataWrite,
             BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesSymbolsRead,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,
@@ -195,13 +198,15 @@ internal static class ServerProfiles
             DurableStorage,
             Operations,
             SupplyChain,
-            SupplyChainPolicy
+            SupplyChainPolicy,
+            .. OfficialExtensionModules.Selections
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
             BuiltInCapabilityNames.PackagesMetadataRead,
             BuiltInCapabilityNames.PackagesMetadataWrite,
             BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesSymbolsRead,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,
@@ -236,12 +241,14 @@ internal static class ServerProfiles
             DurableStorage,
             Operations,
             SupplyChain,
-            SupplyChainPolicy
+            SupplyChainPolicy,
+            .. OfficialExtensionModules.Selections
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
             BuiltInCapabilityNames.PackagesMetadataRead,
             BuiltInCapabilityNames.PackagesContentRead,
+            BuiltInCapabilityNames.PackagesSymbolsRead,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,

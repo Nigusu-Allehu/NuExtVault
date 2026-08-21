@@ -612,7 +612,7 @@ public sealed class CapabilityBrokerTests
         ];
         Type[] owners =
         [
-            typeof(ProtocolReadOperations),
+            typeof(NuGet.TestServer.Extensions.FlatContainer.FlatContainerOperations),
             typeof(RegistrationSearchOperations),
             typeof(PublicationOperations),
             typeof(ModerationOperations),

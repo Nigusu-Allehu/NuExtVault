@@ -1,8 +1,25 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Packages;
+using NuGet.Versioning;
 
 namespace NuGet.TestServer.Kernel.Routing;
+
+/// <summary>
+/// Kernel-owned package version normalization for route values. Package identity rules
+/// never leave the kernel.
+/// </summary>
+internal static class KernelPackageVersions
+{
+    public static string Normalize(string version)
+    {
+        ArgumentNullException.ThrowIfNull(version);
+        return NuGetVersion.TryParse(version, out var parsed)
+            ? TestPackage.NormalizeVersion(parsed)
+            : version.ToLowerInvariant();
+    }
+}
 
 /// <summary>
 /// The only place in the server that creates ASP.NET endpoints. Every active route is
@@ -72,6 +89,9 @@ internal sealed class HttpEndpointRequest(
             ? values.ToString()
             : null;
     }
+
+    public override string GetNormalizedPackageVersion(string name) =>
+        KernelPackageVersions.Normalize(GetRoute(name));
 
     public override int? GetQueryInt32(string name)
     {
