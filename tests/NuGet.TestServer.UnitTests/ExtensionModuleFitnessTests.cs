@@ -270,6 +270,8 @@ internal static class ExtensionFacingCapabilities
         "IKernelInstrumentationControlCapability",
         "IOutboundHttpCapability",
         "IPackageControlCapability",
+        "IPackageScannerCapability",
+        "IPackageSignatureInspectionCapability",
         "IVulnerabilityCatalogCapability"
     ];
 
@@ -295,7 +297,9 @@ internal static class ExtensionFacingCapabilities
                             .Append(method.ReturnType))))
             .Where(type =>
                 type.IsInterface &&
-                type.Namespace == capabilityNamespace)
+                (type.Namespace == capabilityNamespace ||
+                 type == typeof(IPackageSignatureInspectionCapability) ||
+                 type == typeof(IPackageScannerCapability)))
             .Distinct()
             .OrderBy(type => type.Name, StringComparer.Ordinal)
             .ToImmutableArray();

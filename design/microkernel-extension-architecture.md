@@ -1108,8 +1108,11 @@ dangling links, access mismatches, and advertised owners that are not ready.
 `builtin.service-index` is the sole owner of `NuGet.ServiceIndex.Get`. It receives a
 kernel-created resource registry rather than `HttpContext` or mutable JSON. The
 kernel projects absolute URLs and the fixed service-index document fields after
-trusted-proxy and access processing. Existing flat-container, registration, search,
-publication, vulnerability, control, operations, supply-chain, and package-management
+trusted-proxy and access processing. Supply-chain admission and validation decisions
+are now contributed by the internal official `NuTest.SupplyChain` module through the
+generic participant seam. Authoritative package, ownership, quota, publication,
+visibility, moderation, recovery, and audit state remains kernel-owned. Existing
+flat-container, registration, search, publication operations, and package-management
 implementations remain unextracted.
 
 ## Package Staging example

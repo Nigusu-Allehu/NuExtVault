@@ -4,6 +4,7 @@ using NuGet.Versioning;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Vulnerabilities;
+using NuGet.TestServer.Extensions.SupplyChain;
 using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Routing;
@@ -796,7 +797,8 @@ internal static class BuiltInExtensionCatalog
             ]),
     ];
 
-    public static ExtensionCatalog Instance { get; } = new(Manifests);
+    public static ExtensionCatalog Instance { get; } =
+        CreateWith([new SupplyChainExtension()]);
 
     /// <summary>
     /// Creates a catalog that also contains separately compiled modules. Adding a route

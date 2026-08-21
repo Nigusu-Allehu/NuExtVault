@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -138,12 +139,20 @@ public static class ServerApplication
                 : new DurablePackageStore(storageDirectory, packageLimits));
         builder.Services.AddSingleton<IPackageCandidateStore>(provider =>
             new PackageCandidateReader(provider.GetRequiredService<IPackageStore>()));
+        var supplyChainOptions = (composition.SupplyChain ?? new SupplyChainOptions()).Validate();
+        var packageScanner = composition.PackageScanner ?? new SafePackagePolicyScanner();
+        builder.Services.AddSingleton(supplyChainOptions);
+        builder.Services.AddSingleton<IPackagePolicyScanner>(packageScanner);
+        builder.Services.AddSingleton<PolicyPackageHandleRegistry>();
+        builder.Services.AddSingleton<PackagePolicyInspectionService>();
         builder.Services.AddSingleton(provider => new PackageSupplyChainService(
             provider.GetRequiredService<IPackageStore>(),
             storageDirectory,
-            composition.SupplyChain,
-            composition.PackageScanner,
-            provider.GetRequiredService<TimeProvider>()));
+            supplyChainOptions,
+            packageScanner,
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<SupplyChainPolicyEvaluator>(),
+            provider.GetRequiredService<PolicyPackageHandleRegistry>()));
         builder.Services.AddSingleton(new StorageHealth(storageDirectory));
         builder.Services.AddSingleton<ServerDiagnostics>();
         builder.Services.AddSingleton<KernelRequestInstrumentation>();
@@ -165,7 +174,8 @@ public static class ServerApplication
                 provider.GetRequiredService<IPackageStore>(),
                 provider.GetRequiredService<IPackageCandidateStore>(),
                 provider.GetRequiredService<PackageVisibilityPolicy>(),
-                provider.GetRequiredService<PackageSupplyChainService>(),
+                () => provider.GetRequiredService<PackageSupplyChainService>(),
+                provider.GetRequiredService<PackagePolicyInspectionService>(),
                 provider.GetRequiredService<KernelRequestInstrumentation>(),
                 provider.GetRequiredService<StorageHealth>(),
                 provider.GetRequiredService<ServerDiagnostics>(),
@@ -177,6 +187,25 @@ public static class ServerApplication
                 provider.GetRequiredService<KernelOutboundHttpClient>(),
                 packageLimits,
                 provider.GetRequiredService<TimeProvider>())));
+        builder.Services.AddSingleton(provider => PolicyParticipantRegistry.Create(
+            composition.ExtensionGraph,
+            composition.Modules,
+            provider.GetRequiredService<CapabilityBroker>()));
+        builder.Services.AddSingleton(provider =>
+        {
+            var requirements = composition.Profile.PolicyRequirements
+                .ToDictionary(
+                   requirement => requirement.PolicyPoint,
+                   requirement => new PolicyAggregationRequirement(
+                       PolicyAggregationKind.AllMustAllow,
+                       requirement.RequiredAuthoritativeParticipants,
+                       requirement.MinimumAuthoritativeParticipants,
+                       TimeSpan.FromSeconds(30)),
+                   StringComparer.Ordinal);
+            return new SupplyChainPolicyEvaluator(
+                provider.GetRequiredService<PolicyParticipantRegistry>(),
+                requirements);
+        });
         builder.Services.AddSingleton(_ =>
             ServiceIndexResourceRegistry.Create(composition.ExtensionGraph));
         builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(

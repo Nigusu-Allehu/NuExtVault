@@ -3,6 +3,8 @@ using Microsoft.Data.Sqlite;
 using NuGet.Packaging;
 using NuGet.Packaging.Signing;
 using NuGet.Versioning;
+using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Kernel;
 
 namespace NuGet.TestServer.Packages;
 
@@ -12,6 +14,8 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
     private readonly SupplyChainOptions _options;
     private readonly IPackagePolicyScanner _scanner;
     private readonly TimeProvider _timeProvider;
+    private readonly SupplyChainPolicyEvaluator? _policy;
+    private readonly PolicyPackageHandleRegistry? _policyHandles;
     private readonly SqliteConnection _connection;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -21,11 +25,25 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
         SupplyChainOptions? options = null,
         IPackagePolicyScanner? scanner = null,
         TimeProvider? timeProvider = null)
+        : this(inner, storageDirectory, options, scanner, timeProvider, null, null)
+    {
+    }
+
+    internal PackageSupplyChainService(
+        IPackageStore inner,
+        string? storageDirectory,
+        SupplyChainOptions? options,
+        IPackagePolicyScanner? scanner,
+        TimeProvider? timeProvider,
+        SupplyChainPolicyEvaluator? policy,
+        PolicyPackageHandleRegistry? policyHandles)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
         _options = (options ?? new SupplyChainOptions()).Validate();
         _scanner = scanner ?? new SafePackagePolicyScanner();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _policy = policy;
+        _policyHandles = policyHandles;
         SqliteRuntime.Initialize();
         var dataSource = storageDirectory is null
             ? ":memory:"
@@ -73,6 +91,11 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
             var id = package.Identity.Id;
             var version = package.NormalizedVersion;
             var hash = await ComputeHashAsync(package, token);
+            using var policyLease = _policy is null
+                ? null
+                : (_policyHandles ??
+                   throw new InvalidOperationException("Policy package handles are not configured."))
+                .Register(package);
             var existing = ReadStatus(id, version);
             if (existing is not null)
             {
@@ -105,42 +128,66 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
             }
 
             var owner = GetOwner(id);
-            if (!request.Administrator && owner is null && HasExistingPackageId(id))
-            {
-                package.Dispose();
-                Audit(
-                    id,
-                    version,
+            var hasExistingPackageId = HasExistingPackageId(id);
+            var namespaceAllowed = AllowsReservedNamespace(id, request.Identity);
+            var quotaAvailable = !WouldExceedQuota(
+                request.Identity,
+                request.Repository,
+                package.ContentLength);
+            var policyContext = policyLease is null
+                ? null
+                : new SupplyChainPolicyContext(
+                    policyLease.Handle,
+                    new PolicyPackageIdentity(id, version),
+                    package.ContentLength,
                     request.Identity,
-                    "publish",
-                    "unauthorized",
-                    "Existing unowned package IDs require administrator assignment.");
-                return new(
-                    PackagePublicationOutcome.Unauthorized,
-                    "The existing package ID has no assignable owner.");
-            }
-
-            if (!request.Administrator &&
-                owner is not null &&
-                !string.Equals(owner, request.Identity, StringComparison.Ordinal))
+                    request.Repository,
+                    request.Administrator,
+                    _options.RequireSignedPackages,
+                    owner,
+                    request.Administrator ||
+                    owner is null && !hasExistingPackageId ||
+                    string.Equals(owner, request.Identity, StringComparison.Ordinal),
+                    namespaceAllowed,
+                    quotaAvailable);
+            if (_policy is not null)
             {
-                package.Dispose();
-                Audit(id, version, request.Identity, "publish", "unauthorized", "Package ID is owned by another identity.");
-                return new(PackagePublicationOutcome.Unauthorized, "The package ID is owned by another identity.");
+                var admission = await _policy.EvaluateAdmissionAsync(policyContext!, token);
+                if (admission.Decision.Kind == PolicyDecisionKind.Deny)
+                {
+                    package.Dispose();
+                    var outcome = MapPolicyOutcome(admission.Decision.Effect);
+                    var detail = PolicyDetail(admission.Decision);
+                    Audit(
+                        id,
+                        version,
+                        request.Identity,
+                        "publish",
+                        outcome.ToString().ToLowerInvariant(),
+                        detail);
+                    return new(outcome, detail);
+                }
             }
-
-            if (!request.Administrator && !AllowsReservedNamespace(id, request.Identity))
+            else
             {
-                package.Dispose();
-                Audit(id, version, request.Identity, "publish", "unauthorized", "Package namespace is reserved.");
-                return new(PackagePublicationOutcome.Unauthorized, "The package namespace is reserved.");
-            }
-
-            if (WouldExceedQuota(request.Identity, request.Repository, package.ContentLength))
-            {
-                package.Dispose();
-                Audit(id, version, request.Identity, "publish", "quota-exceeded", "Publication quota exceeded.");
-                return new(PackagePublicationOutcome.QuotaExceeded, "Publication quota exceeded.");
+                var direct = EvaluateDirectAdmission(
+                    request,
+                    owner,
+                    hasExistingPackageId,
+                    namespaceAllowed,
+                    quotaAvailable);
+                if (direct is not null)
+                {
+                    package.Dispose();
+                    Audit(
+                        id,
+                        version,
+                        request.Identity,
+                        "publish",
+                        direct.Outcome.ToString().ToLowerInvariant(),
+                        direct.Message);
+                    return direct;
+                }
             }
 
             package = package with { ModerationState = PackageModerationState.Quarantined };
@@ -191,6 +238,44 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
                 ?? throw new PackageStorageCorruptionException(
                     $"Quarantined package '{id} {version}' is absent from blob storage.");
             var validations = new List<PackageValidationRecord>();
+            if (_policy is not null)
+            {
+                using var validationLease = _policyHandles!.Register(stored);
+                var validation = await _policy.EvaluateValidationAsync(
+                    policyContext! with { Package = validationLease.Handle },
+                    token);
+                validations.AddRange(validation.Results.Select(result => new PackageValidationRecord(
+                    result.ParticipantId,
+                    result.Decision.Kind.ToString().ToLowerInvariant(),
+                    PolicyDetail(result.Decision),
+                    _timeProvider.GetUtcNow())));
+                if (validation.Decision.Kind == PolicyDecisionKind.Deny)
+                {
+                    var outcome = MapPolicyOutcome(validation.Decision.Effect);
+                    var state = outcome == PackagePublicationOutcome.Rejected
+                        ? PackageModerationState.Rejected
+                        : PackageModerationState.Quarantined;
+                    var detail = PolicyDetail(validation.Decision);
+                    SetValidationState(
+                        id,
+                        version,
+                        request.Identity,
+                        state,
+                        validations,
+                        detail);
+                    return new(outcome, detail);
+                }
+
+                SetValidationState(
+                    id,
+                    version,
+                    request.Identity,
+                    PackageModerationState.Published,
+                    validations,
+                    "All required validation completed.");
+                return new(PackagePublicationOutcome.Published, "Package published.");
+            }
+
             var signature = await VerifySignatureAsync(stored, token);
             validations.Add(signature);
             if (signature.Outcome == "invalid" ||
@@ -681,6 +766,57 @@ public sealed class PackageSupplyChainService : IAsyncDisposable
             }
         }
     }
+
+    private static PackagePublicationResult? EvaluateDirectAdmission(
+        PackagePublicationRequest request,
+        string? owner,
+        bool hasExistingPackageId,
+        bool namespaceAllowed,
+        bool quotaAvailable)
+    {
+        if (!request.Administrator && owner is null && hasExistingPackageId)
+        {
+            return new(
+                PackagePublicationOutcome.Unauthorized,
+                "The existing package ID has no assignable owner.");
+        }
+
+        if (!request.Administrator &&
+            owner is not null &&
+            !string.Equals(owner, request.Identity, StringComparison.Ordinal))
+        {
+            return new(
+                PackagePublicationOutcome.Unauthorized,
+                "The package ID is owned by another identity.");
+        }
+
+        if (!request.Administrator && !namespaceAllowed)
+        {
+            return new(
+                PackagePublicationOutcome.Unauthorized,
+                "The package namespace is reserved.");
+        }
+
+        return quotaAvailable
+            ? null
+            : new(
+                PackagePublicationOutcome.QuotaExceeded,
+                "Publication quota exceeded.");
+    }
+
+    private static PackagePublicationOutcome MapPolicyOutcome(PolicyDecisionEffect effect) =>
+        effect switch
+        {
+            PolicyDecisionEffect.Reject => PackagePublicationOutcome.Rejected,
+            PolicyDecisionEffect.Unauthorized => PackagePublicationOutcome.Unauthorized,
+            PolicyDecisionEffect.ResourceLimit => PackagePublicationOutcome.QuotaExceeded,
+            _ => PackagePublicationOutcome.Quarantined
+        };
+
+    private static string PolicyDetail(PolicyDecision decision) =>
+        decision.Detail ??
+        decision.ReasonCode ??
+        "A required supply-chain policy denied publication.";
 
     private async ValueTask<PackageValidationRecord> VerifySignatureAsync(
         TestPackage package,

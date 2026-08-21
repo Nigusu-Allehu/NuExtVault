@@ -712,6 +712,10 @@ document contributor.
 
 ### Step 16: Extract supply-chain policy participation
 
+**Status:** Implemented. The internal official `NuTest.SupplyChain` module contributes
+signature, scanner, ownership, namespace, and quota participants through the generic
+module seam. Admission and validation are separate fail-closed policy points.
+
 **Goal:** Separate policy decisions from authoritative package state.
 
 **Changes:**
@@ -721,6 +725,25 @@ document contributor.
   kernel.
 - Define required authoritative participants for production.
 - Remove all fail-open paths.
+
+**Implemented shape:**
+
+- Policy contexts, decisions, effects, participant descriptors, aggregation
+  requirements, and opaque package handles are transport-neutral abstraction
+  contracts.
+- Signature inspection and package scanning use separate action-scoped, audited
+  capabilities. Participants receive no package store, database, path, DI container,
+  secret, `HttpContext`, or authoritative mutation handle.
+- The kernel derives ownership, namespace, and quota facts from authoritative state,
+  executes deterministic all-must-allow aggregation, and remains the sole component
+  that records ownership, accounts/enforces quota, stages content, changes lifecycle
+  state, publishes visibility, moderates, recovers, and writes audit history.
+- Embedded and standard profiles select the official participants and preserve
+  explicitly supplied deterministic scanners. Production additionally validates both
+  declared and active authoritative participants before readiness.
+- Participant failure, timeout, or abstention fails closed. Caller cancellation
+  propagates, while the kernel independently enforces the participant deadline even
+  when a participant ignores cancellation.
 
 **Tests first:**
 

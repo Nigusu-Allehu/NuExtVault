@@ -68,6 +68,28 @@ internal sealed record ExtensionManifest(
     ImmutableArray<CapabilityRequest> RequestedCapabilities);
 
 /// <summary>
+/// Declares one policy participant before activation. Policy aggregation never depends
+/// on module registration order.
+/// </summary>
+internal sealed record PolicyParticipantDescriptor(
+    string PolicyPoint,
+    string ParticipantId,
+    bool IsAuthoritative);
+
+internal sealed record PolicyParticipantRegistration<TContext>(
+    string PolicyPoint,
+    string ParticipantId,
+    bool IsAuthoritative,
+    IPolicyParticipant<TContext> Participant);
+
+internal interface IPolicyParticipantRegistry
+{
+    IPolicyParticipantRegistry Register<TContext>(
+        string extensionId,
+        PolicyParticipantRegistration<TContext> participant);
+}
+
+/// <summary>
 /// The registration surface the kernel hands to a module. A module registers typed
 /// operation owners and nothing else; it never receives the operation registry
 /// implementation, dependency injection, or the route table.
@@ -101,6 +123,8 @@ internal sealed record ExtensionModuleContribution(
     ExtensionManifest Manifest,
     ImmutableArray<OperationBinding> Contracts)
 {
+    public ImmutableArray<PolicyParticipantDescriptor> PolicyParticipants { get; init; } = [];
+
     /// <summary>The profile selection a host uses to activate this module.</summary>
     public ExtensionSelection Selection => new(Manifest.Id, Manifest.RequestedCapabilities);
 }
@@ -118,4 +142,10 @@ internal interface IExtensionModule
     void RegisterOperations(
         IOperationOwnerRegistry registry,
         IExtensionCapabilities capabilities);
+
+    void RegisterPolicyParticipants(
+        IPolicyParticipantRegistry registry,
+        IExtensionCapabilities capabilities)
+    {
+    }
 }
