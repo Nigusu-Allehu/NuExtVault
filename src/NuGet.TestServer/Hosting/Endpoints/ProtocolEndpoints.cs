@@ -31,7 +31,7 @@ internal static class ProtocolEndpoints
             ],
             Handler = EndpointHandler.Create<GetServiceIndexRequest, GetServiceIndexResponse>(
                 OperationIds.ServiceIndexGet,
-                request => new GetServiceIndexRequest(request.Root))
+                _ => new GetServiceIndexRequest())
         }
     ];
 
@@ -43,7 +43,11 @@ internal static class ProtocolEndpoints
             Methods = ["GET", "HEAD"],
             Head = EndpointHeadPolicy.MirrorsGet,
             PathTemplate = "/flatcontainer/{id}/index.json",
-            RouteParameters = [new EndpointParameter("id")],
+            RouteParameters =
+            [
+                new EndpointParameter("id", Kind: RouteParameterKind.PackageId)
+            ],
+            AllowsResourceBaseReference = true,
             Body = EndpointBodyBinding.None,
             Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
             Limits = EndpointLimits.BodyFree,
@@ -64,8 +68,8 @@ internal static class ProtocolEndpoints
             PathTemplate = "/flatcontainer/{id}/{version}/{fileName}",
             RouteParameters =
             [
-                new EndpointParameter("id"),
-                new EndpointParameter("version"),
+                new EndpointParameter("id", Kind: RouteParameterKind.PackageId),
+                new EndpointParameter("version", Kind: RouteParameterKind.PackageVersion),
                 new EndpointParameter("fileName")
             ],
             Body = EndpointBodyBinding.None,
@@ -89,7 +93,11 @@ internal static class ProtocolEndpoints
             Methods = ["GET", "HEAD"],
             Head = EndpointHeadPolicy.MirrorsGet,
             PathTemplate = "/registration/{id}/index.json",
-            RouteParameters = [new EndpointParameter("id")],
+            RouteParameters =
+            [
+                new EndpointParameter("id", Kind: RouteParameterKind.PackageId)
+            ],
+            AllowsResourceBaseReference = true,
             Body = EndpointBodyBinding.None,
             Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
             Limits = EndpointLimits.BodyFree,
@@ -102,9 +110,7 @@ internal static class ProtocolEndpoints
             Handler = EndpointHandler
                 .Create<GetRegistrationIndexRequest, GetRegistrationIndexResponse>(
                     OperationIds.RegistrationGetIndex,
-                    request => new GetRegistrationIndexRequest(
-                        request.GetRoute("id"),
-                        request.Root))
+                    request => new GetRegistrationIndexRequest(request.GetRoute("id")))
         },
         new()
         {
@@ -114,9 +120,9 @@ internal static class ProtocolEndpoints
             PathTemplate = "/registration/{id}/page/{lower}/{upper}.json",
             RouteParameters =
             [
-                new EndpointParameter("id"),
-                new EndpointParameter("lower"),
-                new EndpointParameter("upper")
+                new EndpointParameter("id", Kind: RouteParameterKind.PackageId),
+                new EndpointParameter("lower", Kind: RouteParameterKind.PackageVersion),
+                new EndpointParameter("upper", Kind: RouteParameterKind.PackageVersion)
             ],
             Body = EndpointBodyBinding.None,
             Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
@@ -133,8 +139,7 @@ internal static class ProtocolEndpoints
                     request => new GetRegistrationPageRequest(
                         request.GetRoute("id"),
                         request.GetRoute("lower"),
-                        request.GetRoute("upper"),
-                        request.Root))
+                        request.GetRoute("upper")))
         },
         new()
         {
@@ -144,8 +149,8 @@ internal static class ProtocolEndpoints
             PathTemplate = "/registration/{id}/{version}.json",
             RouteParameters =
             [
-                new EndpointParameter("id"),
-                new EndpointParameter("version")
+                new EndpointParameter("id", Kind: RouteParameterKind.PackageId),
+                new EndpointParameter("version", Kind: RouteParameterKind.PackageVersion)
             ],
             Body = EndpointBodyBinding.None,
             Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
@@ -160,8 +165,7 @@ internal static class ProtocolEndpoints
                 .Create<GetRegistrationLeafRequest, GetRegistrationLeafResponse>(
                     OperationIds.RegistrationGetLeaf,
                     request => new GetRegistrationLeafRequest(
-                        new PackageIdentity(request.GetRoute("id"), request.GetRoute("version")),
-                        request.Root))
+                        new PackageIdentity(request.GetRoute("id"), request.GetRoute("version"))))
         },
         new()
         {
@@ -192,8 +196,7 @@ internal static class ProtocolEndpoints
                     request.GetQueryInt32("skip") ?? 0,
                     request.GetQueryInt32("take") ?? 20,
                     request.GetQueryBoolean("prerelease") ?? false,
-                    request.GetQuery("packageType"),
-                    request.Root))
+                    request.GetQuery("packageType")))
         }
     ];
 

@@ -2,14 +2,14 @@ using System.Collections.Immutable;
 
 namespace NuGet.TestServer.Extensions.Abstractions;
 
-internal sealed record GetServiceIndexRequest(string BaseAddress);
+internal sealed record GetServiceIndexRequest;
 
 internal sealed record GetServiceIndexResponse(
     string Version,
     ImmutableArray<ServiceResourceDescriptor> Resources);
 
 internal sealed record ServiceResourceDescriptor(
-    string Url,
+    RouteReference Route,
     string ResourceType,
     string? Comment);
 
@@ -68,16 +68,16 @@ internal sealed record GetSymbolRequest(PackageIdentity Package);
 
 internal sealed record GetSymbolResponse(ContentDescriptor Symbols);
 
-internal sealed record GetRegistrationIndexRequest(string PackageId, string BaseAddress);
+internal sealed record GetRegistrationIndexRequest(string PackageId);
 
 internal sealed record GetRegistrationIndexResponse(
-    string IdUrl,
+    RouteReference Id,
     int Count,
     ImmutableArray<RegistrationPageDocument> Items);
 
 internal sealed record RegistrationPageDocument(
-    string IdUrl,
-    string ParentUrl,
+    RouteReference Id,
+    RouteReference Parent,
     int Count,
     string Lower,
     string Upper,
@@ -86,21 +86,18 @@ internal sealed record RegistrationPageDocument(
 internal sealed record GetRegistrationPageRequest(
     string PackageId,
     string Lower,
-    string Upper,
-    string BaseAddress);
+    string Upper);
 
 internal sealed record GetRegistrationPageResponse(RegistrationPageDocument Page);
 
-internal sealed record GetRegistrationLeafRequest(
-    PackageIdentity Package,
-    string BaseAddress);
+internal sealed record GetRegistrationLeafRequest(PackageIdentity Package);
 
 internal sealed record GetRegistrationLeafResponse(RegistrationLeafDocument Leaf);
 
 internal sealed record RegistrationLeafDocument(
-    string IdUrl,
-    string RegistrationUrl,
-    string PackageContentUrl,
+    RouteReference Id,
+    RouteReference Registration,
+    RouteReference PackageContent,
     PackageIdentity Package,
     string Authors,
     ImmutableArray<string> Owners,
@@ -144,16 +141,15 @@ internal sealed record SearchRequest(
     int Skip,
     int Take,
     bool IncludePrerelease,
-    string? PackageType,
-    string BaseAddress);
+    string? PackageType);
 
 internal sealed record SearchResponse(
     long TotalHits,
     ImmutableArray<SearchResultDocument> Data);
 
 internal sealed record SearchResultDocument(
-    string IdUrl,
-    string RegistrationUrl,
+    RouteReference Id,
+    RouteReference Registration,
     PackageIdentity Package,
     string Description,
     string? Summary,
@@ -167,9 +163,12 @@ internal sealed record SearchResultDocument(
     ImmutableArray<PackageTypeDocument> PackageTypes,
     ImmutableArray<SearchVersionDocument> Versions);
 
-internal sealed record SearchVersionDocument(string Version, long Downloads);
+internal sealed record SearchVersionDocument(
+    string Version,
+    long Downloads,
+    RouteReference Id);
 
-internal sealed record GetVulnerabilityIndexRequest(string BaseAddress);
+internal sealed record GetVulnerabilityIndexRequest;
 
 internal sealed record GetVulnerabilityIndexResponse(
     string SnapshotId,
@@ -178,8 +177,10 @@ internal sealed record GetVulnerabilityIndexResponse(
 
 internal sealed record VulnerabilityPageDescriptor(
     string Name,
-    string Url,
-    string Sha256);
+    RouteReference Route,
+    string Sha256,
+    DateTimeOffset UpdatedAt,
+    string? Comment);
 
 internal sealed record GetVulnerabilityPageRequest(
     string SnapshotId,

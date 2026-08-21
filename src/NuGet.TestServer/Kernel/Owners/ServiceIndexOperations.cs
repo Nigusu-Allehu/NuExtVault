@@ -25,7 +25,7 @@ internal sealed class ServiceIndexOperations(ServiceIndexResourceRegistry resour
         CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var response = new GetServiceIndexResponse("3.0.0", resources.Project(request.BaseAddress));
+        var response = new GetServiceIndexResponse("3.0.0", resources.Resources);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new Dictionary<string, object?>
@@ -36,11 +36,11 @@ internal sealed class ServiceIndexOperations(ServiceIndexResourceRegistry resour
         return ValueTask.FromResult(OperationResponse<GetServiceIndexResponse>.Success(response));
     }
 
-    private static Dictionary<string, string> CreateDocument(ServiceResourceDescriptor resource)
+    private static Dictionary<string, object?> CreateDocument(ServiceResourceDescriptor resource)
     {
-        var document = new Dictionary<string, string>
+        var document = new Dictionary<string, object?>
         {
-            ["@id"] = resource.Url,
+            ["@id"] = resource.Route,
             ["@type"] = resource.ResourceType
         };
         if (resource.Comment is not null)

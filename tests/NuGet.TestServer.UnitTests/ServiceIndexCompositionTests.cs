@@ -59,7 +59,7 @@ public sealed class ServiceIndexCompositionTests
     }
 
     [Fact]
-    public void Typed_contributions_project_only_known_service_index_fields()
+    public void Typed_contributions_expose_only_route_references_and_known_fields()
     {
         var registry = CreateRegistry(
             Contribution(
@@ -70,9 +70,9 @@ public sealed class ServiceIndexCompositionTests
                 "/synthetic/{id}",
                 comment: "Synthetic test resource."));
 
-        var resource = Assert.Single(registry.Project("https://packages.example.test"));
+        var resource = Assert.Single(registry.Resources);
 
-        Assert.Equal("https://packages.example.test/synthetic/", resource.Url);
+        Assert.Equal(RouteReference.Base("NuTest.Synthetic.Get"), resource.Route);
         Assert.Equal("NuTest.Synthetic/1.0.0", resource.ResourceType);
         Assert.Equal("Synthetic test resource.", resource.Comment);
         Assert.DoesNotContain(
@@ -94,10 +94,10 @@ public sealed class ServiceIndexCompositionTests
 
         Assert.Equal(
             ["NuTest.First/1.0.0", "NuTest.Second/1.0.0"],
-            first.Project("https://example.test").Select(resource => resource.ResourceType));
+            first.Resources.Select(resource => resource.ResourceType));
         Assert.Equal(
-            first.Project("https://example.test").ToArray(),
-            second.Project("https://example.test").ToArray());
+            first.Resources.ToArray(),
+            second.Resources.ToArray());
     }
 
     [Fact]
@@ -119,8 +119,7 @@ public sealed class ServiceIndexCompositionTests
                     ]))
             .ResolveWith(Profile("builtin.synthetic"));
 
-        var projected = ServiceIndexResourceRegistry.Create(graph)
-            .Project("https://example.test");
+        var projected = ServiceIndexResourceRegistry.Create(graph).Resources;
 
         Assert.Equal("NuTest.Synthetic/1.0.0", Assert.Single(projected).ResourceType);
     }
@@ -316,22 +315,6 @@ public sealed class ServiceIndexCompositionTests
         Assert.StartsWith("catalog.resource-access-mismatch:", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Projection_rejects_non_absolute_public_origins()
-    {
-        var registry = CreateRegistry(
-            Contribution(
-                "NuTest.Resource",
-                "1.0.0",
-                "NuTest.Resource.Get",
-                "/resource",
-                "/resource"));
-
-        var exception = Assert.Throws<InvalidOperationException>(() => registry.Project("/relative"));
-
-        Assert.Contains("absolute HTTP or HTTPS", exception.Message, StringComparison.Ordinal);
-    }
-
     private static ServiceIndexResourceRegistry CreateRegistry(
         params ServiceResourceContribution[] contributions)
     {
@@ -339,7 +322,10 @@ public sealed class ServiceIndexCompositionTests
             Manifest(
                 $"extension.{index}",
                 operations: [contribution.OperationId.Value],
-                endpoints: [Endpoint($"resource.{index}", RoutePathFor(contribution), contribution.OperationId.Value)],
+                endpoints: [Endpoint(
+                    contribution.OperationId.Value,
+                    RoutePathFor(contribution),
+                    contribution.OperationId.Value)],
                 resources: [contribution]));
         var catalog = Catalog([.. manifests]);
         return ServiceIndexResourceRegistry.Create(

@@ -45,8 +45,6 @@ internal sealed class HttpEndpointRequest(
 
     public override string Path => context.Request.Path.Value ?? "/";
 
-    public override string Root => $"{context.Request.Scheme}://{context.Request.Host}";
-
     public override string? ContentType => context.Request.ContentType;
 
     public override long? ContentLength => context.Request.ContentLength;

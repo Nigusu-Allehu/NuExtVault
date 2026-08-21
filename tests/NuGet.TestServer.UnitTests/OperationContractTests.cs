@@ -99,6 +99,25 @@ public sealed class OperationContractTests
     }
 
     [Fact]
+    public void Route_references_round_trip_through_json()
+    {
+        var value = RouteReference.Endpoint(
+            "registration.leaf",
+            RouteParameterValue.PackageId("id", "Example.Package"),
+            RouteParameterValue.PackageVersion("version", "1.0.0"));
+
+        var roundTrip = JsonSerializer.Deserialize<RouteReference>(
+            JsonSerializer.Serialize(value));
+
+        Assert.NotNull(roundTrip);
+        Assert.Equal(value.RouteName, roundTrip.RouteName);
+        Assert.Equal(value.Target, roundTrip.Target);
+        Assert.Equal(value.Parameters.ToArray(), roundTrip.Parameters.ToArray());
+        Assert.Equal(value.Query.ToArray(), roundTrip.Query.ToArray());
+        Assert.Equal(value.Fragment, roundTrip.Fragment);
+    }
+
+    [Fact]
     public void Mutation_contract_and_error_round_trip_through_json()
     {
         var value = OperationResponse<PushPackageResponse>.Failure(
@@ -147,7 +166,7 @@ public sealed class OperationContractTests
     {
         string[] registrationFields =
         [
-            "IdUrl", "RegistrationUrl", "PackageContentUrl", "Package", "Authors",
+            "Id", "Registration", "PackageContent", "Package", "Authors",
             "Owners", "Downloads", "Description", "Summary", "Title", "Tags",
             "ProjectUrl", "Readme", "Icon", "LicenseExpression", "LicenseFile",
             "LicenseUrl", "PackageTypes", "Repository", "Listed", "Published",
@@ -155,7 +174,7 @@ public sealed class OperationContractTests
         ];
         string[] searchFields =
         [
-            "IdUrl", "RegistrationUrl", "Package", "Description", "Summary", "Title",
+            "Id", "Registration", "Package", "Description", "Summary", "Title",
             "Tags", "Authors", "Owners", "ProjectUrl", "TotalDownloads", "Verified",
             "PackageTypes", "Versions"
         ];
@@ -170,17 +189,38 @@ public sealed class OperationContractTests
             typeof(string),
             typeof(VulnerabilityAdvisoryDocument).GetProperty("Severity")!.PropertyType);
         Assert.Equal(
-            ["Count", "IdUrl", "Items"],
+            ["Count", "Id", "Items"],
             typeof(GetRegistrationIndexResponse)
                 .GetProperties()
                 .Select(property => property.Name)
                 .Order());
         Assert.Equal(
-            ["Count", "IdUrl", "Items", "Lower", "ParentUrl", "Upper"],
+            ["Count", "Id", "Items", "Lower", "Parent", "Upper"],
             typeof(RegistrationPageDocument)
                 .GetProperties()
                 .Select(property => property.Name)
                 .Order());
+    }
+
+    [Fact]
+    public void Extension_contracts_do_not_expose_host_derived_url_inputs_or_outputs()
+    {
+        var properties = typeof(OperationContracts).Assembly
+            .GetTypes()
+            .Where(type => type.Namespace == typeof(OperationContracts).Namespace)
+            .SelectMany(type => type.GetProperties())
+            .ToArray();
+
+        Assert.DoesNotContain(properties, property =>
+            property.Name.Equals("BaseAddress", StringComparison.Ordinal) ||
+            property.Name.EndsWith("IdUrl", StringComparison.Ordinal) ||
+            property.Name.EndsWith("RegistrationUrl", StringComparison.Ordinal) ||
+            property.Name.EndsWith("PackageContentUrl", StringComparison.Ordinal));
+        Assert.Equal(typeof(RouteReference), typeof(ServiceResourceDescriptor).GetProperty("Route")!.PropertyType);
+        Assert.Equal(typeof(RouteReference), typeof(RegistrationLeafDocument).GetProperty("Id")!.PropertyType);
+        Assert.Equal(typeof(RouteReference), typeof(RegistrationLeafDocument).GetProperty("Registration")!.PropertyType);
+        Assert.Equal(typeof(RouteReference), typeof(RegistrationLeafDocument).GetProperty("PackageContent")!.PropertyType);
+        Assert.Equal(typeof(RouteReference), typeof(VulnerabilityPageDescriptor).GetProperty("Route")!.PropertyType);
     }
 
     [Fact]

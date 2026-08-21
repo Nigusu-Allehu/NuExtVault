@@ -55,14 +55,14 @@ internal sealed class RegistrationSearchOperations(
 
         var normalizedId = packages[0].Id.ToLowerInvariant();
         var response = new GetRegistrationIndexResponse(
-            $"{request.BaseAddress}/registration/{normalizedId}/index.json",
+            RegistrationIndex(normalizedId),
             1,
-            [CreatePage(packages, request.BaseAddress)]);
+            [CreatePage(packages)]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(new Dictionary<string, object?>
             {
-                ["@id"] = response.IdUrl,
+                ["@id"] = response.Id,
                 ["count"] = response.Count,
                 ["items"] = response.Items.Select(RenderPage).ToArray()
             })));
@@ -82,7 +82,7 @@ internal sealed class RegistrationSearchOperations(
                     $"Registration page '{request.Lower}'-'{request.Upper}' does not exist."));
         }
 
-        var response = new GetRegistrationPageResponse(CreatePage(packages, request.BaseAddress));
+        var response = new GetRegistrationPageResponse(CreatePage(packages));
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(RenderPage(response.Page))));
@@ -108,7 +108,7 @@ internal sealed class RegistrationSearchOperations(
         }
 
         var response = new GetRegistrationLeafResponse(
-            CreateLeaf(package, request.BaseAddress));
+            CreateLeaf(package));
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
             new JsonResponseBody(RenderLeaf(response.Leaf))));
@@ -130,10 +130,7 @@ internal sealed class RegistrationSearchOperations(
         var response = new SearchResponse(
             page.TotalHits,
             [
-                .. page.Items.Select(item => CreateSearchResult(
-                    item.Package,
-                    item.Versions,
-                    request.BaseAddress))
+                .. page.Items.Select(item => CreateSearchResult(item.Package, item.Versions))
             ]);
         context.Complete(new OperationHttpResult(
             StatusCodes.Status200OK,
@@ -156,25 +153,25 @@ internal sealed class RegistrationSearchOperations(
         ];
 
     private RegistrationPageDocument CreatePage(
-        IReadOnlyList<CapabilityPackageMetadata> packages,
-        string baseAddress)
+        IReadOnlyList<CapabilityPackageMetadata> packages)
     {
         var first = packages[0];
         var last = packages[^1];
         var normalizedId = first.Id.ToLowerInvariant();
         return new RegistrationPageDocument(
-            $"{baseAddress}/registration/{normalizedId}/page/" +
-            $"{first.NormalizedVersion}/{last.NormalizedVersion}.json",
-            $"{baseAddress}/registration/{normalizedId}/index.json",
+            RouteReference.Endpoint(
+                "registration.page",
+                RouteParameterValue.PackageId("id", normalizedId),
+                RouteParameterValue.PackageVersion("lower", first.NormalizedVersion),
+                RouteParameterValue.PackageVersion("upper", last.NormalizedVersion)),
+            RegistrationIndex(normalizedId),
             packages.Count,
             first.NormalizedVersion,
             last.NormalizedVersion,
-            [.. packages.Select(package => CreateLeaf(package, baseAddress))]);
+            [.. packages.Select(CreateLeaf)]);
     }
 
-    private RegistrationLeafDocument CreateLeaf(
-        CapabilityPackageMetadata package,
-        string baseAddress)
+    private RegistrationLeafDocument CreateLeaf(CapabilityPackageMetadata package)
     {
         var id = package.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
@@ -182,9 +179,13 @@ internal sealed class RegistrationSearchOperations(
             package.Id,
             package.Version);
         return new RegistrationLeafDocument(
-            $"{baseAddress}/registration/{id}/{version}.json",
-            $"{baseAddress}/registration/{id}/index.json",
-            $"{baseAddress}/flatcontainer/{id}/{version}/{id}.{version}.nupkg",
+            RegistrationLeaf(id, version),
+            RegistrationIndex(id),
+            RouteReference.Endpoint(
+                "flatcontainer.content",
+                RouteParameterValue.PackageId("id", id),
+                RouteParameterValue.PackageVersion("version", version),
+                RouteParameterValue.Text("fileName", $"{id}.{version}.nupkg")),
             new PackageIdentity(package.Id, version),
             package.Authors,
             [.. package.RepositoryMetadata.Owners],
@@ -238,14 +239,13 @@ internal sealed class RegistrationSearchOperations(
 
     private static SearchResultDocument CreateSearchResult(
         CapabilityPackageMetadata package,
-        IReadOnlyList<CapabilityPackageMetadata> versions,
-        string baseAddress)
+        IReadOnlyList<CapabilityPackageMetadata> versions)
     {
         var id = package.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
         return new SearchResultDocument(
-            $"{baseAddress}/registration/{id}/{version}.json",
-            $"{baseAddress}/registration/{id}/index.json",
+            RegistrationLeaf(id, version),
+            RegistrationIndex(id),
             new PackageIdentity(package.Id, version),
             package.Description,
             string.IsNullOrEmpty(package.Summary) ? package.Description : package.Summary,
@@ -263,15 +263,16 @@ internal sealed class RegistrationSearchOperations(
             [
                 .. versions.Select(item => new SearchVersionDocument(
                     item.NormalizedVersion,
-                    item.RepositoryMetadata.Downloads))
+                    item.RepositoryMetadata.Downloads,
+                    RegistrationLeaf(id, item.NormalizedVersion)))
             ]);
     }
 
     private static Dictionary<string, object?> RenderPage(RegistrationPageDocument page) => new()
     {
-        ["@id"] = page.IdUrl,
+        ["@id"] = page.Id,
         ["@type"] = "catalog:CatalogPage",
-        ["parent"] = page.ParentUrl,
+        ["parent"] = page.Parent,
         ["count"] = page.Count,
         ["lower"] = page.Lower,
         ["upper"] = page.Upper,
@@ -282,7 +283,7 @@ internal sealed class RegistrationSearchOperations(
     {
         var catalogEntry = new Dictionary<string, object?>
         {
-            ["@id"] = leaf.IdUrl,
+            ["@id"] = leaf.Id,
             ["@type"] = "PackageDetails",
             ["id"] = leaf.Package.Id,
             ["version"] = leaf.Package.Version,
@@ -356,20 +357,20 @@ internal sealed class RegistrationSearchOperations(
 
         return new Dictionary<string, object?>
         {
-            ["@id"] = leaf.IdUrl,
+            ["@id"] = leaf.Id,
             ["@type"] = "Package",
             ["catalogEntry"] = catalogEntry,
-            ["packageContent"] = leaf.PackageContentUrl,
-            ["registration"] = leaf.RegistrationUrl
+            ["packageContent"] = leaf.PackageContent,
+            ["registration"] = leaf.Registration
         };
     }
 
     private static Dictionary<string, object?> RenderSearchResult(SearchResultDocument result) =>
         new()
         {
-            ["@id"] = result.IdUrl,
+            ["@id"] = result.Id,
             ["@type"] = "Package",
-            ["registration"] = result.RegistrationUrl,
+            ["registration"] = result.Registration,
             ["id"] = result.Package.Id,
             ["version"] = result.Package.Version,
             ["description"] = result.Description,
@@ -389,15 +390,21 @@ internal sealed class RegistrationSearchOperations(
                 {
                     ["version"] = version.Version,
                     ["downloads"] = version.Downloads,
-                    ["@id"] = $"{RegistrationBaseUrl(result.RegistrationUrl)}/{version.Version}.json"
+                    ["@id"] = version.Id
                 })
                 .ToArray()
         };
 
-    private static string RegistrationBaseUrl(string registrationUrl) =>
-        registrationUrl.EndsWith("/index.json", StringComparison.Ordinal)
-            ? registrationUrl[..^"/index.json".Length]
-            : registrationUrl;
+    private static RouteReference RegistrationIndex(string id) =>
+        RouteReference.Endpoint(
+            "registration.index",
+            RouteParameterValue.PackageId("id", id));
+
+    private static RouteReference RegistrationLeaf(string id, string version) =>
+        RouteReference.Endpoint(
+            "registration.leaf",
+            RouteParameterValue.PackageId("id", id),
+            RouteParameterValue.PackageVersion("version", version));
 
     private static bool MatchesBounds(
         IReadOnlyList<CapabilityPackageMetadata> packages,

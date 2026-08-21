@@ -26,7 +26,7 @@ public sealed class OperationDispatcherTests
 
         var response = await fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
             SearchOperation,
-            new SearchRequest("json", 0, 7, false, null, "http://localhost"),
+            new SearchRequest("json", 0, 7, false, null),
             fixture.Execution,
             CancellationToken.None);
 
@@ -89,7 +89,7 @@ public sealed class OperationDispatcherTests
 
         var response = await fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
             SearchOperation,
-            new SearchRequest(string.Empty, 0, 20, false, null, "http://localhost"),
+            new SearchRequest(string.Empty, 0, 20, false, null),
             fixture.Execution,
             CancellationToken.None);
 
@@ -108,7 +108,7 @@ public sealed class OperationDispatcherTests
         await Assert.ThrowsAsync<IOException>(async () =>
             await fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
                 SearchOperation,
-                new SearchRequest(string.Empty, 0, 20, false, null, "http://localhost"),
+                new SearchRequest(string.Empty, 0, 20, false, null),
                 fixture.Execution,
                 CancellationToken.None));
 
@@ -132,7 +132,7 @@ public sealed class OperationDispatcherTests
 
         var dispatch = fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
             SearchOperation,
-            new SearchRequest(string.Empty, 0, 20, false, null, "http://localhost"),
+            new SearchRequest(string.Empty, 0, 20, false, null),
             fixture.Execution,
             cancellation.Token).AsTask();
         await cancellation.CancelAsync();
@@ -160,7 +160,7 @@ public sealed class OperationDispatcherTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
                 SearchOperation,
-                new SearchRequest(string.Empty, 0, 20, false, null, "http://localhost"),
+                new SearchRequest(string.Empty, 0, 20, false, null),
                 fixture.Execution,
                 cancellation.Token));
 
@@ -259,7 +259,7 @@ public sealed class OperationDispatcherTests
 
         await fixture.Dispatcher.DispatchAsync<SearchRequest, SearchResponse>(
             SearchOperation,
-            new SearchRequest(string.Empty, 0, 20, false, null, "http://localhost"),
+            new SearchRequest(string.Empty, 0, 20, false, null),
             fixture.Execution,
             CancellationToken.None);
         listener.RecordObservableInstruments();

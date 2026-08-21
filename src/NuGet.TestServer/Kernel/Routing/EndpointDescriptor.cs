@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel.Routing;
@@ -113,7 +114,10 @@ internal sealed record EndpointLimits(
 /// A declared route or query parameter. Required route parameters must appear in the
 /// path template; query parameters are documented for binding completeness.
 /// </summary>
-internal sealed record EndpointParameter(string Name, bool IsRequired = true);
+internal sealed record EndpointParameter(
+    string Name,
+    bool IsRequired = true,
+    RouteParameterKind Kind = RouteParameterKind.Text);
 
 /// <summary>
 /// An operation an endpoint may dispatch, together with the request and response
@@ -155,6 +159,13 @@ internal sealed record EndpointDescriptor
     public required EndpointBodyBinding Body { get; init; }
 
     public EndpointHeadPolicy Head { get; init; } = EndpointHeadPolicy.None;
+
+    /// <summary>
+    /// Allows this route's static prefix to be projected as a service resource base.
+    /// </summary>
+    public bool AllowsResourceBaseReference { get; init; }
+
+    public bool AllowsFragmentReference { get; init; }
 
     /// <summary>
     /// Routes that exist only when the host runs with a production identity.

@@ -10,40 +10,44 @@ namespace NuGet.TestServer.Kernel;
 /// </summary>
 internal sealed class ServiceIndexResourceRegistry
 {
-    private readonly ImmutableArray<ServiceResourceContribution> _contributions;
+    private readonly ImmutableArray<ServiceResourceDescriptor> _resources;
 
     private ServiceIndexResourceRegistry(
-        ImmutableArray<ServiceResourceContribution> contributions) =>
-        _contributions = contributions;
+        ImmutableArray<ServiceResourceDescriptor> resources) =>
+        _resources = resources;
 
     public static ServiceIndexResourceRegistry Create(ResolvedExtensionGraph graph)
     {
         ArgumentNullException.ThrowIfNull(graph);
-        return new ServiceIndexResourceRegistry(
-        [
-            .. graph.Resources
-                .Select(resource => resource.Contribution)
-                .OrderBy(resource => resource.Order)
-                .ThenBy(resource => resource.AdvertisedType, StringComparer.Ordinal)
-        ]);
+        var resources = graph.Resources
+            .Select(resource =>
+            {
+                var contribution = resource.Contribution;
+                var endpoint = graph.Endpoints.Single(candidate =>
+                    StringComparer.OrdinalIgnoreCase.Equals(
+                        candidate.ExtensionId,
+                        resource.ExtensionId) &&
+                    candidate.Descriptor.Operations.Any(operation =>
+                        operation.OperationId == contribution.OperationId.Value) &&
+                    Matches(contribution.RouteName, candidate.Descriptor.PathTemplate));
+                var route = contribution.RouteName.EndsWith('/')
+                    ? RouteReference.Base(endpoint.Descriptor.Name)
+                    : RouteReference.Endpoint(endpoint.Descriptor.Name);
+                return (contribution, descriptor: new ServiceResourceDescriptor(
+                    route,
+                    contribution.AdvertisedType,
+                    contribution.Comment));
+            })
+            .OrderBy(resource => resource.contribution.Order)
+            .ThenBy(resource => resource.contribution.AdvertisedType, StringComparer.Ordinal)
+            .Select(resource => resource.descriptor)
+            .ToImmutableArray();
+        return new ServiceIndexResourceRegistry(resources);
     }
 
-    public ImmutableArray<ServiceResourceDescriptor> Project(string baseAddress)
-    {
-        if (!Uri.TryCreate(baseAddress, UriKind.Absolute, out var root) ||
-            root.Scheme is not ("http" or "https"))
-        {
-            throw new InvalidOperationException(
-                "The service-index base address must be an absolute HTTP or HTTPS URL.");
-        }
+    public ImmutableArray<ServiceResourceDescriptor> Resources => _resources;
 
-        var normalizedRoot = baseAddress.TrimEnd('/');
-        return
-        [
-            .. _contributions.Select(resource => new ServiceResourceDescriptor(
-                $"{normalizedRoot}{resource.RouteName}",
-                resource.AdvertisedType,
-                resource.Comment))
-        ];
-    }
+    private static bool Matches(string routeName, string template) =>
+        StringComparer.Ordinal.Equals(routeName, template) ||
+        (routeName.EndsWith('/') && template.StartsWith(routeName, StringComparison.Ordinal));
 }

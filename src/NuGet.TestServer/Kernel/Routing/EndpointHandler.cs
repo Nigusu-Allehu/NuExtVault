@@ -26,12 +26,6 @@ internal abstract class EndpointRequest
     /// <summary>The request path of the current request.</summary>
     public abstract string Path { get; }
 
-    /// <summary>
-    /// The request root the kernel projected for this call. Step 11B replaces this with
-    /// typed route references.
-    /// </summary>
-    public abstract string Root { get; }
-
     public abstract string? ContentType { get; }
 
     public abstract long? ContentLength { get; }
