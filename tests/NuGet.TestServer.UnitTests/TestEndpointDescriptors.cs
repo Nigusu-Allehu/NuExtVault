@@ -36,7 +36,7 @@ internal static class TestEndpointDescriptors
                 EndpointDescriptor.Operation<EmptyRequest, EmptyResponse>(operationId)
             ],
             Handler = EndpointHandler.Create((_, _) => ValueTask.FromResult(
-                EndpointInvocation.Result(new OperationHttpResult(204)))),
+                EndpointInvocation.Result(OperationResult.NoContent()))),
             Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
             Body = EndpointBodyBinding.None,
             Limits = EndpointLimits.BodyFree,

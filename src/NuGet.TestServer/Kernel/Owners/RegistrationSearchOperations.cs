@@ -58,9 +58,9 @@ internal sealed class RegistrationSearchOperations(
             RegistrationIndex(normalizedId),
             1,
             [CreatePage(packages)]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new Dictionary<string, object?>
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(new Dictionary<string, object?>
             {
                 ["@id"] = response.Id,
                 ["count"] = response.Count,
@@ -83,9 +83,9 @@ internal sealed class RegistrationSearchOperations(
         }
 
         var response = new GetRegistrationPageResponse(CreatePage(packages));
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(RenderPage(response.Page))));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(RenderPage(response.Page))));
         return OperationResponse<GetRegistrationPageResponse>.Success(response);
     }
 
@@ -109,9 +109,9 @@ internal sealed class RegistrationSearchOperations(
 
         var response = new GetRegistrationLeafResponse(
             CreateLeaf(package));
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(RenderLeaf(response.Leaf))));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(RenderLeaf(response.Leaf))));
         return OperationResponse<GetRegistrationLeafResponse>.Success(response);
     }
 
@@ -132,9 +132,9 @@ internal sealed class RegistrationSearchOperations(
             [
                 .. page.Items.Select(item => CreateSearchResult(item.Package, item.Versions))
             ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(new
             {
                 totalHits = response.TotalHits,
                 data = response.Data.Select(RenderSearchResult).ToArray()

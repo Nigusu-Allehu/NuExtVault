@@ -596,36 +596,73 @@ internal sealed record ControlPackageMetadata(
     bool IsListed,
     DateTimeOffset Published);
 
+/// <summary>
+/// The extension-facing package control capability. Every member is action-scoped and
+/// serializable: content moves through kernel-issued handles and metadata moves through
+/// abstraction documents, so no kernel implementation type crosses the boundary.
+/// </summary>
 internal interface IPackageControlCapability
 {
-    ValueTask<IReadOnlyList<ControlPackageMetadata>> GetAllAsync(CancellationToken token);
-    ValueTask<ControlPackageMetadata> AddContentAsync(Stream content, CancellationToken token);
-    ValueTask AddAsync(TestPackage package, CancellationToken token);
-    ValueTask<TestPackage?> FindAsync(string id, string version, CancellationToken token);
-    ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token);
+    ValueTask<IReadOnlyList<PackageSummaryDocument>> GetAllAsync(CancellationToken token);
+
+    ValueTask<PackageSummaryDocument> AddContentAsync(
+        StreamHandle content,
+        CancellationToken token);
+
     ValueTask ResetAsync(CancellationToken token);
+
     ValueTask<bool> DeleteAsync(string id, string version, CancellationToken token);
+
     ValueTask<bool> SetListedAsync(
         string id,
         string version,
         bool listed,
         CancellationToken token);
+
     ValueTask<bool> SetRepositoryMetadataAsync(
         string id,
         string version,
-        PackageRepositoryMetadata metadata,
+        PackageRepositoryMetadataDocument metadata,
         CancellationToken token);
 }
 
+/// <summary>
+/// Kernel-internal package fixture surface for the programmatic test host. It is never
+/// handed to an extension, so it may use kernel package types.
+/// </summary>
+internal interface IPackageFixtureCapability
+{
+    ValueTask AddAsync(TestPackage package, CancellationToken token);
+    ValueTask<TestPackage?> FindAsync(string id, string version, CancellationToken token);
+    ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token);
+    ValueTask ResetAsync(CancellationToken token);
+}
+
+/// <summary>
+/// The extension-facing kernel instrumentation control capability. Fault rules and
+/// request records cross the boundary as abstraction documents.
+/// </summary>
 internal interface IKernelInstrumentationControlCapability
 {
     int FaultCapacity { get; }
     int RequestCapacity { get; }
     long EvictedRequestCount { get; }
-    ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token);
-    ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token);
+    ValueTask<IReadOnlyList<FaultRuleDocument>> GetFaultsAsync(CancellationToken token);
+    ValueTask<string?> TryAddFaultAsync(FaultRuleDocument rule, CancellationToken token);
     ValueTask ClearFaultsAsync(CancellationToken token);
-    ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token);
+    ValueTask<IReadOnlyList<RequestRecordDocument>> GetRequestsAsync(CancellationToken token);
+    ValueTask ClearRequestsAsync(CancellationToken token);
+}
+
+/// <summary>
+/// Kernel-internal instrumentation fixture surface for the programmatic test host.
+/// </summary>
+internal interface IKernelInstrumentationFixtureCapability
+{
+    ValueTask<IReadOnlyList<FaultRule>> GetFaultRulesAsync(CancellationToken token);
+    ValueTask<string?> TryAddFaultRuleAsync(FaultRule rule, CancellationToken token);
+    ValueTask ClearFaultsAsync(CancellationToken token);
+    ValueTask<IReadOnlyList<RequestRecord>> GetRequestRecordsAsync(CancellationToken token);
     ValueTask ClearRequestsAsync(CancellationToken token);
 }
 
@@ -680,6 +717,31 @@ internal interface IVulnerabilityReadCapability
     bool TryGet(string snapshotId, out VulnerabilitySnapshot? snapshot);
 }
 
+/// <summary>
+/// The extension-facing vulnerability catalog capability. It returns documents and
+/// kernel-issued content descriptors, never a kernel snapshot type.
+/// </summary>
+internal interface IVulnerabilityCatalogCapability
+{
+    ValueTask<VulnerabilityCatalogDocument> GetActiveAsync(CancellationToken token);
+
+    ValueTask<ContentDescriptor?> OpenPageAsync(
+        string snapshotId,
+        string pageName,
+        CancellationToken token);
+}
+
+internal sealed record VulnerabilityCatalogDocument(
+    string SnapshotId,
+    DateTimeOffset UpdatedAt,
+    ImmutableArray<VulnerabilityCatalogPageDocument> Pages);
+
+internal sealed record VulnerabilityCatalogPageDocument(
+    string Name,
+    string Sha256,
+    DateTimeOffset UpdatedAt,
+    string? Comment);
+
 internal enum KernelEventKind
 {
     PackagePublished
@@ -730,12 +792,12 @@ internal sealed record OutboundHttpRequest(
     ImmutableDictionary<string, string> Headers,
     long MaximumResponseBytes);
 
-internal sealed class OutboundHttpResponse(
+internal sealed record OutboundHttpResponse(
     int statusCode,
     ImmutableDictionary<string, string> headers,
     ImmutableArray<string> contentEncodings,
     long? contentLength,
-    Stream content) : IAsyncDisposable
+    byte[] content)
 {
     public int StatusCode { get; } = statusCode;
 
@@ -745,9 +807,7 @@ internal sealed class OutboundHttpResponse(
 
     public long? ContentLength { get; } = contentLength;
 
-    public Stream Content { get; } = content;
-
-    public ValueTask DisposeAsync() => Content.DisposeAsync();
+    public byte[] Content { get; } = content;
 }
 
 internal sealed record SecretReferenceHandle(string Id);
@@ -775,7 +835,9 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.EventsPublish
             ],
             [BuiltInExtensionIds.Vulnerabilities] =
-            [],
+            [
+                BuiltInCapabilityNames.VulnerabilityStateRead
+            ],
             [BuiltInExtensionIds.SupplyChain] =
             [
                 BuiltInCapabilityNames.ModerationRead,
@@ -846,7 +908,7 @@ internal sealed class CapabilityBroker
     }
 }
 
-internal sealed class CapabilityOwnerContext
+internal sealed class CapabilityOwnerContext : IExtensionCapabilities
 {
     private readonly string _hostInstanceId;
     private readonly string _ownerId;
@@ -872,7 +934,7 @@ internal sealed class CapabilityOwnerContext
         _services = services;
     }
 
-    public IReadOnlyCollection<string> GrantedCapabilities => _grants;
+    public ImmutableHashSet<string> GrantedCapabilities => _grants;
 
     public T GetRequired<T>(string capabilityName) where T : class
     {
@@ -890,6 +952,29 @@ internal sealed class CapabilityOwnerContext
 
         var handle = _handles.GetOrAdd(typeof(T), _ => CreateHandle<T>());
         return (T)handle;
+    }
+
+    /// <summary>
+    /// Attempts to acquire an optional capability. Ungranted optional capabilities are
+    /// denied without failing the owner.
+    /// </summary>
+    public bool TryGet<T>(string capabilityName, out T? capability) where T : class
+    {
+        capability = null;
+        if (!_grants.Contains(capabilityName) ||
+            !CapabilityContracts.Supports(typeof(T), capabilityName))
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                capabilityName,
+                "acquire",
+                CapabilityCallOutcome.Failed);
+            return false;
+        }
+
+        capability = (T)_handles.GetOrAdd(typeof(T), _ => CreateHandle<T>());
+        return true;
     }
 
     private T CreateHandle<T>() where T : class
@@ -985,6 +1070,33 @@ internal sealed class CapabilityOwnerContext
                     _audit,
                     _limits,
                     _services.Vulnerabilities),
+            var type when type == typeof(IVulnerabilityCatalogCapability) =>
+                new VulnerabilityCatalogCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Vulnerabilities),
+            var type when type == typeof(IPackageFixtureCapability) =>
+                new PackageControlCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.SupplyChain,
+                    _services.Diagnostics,
+                    _services.PackageLimits),
+            var type when type == typeof(IKernelInstrumentationFixtureCapability) =>
+                new KernelInstrumentationControlCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Instrumentation),
             var type when type == typeof(ITypedEventPublisher) =>
                 new TypedEventPublisher(
                     _hostInstanceId,
@@ -1009,6 +1121,14 @@ internal sealed class CapabilityOwnerContext
                     _audit,
                     _limits,
                     _services.OutboundHttp),
+            var type when type == typeof(IHostClockCapability) =>
+                new HostClockCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.Clock),
             _ => throw new InvalidOperationException(
                 $"Capability handle type '{typeof(T).FullName}' is not available.")
         };
@@ -1044,13 +1164,19 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.ControlRequestsRead),
             [typeof(IPackageControlCapability)] = Set(
                 BuiltInCapabilityNames.ControlPackagesManage),
+            [typeof(IPackageFixtureCapability)] = Set(
+                BuiltInCapabilityNames.ControlPackagesManage),
             [typeof(IKernelInstrumentationControlCapability)] = Set(
+                BuiltInCapabilityNames.ControlInstrumentationManage),
+            [typeof(IKernelInstrumentationFixtureCapability)] = Set(
                 BuiltInCapabilityNames.ControlInstrumentationManage),
             [typeof(IServerOperationsCapability)] = Set(
                 BuiltInCapabilityNames.OperationsQuery,
                 BuiltInCapabilityNames.BackupInvoke,
                 BuiltInCapabilityNames.RestoreInvoke),
             [typeof(IVulnerabilityReadCapability)] = Set(
+                BuiltInCapabilityNames.VulnerabilityStateRead),
+            [typeof(IVulnerabilityCatalogCapability)] = Set(
                 BuiltInCapabilityNames.VulnerabilityStateRead),
             [typeof(ITypedEventPublisher)] = Set(BuiltInCapabilityNames.EventsPublish),
             [typeof(IExtensionStateCapability)] = Set(
@@ -1060,7 +1186,8 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.BackupContribute),
             [typeof(IOutboundHttpCapability)] = Set(BuiltInCapabilityNames.OutboundHttp),
             [typeof(ISecretReferenceCapability)] = Set(
-                BuiltInCapabilityNames.SecretsResolveReference)
+                BuiltInCapabilityNames.SecretsResolveReference),
+            [typeof(IHostClockCapability)] = Set(BuiltInCapabilityNames.HostClockRead)
         };
 
     public static bool Supports(Type type, string capabilityName) =>
@@ -1084,7 +1211,8 @@ internal sealed record CapabilityServices(
     ExtensionStateStore ExtensionState,
     IExtensionHealthSource ExtensionHealth,
     KernelOutboundHttpClient OutboundHttp,
-    PackageTransferLimits PackageLimits);
+    PackageTransferLimits PackageLimits,
+    TimeProvider Clock);
 
 internal abstract class CapabilityHandle : ICapabilityHandleIdentity
 {
@@ -1567,9 +1695,10 @@ internal sealed class PackageControlCapability(
     ServerDiagnostics diagnostics,
     PackageTransferLimits packageLimits)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
-        IPackageControlCapability
+        IPackageControlCapability,
+        IPackageFixtureCapability
 {
-    public ValueTask<IReadOnlyList<ControlPackageMetadata>> GetAllAsync(
+    public ValueTask<IReadOnlyList<PackageSummaryDocument>> GetAllAsync(
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlPackagesManage)
             .InvokeAsync(
@@ -1577,19 +1706,22 @@ internal sealed class PackageControlCapability(
                 async ct => Map(await store.GetAllAsync(ct)),
                 token);
 
-    public ValueTask<ControlPackageMetadata> AddContentAsync(
-        Stream content,
+    public ValueTask<PackageSummaryDocument> AddContentAsync(
+        StreamHandle content,
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlPackagesManage)
             .InvokeAsync(
                 "add-package-content",
                 async ct =>
                 {
+                    var resolved = OperationExecutionScope.Required.Content.Resolve(content);
+                    var stream = resolved.Stream ??
+                        new MemoryStream(resolved.Bytes!.Value.ToArray(), writable: false);
                     TestPackage? package = null;
                     try
                     {
                         package = await TestPackage.FromStreamAsync(
-                            content,
+                            stream,
                             packageLimits,
                             cancellationToken: ct);
                         await supplyChain.AddAsync(package, ct);
@@ -1662,21 +1794,34 @@ internal sealed class PackageControlCapability(
     public ValueTask<bool> SetRepositoryMetadataAsync(
         string id,
         string version,
-        PackageRepositoryMetadata metadata,
+        PackageRepositoryMetadataDocument metadata,
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlPackagesManage)
             .InvokeAsync(
                 "set-package-metadata",
-                ct => store.SetRepositoryMetadataAsync(id, version, metadata, ct),
+                ct => store.SetRepositoryMetadataAsync(id, version, Map(metadata), ct),
                 token);
 
-    private static IReadOnlyList<ControlPackageMetadata> Map(IEnumerable<TestPackage> packages) =>
+    private static PackageRepositoryMetadata Map(PackageRepositoryMetadataDocument metadata) =>
+        new(
+            [.. metadata.Owners],
+            metadata.Downloads,
+            metadata.Verified,
+            metadata.Deprecation is { } deprecation
+                ? new PackageDeprecation(
+                    [.. deprecation.Reasons],
+                    deprecation.Message!,
+                    deprecation.AlternatePackage is { } alternate
+                        ? new AlternatePackage(alternate.Id, alternate.Range)
+                        : null)
+                : null);
+
+    private static IReadOnlyList<PackageSummaryDocument> Map(IEnumerable<TestPackage> packages) =>
         [.. packages.Select(Map)];
 
-    private static ControlPackageMetadata Map(TestPackage package) =>
+    private static PackageSummaryDocument Map(TestPackage package) =>
         new(
-            package.Identity.Id,
-            package.NormalizedVersion,
+            new PackageIdentity(package.Identity.Id, package.NormalizedVersion),
             package.IsListed,
             package.Published);
 }
@@ -1689,20 +1834,30 @@ internal sealed class KernelInstrumentationControlCapability(
     CapabilityLimits limits,
     KernelRequestInstrumentation instrumentation)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
-        IKernelInstrumentationControlCapability
+        IKernelInstrumentationControlCapability,
+        IKernelInstrumentationFixtureCapability
 {
     public int FaultCapacity => instrumentation.FaultCapacity;
     public int RequestCapacity => instrumentation.RequestCapacity;
     public long EvictedRequestCount => instrumentation.EvictedRequestCount;
 
-    public ValueTask<IReadOnlyList<FaultRule>> GetFaultsAsync(CancellationToken token) =>
+    public async ValueTask<IReadOnlyList<FaultRuleDocument>> GetFaultsAsync(
+        CancellationToken token) =>
+        [.. (await GetFaultRulesAsync(token)).Select(KernelInstrumentationDocuments.Fault)];
+
+    public ValueTask<IReadOnlyList<FaultRule>> GetFaultRulesAsync(CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
             .InvokeAsync(
                 "get-faults",
                 _ => ValueTask.FromResult(instrumentation.GetFaults()),
                 token);
 
-    public ValueTask<string?> TryAddFaultAsync(FaultRule rule, CancellationToken token) =>
+    public ValueTask<string?> TryAddFaultAsync(
+        FaultRuleDocument rule,
+        CancellationToken token) =>
+        TryAddFaultRuleAsync(KernelInstrumentationDocuments.Fault(rule), token);
+
+    public ValueTask<string?> TryAddFaultRuleAsync(FaultRule rule, CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
             .InvokeAsync(
                 "add-fault",
@@ -1731,7 +1886,12 @@ internal sealed class KernelInstrumentationControlCapability(
                 },
                 token);
 
-    public ValueTask<IReadOnlyList<RequestRecord>> GetRequestsAsync(CancellationToken token) =>
+    public async ValueTask<IReadOnlyList<RequestRecordDocument>> GetRequestsAsync(
+        CancellationToken token) =>
+        [.. (await GetRequestRecordsAsync(token)).Select(KernelInstrumentationDocuments.Request)];
+
+    public ValueTask<IReadOnlyList<RequestRecord>> GetRequestRecordsAsync(
+        CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ControlInstrumentationManage)
             .InvokeAsync(
                 "get-requests",
@@ -1752,6 +1912,42 @@ internal sealed class KernelInstrumentationControlCapability(
                     return ValueTask.FromResult(true);
                 },
                 token);
+}
+
+/// <summary>
+/// Kernel-side translation between instrumentation implementation types and the
+/// abstraction documents extensions see.
+/// </summary>
+internal static class KernelInstrumentationDocuments
+{
+    public static FaultRuleDocument Fault(FaultRule rule) =>
+        new(
+            rule.Id,
+            rule.Method ?? string.Empty,
+            rule.PathContains ?? string.Empty,
+            (int)rule.StatusCode,
+            (long)rule.Delay.TotalMilliseconds,
+            rule.RemainingMatches);
+
+    public static FaultRule Fault(FaultRuleDocument document) =>
+        new(
+            document.Id,
+            string.IsNullOrEmpty(document.Method) ? null : document.Method,
+            string.IsNullOrEmpty(document.RoutePattern) ? null : document.RoutePattern,
+            (System.Net.HttpStatusCode)document.StatusCode,
+            document.RemainingMatches ?? 0,
+            TimeSpan.FromMilliseconds(document.DelayMilliseconds));
+
+    public static RequestRecordDocument Request(RequestRecord record) =>
+        new(
+            record.Sequence,
+            record.Timestamp,
+            record.Method,
+            record.Path,
+            record.StatusCode,
+            record.DurationMilliseconds,
+            record.FaultRuleId,
+            record.AuthenticatedUser);
 }
 
 internal sealed class ServerOperationsCapability(
@@ -1899,6 +2095,89 @@ internal sealed class VulnerabilityReadCapability(
     }
 }
 
+/// <summary>
+/// The extension-facing vulnerability catalog. It converts kernel snapshot state into
+/// documents and registers page payloads as kernel content, so the vulnerability owner
+/// never touches a kernel snapshot type or an execution context.
+/// </summary>
+internal sealed class VulnerabilityCatalogCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    VulnerabilitySnapshotProvider snapshots)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IVulnerabilityCatalogCapability
+{
+    public ValueTask<VulnerabilityCatalogDocument> GetActiveAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
+            .InvokeAsync(
+                "active",
+                _ =>
+                {
+                    var snapshot = snapshots.Active;
+                    return ValueTask.FromResult(new VulnerabilityCatalogDocument(
+                        snapshot.Id,
+                        snapshot.UpdatedAt,
+                        [
+                            .. snapshot.Pages.Select(page =>
+                                new VulnerabilityCatalogPageDocument(
+                                    page.Name,
+                                    page.Sha256,
+                                    page.UpdatedAt,
+                                    page.Comment))
+                        ]));
+                },
+                token);
+
+    public ValueTask<ContentDescriptor?> OpenPageAsync(
+        string snapshotId,
+        string pageName,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
+            .InvokeAsync(
+                "open-page",
+                _ =>
+                {
+                    if (!snapshots.TryGet(snapshotId, out var snapshot) ||
+                        !snapshot!.TryGetPage(pageName, out var page))
+                    {
+                        return ValueTask.FromResult<ContentDescriptor?>(null);
+                    }
+
+                    var handle = OperationExecutionScope.Required.Content.RegisterBytes(
+                        page!.Content,
+                        "application/json");
+                    return ValueTask.FromResult<ContentDescriptor?>(new ContentDescriptor(
+                        handle,
+                        page.Sha256,
+                        page.Content.Length,
+                        SupportsRanges: false));
+                },
+                token);
+}
+
+/// <summary>
+/// The narrow, read-only host clock. It is the kernel-owned capability a separately
+/// compiled module may request when it needs a real host read.
+/// </summary>
+internal sealed class HostClockCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    TimeProvider clock)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IHostClockCapability
+{
+    public ValueTask<DateTimeOffset> GetUtcNowAsync(CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.HostClockRead).InvokeAsync(
+            "utc-now",
+            _ => ValueTask.FromResult(clock.GetUtcNow()),
+            token);
+}
+
 internal sealed class TypedEventPublisher(
     string hostInstanceId,
     string ownerId,
@@ -2003,7 +2282,7 @@ internal sealed class OutboundHttpCapability(
                         message.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
 
-                    var response = await client.SendAsync(
+                    using var response = await client.SendAsync(
                         message,
                         HttpCompletionOption.ResponseHeadersRead,
                         ct);
@@ -2017,18 +2296,9 @@ internal sealed class OutboundHttpCapability(
                                 request.MaximumResponseBytes);
                         }
 
-                        var content = await response.Content.ReadAsStreamAsync(ct);
-                        var lifetime = new ResponseLifetimeStream(content, response);
-                        var bounded = CapabilityStreams.Bound(
-                            lifetime,
-                            declaredLength ?? 0,
+                        var content = await OutboundHttpContent.ReadBoundedAsync(
+                            response.Content,
                             request.MaximumResponseBytes,
-                            ct,
-                            null);
-                        var leased = StreamGate(BuiltInCapabilityNames.OutboundHttp).LeaseStream(
-                            "consume-response",
-                            bounded,
-                            declaredLength ?? 0,
                             ct);
                         return new OutboundHttpResponse(
                             (int)response.StatusCode,
@@ -2040,8 +2310,9 @@ internal sealed class OutboundHttpCapability(
                                     StringComparer.OrdinalIgnoreCase),
                             [.. response.Content.Headers.ContentEncoding],
                             declaredLength,
-                            leased);
+                            content);
                     }
+
                     catch
                     {
                         response.Dispose();
@@ -2049,6 +2320,37 @@ internal sealed class OutboundHttpCapability(
                     }
                 },
                 token);
+}
+
+internal static class OutboundHttpContent
+{
+    public static async ValueTask<byte[]> ReadBoundedAsync(
+        HttpContent content,
+        long maximumBytes,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        await using var source = await content.ReadAsStreamAsync(token);
+        using var destination = new MemoryStream();
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, token);
+            if (read == 0)
+            {
+                return destination.ToArray();
+            }
+
+            if (destination.Length + read > maximumBytes)
+            {
+                throw new CapabilityStreamLimitExceededException(
+                    destination.Length + read,
+                    maximumBytes);
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), token);
+        }
+    }
 }
 
 internal sealed class KernelOutboundHttpClient : IDisposable

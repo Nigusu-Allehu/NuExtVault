@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
-using NuGet.TestServer.Extensions.Abstractions;
-using NuGet.TestServer.Packages;
 
-namespace NuGet.TestServer.Kernel.Routing;
+namespace NuGet.TestServer.Extensions.Abstractions;
 
 /// <summary>
 /// The access policy an endpoint requires. It is transport-neutral; the kernel maps it
@@ -81,7 +79,7 @@ internal sealed record EndpointLimits(
     int MaxConcurrentCalls,
     TimeSpan Timeout)
 {
-    /// <summary>Inherit the host's package transfer limit.</summary>
+    /// <summary>Inherit the host's transfer limit.</summary>
     public const long Inherit = -1;
 
     private const int DefaultConcurrency = 64;
@@ -95,19 +93,20 @@ internal sealed record EndpointLimits(
     public static EndpointLimits BoundedBody(long maximumBytes) =>
         new(maximumBytes, maximumBytes, DefaultConcurrency, TimeSpan.FromMinutes(2));
 
-    public EndpointLimits Resolve(PackageTransferLimits host)
-    {
-        ArgumentNullException.ThrowIfNull(host);
-        return this with
+    /// <summary>
+    /// Resolves declared limits against the host budget. The host passes plain byte
+    /// budgets so descriptors never reference a host or storage implementation type.
+    /// </summary>
+    public EndpointLimits Resolve(long maxRequestBodyBytes, long maxContentBytes) =>
+        this with
         {
             MaxRequestBytes = MaxRequestBytes == Inherit
-                ? host.MaxRequestBodyBytes
-                : Math.Min(MaxRequestBytes, host.MaxRequestBodyBytes),
+                ? maxRequestBodyBytes
+                : Math.Min(MaxRequestBytes, maxRequestBodyBytes),
             MaxContentBytes = MaxContentBytes == Inherit
-                ? host.MaxPackageBytes
-                : Math.Min(MaxContentBytes, host.MaxPackageBytes)
+                ? maxContentBytes
+                : Math.Min(MaxContentBytes, maxContentBytes)
         };
-    }
 }
 
 /// <summary>
@@ -133,7 +132,7 @@ internal sealed record EndpointOperationBinding(
 /// a route: the kernel validates them, generates the route table from them, and freezes
 /// that table before the host listens. Descriptors never reference
 /// <c>WebApplication</c>, endpoint routing, dependency injection, or
-/// <c>HttpContext</c>.
+/// the HTTP request context.
 /// </summary>
 internal sealed record EndpointDescriptor
 {

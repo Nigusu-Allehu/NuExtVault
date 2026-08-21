@@ -33,6 +33,14 @@ rewrite.
 
 ## What the implementation did not prove
 
+The following was the state before Steps 11A through 11C. Steps 11A, 11B, and 11C have
+since generated every route from typed descriptors, moved URL projection into the
+kernel, replaced `OperationHttpResult` with the versioned transport-neutral
+`OperationResult`, removed `OperationExecutionContext` from official extension owners,
+decomposed the capabilities those owners consume, and proved that a separately compiled
+module contributes a complete operation, route, binder, resource, and capability request
+with no kernel source edits.
+
 The manifests and catalog contain route strings, but ASP.NET endpoint classes still
 perform static mapping. Registration, search, vulnerability, and service-index
 contracts still expose base addresses or absolute URLs. Extracted owners can complete
@@ -43,9 +51,8 @@ cannot become a public transport-neutral boundary unchanged.
 Extension state does not yet define the transaction, migration, quota, concurrency,
 lock-cardinality, checkpoint, and crash-safe restore semantics required for backup.
 Durable at-least-once events and a full `Degraded` lifecycle are designs, not
-implemented behavior. No independently compiled module has contributed a complete
-operation, route, binder or codec, resource, and capability request without kernel
-source edits.
+implemented behavior. Filesystem discovery, assembly load contexts, dynamic unload,
+sidecars, and SDK publication remain out of scope and unimplemented.
 
 ## Debate
 
@@ -170,9 +177,13 @@ After Steps 11A through 11D:
 ### Before Step 19
 
 - Is route/binding public in v1 or contributor-only?
-- What replaces `OperationHttpResult`?
+- Answered in Step 11C: `OperationResult` replaces `OperationHttpResult` as one
+  immutable, versioned, transport-neutral rendering contract. Remaining question: does
+  the versioned contract need negotiation across SDK versions?
 - What SDK version window is supported?
-- How is structural contract identity represented and tested?
+- Partially answered in Step 11C: structural contract identity is a canonical text plus
+  a SHA-256 fingerprint with golden snapshots for operations, routes, resources, and
+  capability candidates. Remaining question: which of those surfaces become public.
 - What signing and publisher identity policy applies?
 - What replacement scope is supportable, and does search alone justify replacement
   machinery?

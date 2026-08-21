@@ -55,6 +55,7 @@ internal sealed class OperationDispatcher(
         activity?.SetTag("nuget.operation.owner", registration.ExtensionId);
         var started = Stopwatch.GetTimestamp();
         using var attribution = CapabilityOperationAttribution.Enter(operationId.Value);
+        using var execution = OperationExecutionScope.Enter(context);
         try
         {
             var result = (OperationResponse<TResponse>)await registration.Invoke(

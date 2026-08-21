@@ -175,7 +175,8 @@ public static class ServerApplication
                 provider.GetRequiredService<ExtensionStateStore>(),
                 officialExtensions,
                 provider.GetRequiredService<KernelOutboundHttpClient>(),
-                packageLimits)));
+                packageLimits,
+                provider.GetRequiredService<TimeProvider>())));
         builder.Services.AddSingleton(_ =>
             ServiceIndexResourceRegistry.Create(composition.ExtensionGraph));
         builder.Services.AddSingleton(provider => BuiltInOperationOwners.CreateRegistry(
@@ -184,7 +185,7 @@ public static class ServerApplication
             provider.GetRequiredService<ServiceIndexResourceRegistry>(),
             officialExtensions,
             packageLimits,
-            composition.Contributions));
+            composition.Modules));
         builder.Services.AddSingleton(_ => KernelRouteTable.Create(
             composition.ExtensionGraph,
             packageLimits,

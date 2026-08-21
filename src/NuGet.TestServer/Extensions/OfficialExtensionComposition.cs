@@ -96,7 +96,10 @@ internal sealed class OfficialExtensionComposition : IExtensionHealthSource
         if (_graph.Extensions.Any(extension =>
                 extension.Id == BuiltInExtensionIds.Vulnerabilities))
         {
-            new VulnerabilityOperations(Vulnerabilities.Snapshots).Register(builder);
+            var capabilities = broker.ForOwner(BuiltInExtensionIds.Vulnerabilities);
+            new VulnerabilityOperations(
+                capabilities.GetRequired<IVulnerabilityCatalogCapability>(
+                    BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
         }
     }
 

@@ -1,3 +1,4 @@
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
@@ -99,9 +100,12 @@ public sealed class ServerProfileTests
             ServerProfiles.Production.Extensions,
             extension => extension.Id == BuiltInExtensionIds.Vulnerabilities);
 
-        Assert.Empty(embedded.RequestedCapabilities);
+        Assert.Equal(
+            [BuiltInCapabilityNames.VulnerabilityStateRead],
+            embedded.RequestedCapabilities.Select(request => request.Name));
         Assert.Equal(
             [
+                BuiltInCapabilityNames.VulnerabilityStateRead,
                 BuiltInCapabilityNames.ExtensionStateRead,
                 BuiltInCapabilityNames.ExtensionStateWrite,
                 BuiltInCapabilityNames.OutboundHttp

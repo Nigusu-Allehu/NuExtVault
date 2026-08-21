@@ -82,7 +82,7 @@ internal sealed class OperationGateway(
         OperationDispatcher dispatcher,
         OperationExecutionContext execution) : IEndpointOperationDispatcher
     {
-        public async ValueTask<OperationHttpResult> DispatchAsync<TRequest, TResponse>(
+        public async ValueTask<OperationResult> DispatchAsync<TRequest, TResponse>(
             string operationId,
             TRequest request,
             CancellationToken cancellationToken)
@@ -98,16 +98,9 @@ internal sealed class OperationGateway(
 }
 
 /// <summary>
-/// Thrown by route binding when the current protocol rejects a request before an
-/// operation can be dispatched.
+/// The kernel renderer. It is the only component that maps a transport-neutral
+/// <see cref="OperationResult"/> onto HTTP status codes, headers, and serialization.
 /// </summary>
-internal sealed class OperationBindingException(
-    OperationHttpResult result,
-    Exception? innerException = null) : Exception(null, innerException)
-{
-    public OperationHttpResult Result { get; } = result;
-}
-
 internal static class OperationResults
 {
     public static IResult Render<TResponse>(
@@ -118,10 +111,11 @@ internal static class OperationResults
         Render(Resolve(response, execution), execution, urls, origin);
 
     /// <summary>
-    /// Chooses the protocol-compatible rendering for an operation response: the owner's
-    /// attached result when present, otherwise the kernel error or success policy.
+    /// Chooses the protocol-compatible rendering for an operation response: the
+    /// rendering the owner attached to the response, then the kernel-internal execution
+    /// rendering, then the kernel error or success policy.
     /// </summary>
-    public static OperationHttpResult Resolve<TResponse>(
+    public static OperationResult Resolve<TResponse>(
         OperationResponse<TResponse> response,
         OperationExecutionContext execution)
     {
@@ -129,51 +123,54 @@ internal static class OperationResults
         ArgumentNullException.ThrowIfNull(execution);
         if (response.Error is not null)
         {
-            return execution.Result ?? OperationErrorPolicy.CreateResult(response.Error);
+            return response.Rendering ??
+                   execution.Result ??
+                   OperationErrorPolicy.CreateResult(response.Error);
         }
 
-        return execution.Result ?? new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(response.Value!));
+        return response.Rendering ??
+               execution.Result ??
+               OperationResult.Ok(response.Value!);
     }
 
     public static IResult Render(
-        OperationHttpResult result,
+        OperationResult result,
         OperationExecutionContext execution,
         KernelUrlProjector urls,
         Func<PublicUrlOrigin> origin)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(execution);
+        var statusCode = OperationErrorPolicy.GetStatusCode(result.Status);
         return result.Body switch
         {
             null => result.Location is null
-                ? Results.StatusCode(result.StatusCode)
+                ? Results.StatusCode(statusCode)
                 : CreatedResult(result, null),
-            ProblemResponseBody problem => Results.Problem(
+            OperationProblemBody problem => Results.Problem(
                 problem.Detail,
-                statusCode: result.StatusCode),
-            TextResponseBody text => Results.Text(text.Value, text.ContentType),
-            ContentResponseBody content => RenderContent(content, execution),
-            JsonResponseBody json => result.Location is null
+                statusCode: statusCode),
+            OperationTextBody text => Results.Text(text.Value, text.MediaType),
+            OperationContentBody content => RenderContent(content, execution),
+            OperationDocumentBody document => result.Location is null
                 ? Results.Json(
-                    json.Value,
+                    document.Document,
                     urls.CreateJsonOptions(origin),
-                    statusCode: result.StatusCode)
-                : CreatedResult(result, json.Value),
+                    statusCode: statusCode)
+                : CreatedResult(result, document.Document),
             _ => throw new InvalidOperationException("Unsupported operation response body.")
         };
     }
 
-    private static IResult CreatedResult(OperationHttpResult result, object? value) =>
-        result.StatusCode switch
+    private static IResult CreatedResult(OperationResult result, object? value) =>
+        result.Status switch
         {
-            StatusCodes.Status202Accepted => Results.Accepted(result.Location, value),
+            OperationResultStatus.Accepted => Results.Accepted(result.Location, value),
             _ => Results.Created(result.Location!, value)
         };
 
     private static IResult RenderContent(
-        ContentResponseBody body,
+        OperationContentBody body,
         OperationExecutionContext execution)
     {
         var content = execution.Content.Resolve(body.Handle);

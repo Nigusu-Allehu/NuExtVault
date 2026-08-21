@@ -1,6 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
-
-namespace NuGet.TestServer.Kernel.Routing;
+namespace NuGet.TestServer.Extensions.Abstractions;
 
 /// <summary>
 /// Kernel-owned caller facts for one request. Descriptor binders never see the HTTP
@@ -16,15 +14,12 @@ internal sealed record EndpointCaller(bool HasIdentity, string? IdentityName, bo
 /// The transport-neutral request surface a descriptor binder may use. Implementations
 /// are kernel-internal; a binder can read declared route and query values, bind bounded
 /// bodies, and register non-buffering content streams, but it can never reach
-/// <c>HttpContext</c>, dependency injection, or endpoint routing.
+/// the HTTP request context, dependency injection, or endpoint routing.
 /// </summary>
 internal abstract class EndpointRequest
 {
     /// <summary>The uppercase HTTP method of the current request.</summary>
     public abstract string Method { get; }
-
-    /// <summary>The request path of the current request.</summary>
-    public abstract string Path { get; }
 
     public abstract string? ContentType { get; }
 
@@ -86,7 +81,7 @@ internal abstract class EndpointRequest
 /// </summary>
 internal interface IEndpointOperationDispatcher
 {
-    ValueTask<OperationHttpResult> DispatchAsync<TRequest, TResponse>(
+    ValueTask<OperationResult> DispatchAsync<TRequest, TResponse>(
         string operationId,
         TRequest request,
         CancellationToken cancellationToken);
@@ -98,22 +93,22 @@ internal interface IEndpointOperationDispatcher
 /// </summary>
 internal sealed class EndpointInvocation
 {
-    private readonly OperationHttpResult? _result;
+    private readonly OperationResult? _result;
     private readonly Func<
         IEndpointOperationDispatcher,
         CancellationToken,
-        ValueTask<OperationHttpResult>>? _dispatch;
+        ValueTask<OperationResult>>? _dispatch;
 
     private EndpointInvocation(
-        OperationHttpResult? result,
-        Func<IEndpointOperationDispatcher, CancellationToken, ValueTask<OperationHttpResult>>?
+        OperationResult? result,
+        Func<IEndpointOperationDispatcher, CancellationToken, ValueTask<OperationResult>>?
             dispatch)
     {
         _result = result;
         _dispatch = dispatch;
     }
 
-    public static EndpointInvocation Result(OperationHttpResult result)
+    public static EndpointInvocation Result(OperationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         return new EndpointInvocation(result, null);
@@ -131,7 +126,7 @@ internal sealed class EndpointInvocation
                 dispatcher.DispatchAsync<TRequest, TResponse>(operationId, request, token));
     }
 
-    public ValueTask<OperationHttpResult> ExecuteAsync(
+    public ValueTask<OperationResult> ExecuteAsync(
         IEndpointOperationDispatcher dispatcher,
         CancellationToken cancellationToken)
     {

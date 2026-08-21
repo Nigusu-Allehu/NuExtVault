@@ -60,9 +60,9 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
 
         var response = new GetPackageVersionsResponse(
             [.. readablePackages.Select(package => package.NormalizedVersion)]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new { versions = response.Versions })));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(new { versions = response.Versions })));
         return OperationResponse<GetPackageVersionsResponse>.Success(response);
     }
 
@@ -95,9 +95,9 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
             "application/octet-stream",
             content.Length,
             supportsRanges: true);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new ContentResponseBody(handle)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationContentBody(handle)));
         return OperationResponse<GetPackageResponse>.Success(
             new GetPackageResponse(
                 new ContentDescriptor(
@@ -124,9 +124,9 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
         var handle = context.Content.RegisterBytes(
             package.NuspecContent,
             "text/xml; charset=utf-8");
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new ContentResponseBody(handle)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationContentBody(handle)));
         return OperationResponse<GetNuspecResponse>.Success(
             new GetNuspecResponse(
                 new ContentDescriptor(
@@ -151,9 +151,9 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
         }
 
         var response = new GetPackageHashResponse(package.PackageHash);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new TextResponseBody(response.Sha512, "text/plain; charset=utf-8")));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationTextBody(response.Sha512, "text/plain; charset=utf-8")));
         return OperationResponse<GetPackageHashResponse>.Success(response);
     }
 
@@ -172,9 +172,9 @@ internal sealed class ProtocolReadOperations(IPackageReadCapability packages)
         }
 
         var handle = context.Content.RegisterBytes(symbols, "application/octet-stream");
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new ContentResponseBody(handle)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationContentBody(handle)));
         return OperationResponse<GetSymbolResponse>.Success(
             new GetSymbolResponse(
                 new ContentDescriptor(handle, null, symbols.Length, SupportsRanges: false)));

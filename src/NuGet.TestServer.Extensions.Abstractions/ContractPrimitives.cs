@@ -4,20 +4,44 @@ namespace NuGet.TestServer.Extensions.Abstractions;
 
 internal sealed record OperationId(string Value);
 
-internal enum OperationFamily
+/// <summary>
+/// An open operation family. Well-known families are declared here for the built-in
+/// protocol surface; separately compiled modules declare their own with
+/// <see cref="Custom"/> so the family set is not closed by the kernel.
+/// </summary>
+internal sealed record OperationFamily(string Name)
 {
-    ServiceIndex,
-    FlatContainer,
-    Registration,
-    Search,
-    PackageManagement,
-    Moderation,
-    Vulnerabilities,
-    TestControl,
-    Health,
-    Diagnostics,
-    Backup,
-    Restore
+    internal static OperationFamily ServiceIndex { get; } = new("ServiceIndex");
+
+    internal static OperationFamily FlatContainer { get; } = new("FlatContainer");
+
+    internal static OperationFamily Registration { get; } = new("Registration");
+
+    internal static OperationFamily Search { get; } = new("Search");
+
+    internal static OperationFamily PackageManagement { get; } = new("PackageManagement");
+
+    internal static OperationFamily Moderation { get; } = new("Moderation");
+
+    internal static OperationFamily Vulnerabilities { get; } = new("Vulnerabilities");
+
+    internal static OperationFamily TestControl { get; } = new("TestControl");
+
+    internal static OperationFamily Health { get; } = new("Health");
+
+    internal static OperationFamily Diagnostics { get; } = new("Diagnostics");
+
+    internal static OperationFamily Backup { get; } = new("Backup");
+
+    internal static OperationFamily Restore { get; } = new("Restore");
+
+    public static OperationFamily Custom(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new OperationFamily(name);
+    }
+
+    public override string ToString() => Name;
 }
 
 internal sealed record OperationContract(
@@ -53,6 +77,14 @@ internal sealed record OperationResponse<TResponse>
 {
     [JsonConstructor]
     internal OperationResponse(TResponse? value, OperationError? error)
+        : this(value, error, null)
+    {
+    }
+
+    internal OperationResponse(
+        TResponse? value,
+        OperationError? error,
+        OperationResult? rendering)
     {
         if ((value is null) == (error is null))
         {
@@ -62,17 +94,42 @@ internal sealed record OperationResponse<TResponse>
 
         Value = value;
         Error = error;
+        Rendering = rendering;
     }
 
     public TResponse? Value { get; }
 
     public OperationError? Error { get; }
 
+    /// <summary>
+    /// The optional transport-neutral rendering an owner attached to this response. It
+    /// is the only way an owner may influence the wire form; the kernel remains the
+    /// only component that speaks HTTP.
+    /// </summary>
+    [JsonIgnore]
+    public OperationResult? Rendering { get; }
+
     internal static OperationResponse<TResponse> Success(TResponse value) =>
-        new(value ?? throw new ArgumentNullException(nameof(value)), null);
+        new(value ?? throw new ArgumentNullException(nameof(value)), null, null);
+
+    internal static OperationResponse<TResponse> Success(
+        TResponse value,
+        OperationResult rendering) =>
+        new(
+            value ?? throw new ArgumentNullException(nameof(value)),
+            null,
+            rendering ?? throw new ArgumentNullException(nameof(rendering)));
 
     internal static OperationResponse<TResponse> Failure(OperationError error) =>
-        new(default, error ?? throw new ArgumentNullException(nameof(error)));
+        new(default, error ?? throw new ArgumentNullException(nameof(error)), null);
+
+    internal static OperationResponse<TResponse> Failure(
+        OperationError error,
+        OperationResult rendering) =>
+        new(
+            default,
+            error ?? throw new ArgumentNullException(nameof(error)),
+            rendering ?? throw new ArgumentNullException(nameof(rendering)));
 }
 
 internal sealed record OperationError

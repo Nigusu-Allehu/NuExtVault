@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
 
@@ -46,15 +47,15 @@ internal static class BuiltInCapabilityNames
     public const string OutboundHttp = "network.outbound-http";
     public const string SecretsResolveReference = "secrets.resolve-reference";
     public const string SidecarExecution = "extensions.sidecar-execution";
+
+    /// <summary>
+    /// The narrow, read-only host clock any separately compiled module may request.
+    /// The canonical name lives in the extension abstractions.
+    /// </summary>
+    public const string HostClockRead = KernelCapabilityNames.HostClockRead;
 }
 
-internal sealed record CapabilityRequest(string Name, bool IsRequired);
-
 internal sealed record CapabilityGrant(string Name);
-
-internal sealed record ExtensionSelection(
-    string Id,
-    ImmutableArray<CapabilityRequest> RequestedCapabilities);
 
 internal enum ServerProfileKind
 {
@@ -88,10 +89,12 @@ internal static class ServerProfiles
         Required(BuiltInCapabilityNames.PackagesRelist),
         Required(BuiltInCapabilityNames.PackagesDelete),
         Required(BuiltInCapabilityNames.EventsPublish));
-    private static readonly ExtensionSelection EmbeddedVulnerabilities =
-        Extension(BuiltInExtensionIds.Vulnerabilities);
+    private static readonly ExtensionSelection EmbeddedVulnerabilities = Extension(
+        BuiltInExtensionIds.Vulnerabilities,
+        Required(BuiltInCapabilityNames.VulnerabilityStateRead));
     private static readonly ExtensionSelection DurableVulnerabilities = Extension(
         BuiltInExtensionIds.Vulnerabilities,
+        Required(BuiltInCapabilityNames.VulnerabilityStateRead),
         Required(BuiltInCapabilityNames.ExtensionStateRead),
         Required(BuiltInCapabilityNames.ExtensionStateWrite),
         Required(BuiltInCapabilityNames.OutboundHttp));
@@ -240,7 +243,7 @@ internal sealed record ServerComposition(
     IPackagePolicyScanner? PackageScanner,
     TemporaryStorageLease? StorageLease,
     bool EnableVulnerabilityPersistence,
-    ImmutableArray<ExtensionContribution> Contributions)
+    ImmutableArray<IExtensionModule> Modules)
 {
     /// <summary>
     /// Identifies this host instance. Kernel content handles, registries, routes, and
@@ -269,22 +272,22 @@ internal sealed record ServerComposition(
         IPackagePolicyScanner? packageScanner = null,
         TemporaryStorageLease? storageLease = null,
         bool enableVulnerabilityPersistence = false,
-        ImmutableArray<ExtensionContribution> contributions = default)
+        ImmutableArray<IExtensionModule> modules = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         authentication ??= AuthenticationConfiguration.Anonymous;
         vulnerabilities ??= new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load());
         runtimeState ??= new RuntimeStateConfiguration();
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
-        contributions = contributions.IsDefault ? [] : contributions;
+        modules = ExtensionModules.Validate(modules.IsDefault ? [] : modules);
 
-        var catalog = contributions.IsEmpty
+        var catalog = modules.IsEmpty
             ? BuiltInExtensionCatalog.Instance
-            : BuiltInExtensionCatalog.CreateWith(contributions);
+            : BuiltInExtensionCatalog.CreateWith(modules);
         var extensionGraph = catalog.Resolve(
             profile,
             authentication.Profile == AuthenticationProfile.Production,
-            ExtensionContribution.CreateContractIndex(contributions));
+            ExtensionModules.CreateContractIndex(modules));
         ValidateProfile(profile, storageDirectory, authentication, supplyChain);
         var mode = profile.Kind == ServerProfileKind.Production
             ? ServerMode.Production
@@ -309,7 +312,7 @@ internal sealed record ServerComposition(
             packageScanner,
             storageLease,
             enableVulnerabilityPersistence,
-            contributions);
+            modules);
     }
 
     public static ServerComposition CreateProductionWithTemporaryStorage(
@@ -323,7 +326,7 @@ internal sealed record ServerComposition(
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null,
         bool enableVulnerabilityPersistence = false,
-        ImmutableArray<ExtensionContribution> contributions = default)
+        ImmutableArray<IExtensionModule> modules = default)
     {
         var lease = TemporaryStorageLease.Create();
         try
@@ -342,7 +345,7 @@ internal sealed record ServerComposition(
                 packageScanner,
                 lease,
                 enableVulnerabilityPersistence,
-                contributions);
+                modules);
         }
         catch
         {

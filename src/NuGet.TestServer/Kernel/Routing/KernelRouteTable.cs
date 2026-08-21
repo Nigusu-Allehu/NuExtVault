@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 
@@ -53,7 +54,9 @@ internal sealed class KernelRouteTable
                 endpoint.Descriptor,
                 endpoint.ExtensionId,
                 Requirement(endpoint.Descriptor.Access.Resolve(hasProductionIdentity)),
-                endpoint.Descriptor.Limits.Resolve(limits),
+                endpoint.Descriptor.Limits.Resolve(
+                    limits.MaxRequestBodyBytes,
+                    limits.MaxPackageBytes),
                 EndpointDescriptorValidator.NormalizeMethods(endpoint.Descriptor)))
             .OrderBy(endpoint => endpoint.Descriptor.Name, StringComparer.Ordinal)
             .ToImmutableArray();
