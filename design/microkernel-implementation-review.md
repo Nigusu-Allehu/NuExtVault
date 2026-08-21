@@ -161,10 +161,10 @@ readiness remains a bounded probe while explicit storage diagnostics retain full
 inventory work. Full hot-read audit remains enabled because it met its budget; its
 4,096-entry retention ring reports dropped-event counts.
 
-The extension-state lock table is now fixed at 64 stripes. State still buffers payload,
-base64, and envelope representations and lacks quotas, optimistic concurrency,
-migrations, streaming I/O, checkpoint integration, and crash-safe restore. Those are
-Step 12A blockers, not Step 11D claims.
+Step 12A replaced the temporary state path with a quota-bounded transactional store,
+restart-monotonic concurrency tokens, ordered migrations, fixed 64-stripe locking,
+version 2 typed checkpoint participants, and journalled crash-safe restore. Required
+state participates in the kernel checkpoint; external projections remain rebuildable.
 
 With 11A through 11D complete, Lane A may begin at 12A, Lane B at Step 13, and Lane C
 at Step 16. The product remains single-node/per-process with many isolated embedded
@@ -207,6 +207,20 @@ HEAD behavior, paging, ordering, filters, rich metadata, symbols, durable restar
 parallel host isolation. It adds no public contract, persisted schema, capability,
 loading, package policy, mutation, operations/state, or sidecar behavior. Reverting the
 change restores the combined source layout without data or wire migration.
+
+## Step 12B implementation update
+
+Lane A operational ownership now flows through the same generic module seam as a
+separately compiled contribution. `NuTest.Operations` is the single owner of the
+existing health, readiness, storage-health, diagnostics, backup, and restore operation
+IDs and contributes all existing health routes through generated descriptors.
+
+The former owner-shaped capability was split into query, checkpoint-export, and
+checkpoint-restore capabilities. Their signatures use transport-neutral documents and
+kernel-issued stream handles; they expose no execution context, storage manifest, store,
+root path, ASP.NET type, or dependency-injection surface. The kernel still aggregates
+health, resolves and bounds handles, validates version 2 participants and integrity, and
+owns the atomic checkpoint/restore commit and recovery mutations.
 
 ## Step 16 implementation update
 

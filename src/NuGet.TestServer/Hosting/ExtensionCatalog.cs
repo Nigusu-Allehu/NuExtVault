@@ -769,20 +769,6 @@ internal static class BuiltInExtensionCatalog
             BuiltInExtensionIds.DurableStorage,
             capabilities: [Required(BuiltInCapabilityNames.DurableStorage)]),
         Manifest(
-            BuiltInExtensionIds.Operations,
-            operations: Operations(
-                OperationFamily.Health,
-                OperationFamily.Diagnostics,
-                OperationFamily.Backup,
-                OperationFamily.Restore),
-            endpoints: HealthEndpoints.Descriptors,
-            capabilities:
-            [
-                Required(BuiltInCapabilityNames.OperationsQuery),
-                Required(BuiltInCapabilityNames.BackupInvoke),
-                Required(BuiltInCapabilityNames.RestoreInvoke)
-            ]),
-        Manifest(
             BuiltInExtensionIds.SupplyChain,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
             operations: Operations(OperationFamily.Moderation),

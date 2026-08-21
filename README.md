@@ -609,8 +609,11 @@ service-index operation itself does not change. Vulnerability index/page operati
 and refresh lifecycle are owned by the official `NuGet.Vulnerabilities` extension;
 flat-container version, content, nuspec, hash, and symbol reads are owned by the
 official `NuGet.FlatContainer` extension, which also contributes the advertised
-`PackageBaseAddress` resource. Registration, search, publication, and symbol
-publication remain in their existing owners.
+`PackageBaseAddress` resource. The official `NuTest.Operations` extension owns the
+existing liveness, readiness, storage-health, diagnostics, backup, and restore
+operations through narrow kernel capabilities; health aggregation, integrity, and
+atomic checkpoint/restore authority remain in the kernel. Registration, search,
+publication, and symbol publication remain in their existing owners.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:

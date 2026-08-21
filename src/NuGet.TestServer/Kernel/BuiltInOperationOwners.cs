@@ -79,14 +79,6 @@ internal static class BuiltInOperationOwners
                     BuiltInCapabilityNames.ModerationRead)).Register(builder);
         }
 
-        if (selected.Contains(BuiltInExtensionIds.Operations))
-        {
-            var capabilities = broker.ForOwner(BuiltInExtensionIds.Operations);
-            new ServerOperationsOperations(
-                capabilities.GetRequired<IServerOperationsCapability>(
-                    BuiltInCapabilityNames.OperationsQuery)).Register(builder);
-        }
-
         // Official and separately compiled modules are composed through the same generic
         // seam: the host never names a module, its operations, its routes, or its
         // capabilities.
