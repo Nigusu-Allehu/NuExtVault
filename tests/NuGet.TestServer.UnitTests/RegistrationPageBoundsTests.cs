@@ -1,15 +1,14 @@
-using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Packages;
+using NuGet.TestServer.Kernel.Owners.Registration;
 
 namespace NuGet.TestServer.UnitTests;
 
 public sealed class RegistrationPageBoundsTests
 {
-    private static readonly IReadOnlyList<TestPackage> Packages =
+    private static readonly IReadOnlyList<string> Versions =
     [
-        TestPackageBuilder.Create("Example.Package", "1.0.0").Build(),
-        TestPackageBuilder.Create("Example.Package", "2.0.0-beta.1").Build(),
-        TestPackageBuilder.Create("Example.Package", "2.0.0").Build()
+        "1.0.0",
+        "2.0.0-beta.1",
+        "2.0.0"
     ];
 
     [Theory]
@@ -22,7 +21,7 @@ public sealed class RegistrationPageBoundsTests
         string upper,
         bool expected)
     {
-        Assert.Equal(expected, RegistrationPageBounds.Matches(Packages, lower, upper));
+        Assert.Equal(expected, RegistrationPageBounds.Matches(Versions, lower, upper));
     }
 
     [Fact]

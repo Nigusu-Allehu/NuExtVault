@@ -1,16 +1,15 @@
-using NuGet.TestServer.Packages;
 using NuGet.Versioning;
 
-namespace NuGet.TestServer.Hosting;
+namespace NuGet.TestServer.Kernel.Owners.Registration;
 
 internal static class RegistrationPageBounds
 {
     public static bool Matches(
-        IReadOnlyList<TestPackage> packages,
+        IReadOnlyList<string> normalizedVersions,
         string lower,
         string upper)
     {
-        if (packages.Count == 0 ||
+        if (normalizedVersions.Count == 0 ||
             !NuGetVersion.TryParse(lower, out var lowerVersion) ||
             !NuGetVersion.TryParse(upper, out var upperVersion))
         {
@@ -18,12 +17,15 @@ internal static class RegistrationPageBounds
         }
 
         return string.Equals(
-                   packages[0].NormalizedVersion,
-                   TestPackage.NormalizeVersion(lowerVersion),
+                   normalizedVersions[0],
+                   Normalize(lowerVersion),
                    StringComparison.Ordinal) &&
                string.Equals(
-                   packages[^1].NormalizedVersion,
-                   TestPackage.NormalizeVersion(upperVersion),
+                   normalizedVersions[^1],
+                   Normalize(upperVersion),
                    StringComparison.Ordinal);
     }
+
+    private static string Normalize(NuGetVersion version) =>
+        version.ToNormalizedString().Split('+', 2)[0].ToLowerInvariant();
 }

@@ -4,6 +4,8 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
+using NuGet.TestServer.Kernel.Owners.Registration;
+using NuGet.TestServer.Kernel.Owners.Search;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel;
@@ -37,11 +39,14 @@ internal static class BuiltInOperationOwners
         if (selected.Contains(BuiltInExtensionIds.Protocol))
         {
             var capabilities = broker.ForOwner(BuiltInExtensionIds.Protocol);
-            new RegistrationSearchOperations(
-                capabilities.GetRequired<IPackageReadCapability>(
-                    BuiltInCapabilityNames.PackagesMetadataRead),
-                capabilities.GetRequired<IVulnerabilityReadCapability>(
-                    BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
+            var packages = capabilities.GetRequired<IPackageReadCapability>(
+                BuiltInCapabilityNames.PackagesMetadataRead);
+            new RegistrationOperations(
+                new RegistrationPackageQuery(packages),
+                new RegistrationDocumentBuilder(
+                    capabilities.GetRequired<IVulnerabilityReadCapability>(
+                        BuiltInCapabilityNames.VulnerabilityStateRead))).Register(builder);
+            new SearchOperations(new SearchPackageQuery(packages)).Register(builder);
         }
 
         if (selected.Contains(BuiltInExtensionIds.ServiceIndex))
