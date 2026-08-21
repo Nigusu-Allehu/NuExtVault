@@ -1329,11 +1329,41 @@ Unavailable` with `Retry-After: 1`. Stream handles enforce their declared bytes 
 stream, memory, and file payloads and release capability leases on EOF, disposal,
 failure, or cancellation.
 
-The temporary extension-state implementation now uses 64 lock stripes rather than an
-unbounded lock per key. It still materializes payload JSON, base64, and envelope JSON
-per record. Per-owner/per-record quotas, concurrency tokens, migrations, streaming
-record I/O, checkpoint participation, and crash-safe restore remain explicit Step 12A
-blockers.
+Extension state is now owned by the kernel's transactional store. It uses 64
+lock stripes rather than an unbounded lock per key, writes a bounded framed header
+plus the raw payload instead of a base64 envelope copy, and enforces key-length,
+per-record, per-owner byte, per-owner record, and owner-count quotas together with
+the capability's maximum stream bytes. Concurrency tokens and checkpoint identity
+are allocated from a persisted high-water mark, so neither is reused after a
+restart. Checkpoints freeze participant state by copying the committed record files
+under every lock and hold a bounded lease until export or disposal. A durable batch
+is staged outside the authoritative tree and published through one write journal, so
+an interrupted or cancelled batch leaves the previous records and descriptor
+complete and never publishes a subset of its keys. The journal covers the version 1
+downgrade mirror the batch projects as well as its records and is retired last, and
+it names its own record files, so a batch rolled forward after a crash reprojects
+exactly the owner and keys that batch owned rather than leaving a pre-crash value
+where an immediate downgrade would read it, and replaying it converges on the same
+state however often it runs. Restore validates the complete
+participant, schema, and migration set before mutating anything, materializes the
+content a migration has to rewrite, and commits through a single journal that is
+rolled forward deterministically after an interrupted commit. A journal is only ever
+accepted when it names directories the store generated inside its own root, and a
+schema migration quarantines persisted state for an inactive extension instead of
+dropping it.
+
+Opening the store, capturing a backup, and validating a staged restore are bounded
+by participant descriptors, record headers, and one streaming buffer rather than by
+the size of the persisted state. Payloads are materialized only where the work
+requires them: reading a record, migrating a record, and projecting the version 1
+mirror. Backup capture is read-only apart from completing a transaction the store
+already committed, so it never imports version 1 records, migrates a schema, or
+rewrites a descriptor; state that predates the transactional layout is adopted at
+schema version 1 by the next server start and travels through the complete migration
+path. A version 2 archive is validated in both directions, so it can neither hide a
+participant it declares nor deliver participant state its manifest never declared,
+and the version 1 mirror of an extension the build does not register is preserved
+rather than rebuilt away.
 
 ### Kernel tests
 

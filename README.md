@@ -381,7 +381,20 @@ nuget-test-server backup `
 
 The archive contains persisted package data and namespaced `extension-state` (plus
 the legacy `vulnerabilities` tree when present) together with a
-versioned manifest with every file's length and SHA-256 hash. Credentials,
+versioned manifest with every file's length and SHA-256 hash. Version 2 manifests
+also record every persisted extension state participant: extension ID, extension
+version, schema name, schema version, whether the state is required, its record
+count, and an integrity hash. Backup holds one exclusive storage lease, so package,
+publication, and extension state come from the same offline checkpoint; when a
+live server holds that lease, backup fails with an explicit unavailable error
+instead of writing an inconsistent archive. Capture is read-only: it reads the
+committed record tree exactly as it stands, streams each record through a fixed
+buffer instead of loading the state set, and never imports version 1 records,
+migrates a schema, or rewrites a participant descriptor. Completing a transaction
+the store already committed is the one explicit exception, because the archive has
+to contain the batch that commit made authoritative. The transactional store's
+commit journals are control files rather than state, so they are never archived.
+Credentials,
 runtime request history, and fault rules are not stored. Copy backups to
 separate durable storage and apply the organization's encryption, access, and
 retention policy.
@@ -396,7 +409,27 @@ nuget-test-server restore `
 ```
 
 Restore rejects unsafe paths, missing files, unsupported manifests, and any
-length or SHA-256 mismatch before activating recovered data. After restore,
+length or SHA-256 mismatch before activating recovered data. It also validates
+the complete participant set first: a backup that requires an extension this
+build does not provide, declares a newer schema version, or has no complete
+migration path is rejected before anything is written, and state belonging to an
+inactive extension is quarantined under `extension-state\quarantine` rather than
+activated. A version 2 archive is validated in both directions, so it can neither
+hide a participant it declares nor deliver participant state the manifest never
+declared; staged records are streamed and bounded by the same per-record,
+per-owner, and owner-count quotas the live store enforces. The version 1
+downgrade mirror an archive carries beside that tree is held to the same
+standard, because the next server start adopts mirror-only records of a
+registered owner into the authoritative tree: for a declared owner, every mirror
+record must project a committed record with the same hashed owner and key path
+and the same envelope key and payload identity, and a mirror for a registered
+owner the manifest never declared is rejected outright. All content is staged,
+then committed through a single journal file;
+an interrupted commit is completed on the next restore rather than leaving a
+partial set. An archive that carries an extension-state commit journal is
+rejected before anything is written, and the server refuses to start against a
+state directory whose journal it did not write. Version 1 backups remain
+restorable. After restore,
 start against the recovered directory, wait for `/health/ready`, fetch the
 service index, and restore a known package through a real NuGet client.
 
@@ -482,11 +515,47 @@ matching advisories for hosted package IDs and versions, enabling Package
 Manager UI vulnerability details.
 
 CLI servers prefer a newer valid snapshot persisted through the kernel's
-owner-namespaced state capability under:
+owner-namespaced transactional state store under:
 
 ```text
 <storage>\extension-state
 ```
+
+Records carry a monotonic concurrency token that survives restart, a schema name
+and version, and an integrity hash. A durable write is all-or-nothing: every
+record and the owner descriptor are staged outside the authoritative tree and a
+single commit journal publishes them together, so an interrupted or cancelled
+write leaves the previous state complete and a crash after the commit point is
+rolled forward to the complete batch. Roll-forward includes the version 1 mirror
+that batch projects, so a downgrade immediately after a crash reads the recovered
+value rather than the value the interrupted batch replaced. Opening the store is
+bounded by participant
+descriptors and record headers: a record payload is read when that record is read,
+or once when a migration has to rewrite it, so start-up cost does not grow with the
+size of the persisted state. The store keeps a version 1 mirror of every
+record so an earlier server build reads the same state, and adopts version 1
+records written before the transactional layout on first open. State that predates
+the transactional layout has no persisted schema version, so it is adopted at
+schema version 1 and travels through the complete migration path instead of being
+declared current. Adoption obeys the same key, record, and owner quotas a write
+obeys: a version 1 record that cannot fit them is refused with an explicit quota
+error instead of being loaded. Adoption is one all-or-nothing admission per
+owner, so the aggregate record count, owner bytes, and owner count the resulting
+owner would hold are validated before the first record is persisted and a refusal
+leaves nothing behind. Opening the store also validates the committed tree it
+loads against those same quotas, so an over-quota or unreadable tree that a
+restore or an operator left behind fails the open on every attempt rather than
+becoming the baseline a later write extends. Version 1 state of an extension this
+build does not register is left untouched rather than treated as a stale mirror.
+
+The vulnerability snapshot is optional, rebuildable state: the server starts
+without it, adopts a legacy cache when one exists, otherwise serves the embedded
+baseline and refreshes in the background. Extensions whose state cannot be
+rebuilt declare it required, and the store, restore, and backup validation each
+refuse to activate a set that is missing required state. When a schema migration
+runs, persisted state owned by an extension this build does not activate is
+moved to `<storage>\extension-state\quarantine` unchanged rather than deleted,
+so it can be restored once that extension is active again.
 
 On first startup after upgrade, the kernel provides the extension a bounded,
 owner-scoped logical view of the existing `<storage>\vulnerabilities` cache without

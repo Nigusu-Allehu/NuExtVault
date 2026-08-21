@@ -1,7 +1,9 @@
 capability=IExtensionStateCapability
   member=ReadAsync(String,CancellationToken)->ValueTask`1<T>
+  member=ReadEntryAsync(String,CancellationToken)->ValueTask`1<ExtensionStateEntry`1<T>>
   member=ReadLegacyFileSetAsync(String,CancellationToken)->ValueTask`1<ExtensionStateFileSet>
   member=WriteAsync(String,T,CancellationToken)->ValueTask
+  member=WriteEntryAsync(String,T,Nullable`1<Int64>,CancellationToken)->ValueTask`1<Int64>
 capability=IHostClockCapability
   member=GetUtcNowAsync(CancellationToken)->ValueTask`1<DateTimeOffset>
 capability=IKernelInstrumentationControlCapability

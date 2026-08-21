@@ -359,6 +359,7 @@ internal static class ExtensionFacingCapabilities
     /// </summary>
     private static readonly ImmutableHashSet<string> ReviewedCapabilityDocuments =
     [
+        "ExtensionStateEntry`1",
         "ExtensionStateFile",
         "ExtensionStateFileSet",
         "OutboundHttpRequest",
