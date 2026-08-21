@@ -45,6 +45,8 @@ internal sealed class OperationExecutionContext
     /// </summary>
     public OperationResult? Result { get; private set; }
 
+    internal int? RetryAfterSeconds { get; set; }
+
     public static OperationExecutionContext CreateDetached() => new("detached");
 
     public void Complete(OperationResult result)
@@ -131,10 +133,13 @@ internal sealed class OperationContentStore(string executionId)
     public StreamHandle RegisterFile(string path, string contentType)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var exists = File.Exists(path);
+        var length = exists ? new FileInfo(path).Length : 0;
+        var maximumLength = exists ? length : long.MaxValue;
         return Add(new OperationContent(
-            CreateHandle(contentType, long.MaxValue),
+            CreateHandle(contentType, maximumLength),
             contentType,
-            0,
+            length,
             false,
             null,
             null,

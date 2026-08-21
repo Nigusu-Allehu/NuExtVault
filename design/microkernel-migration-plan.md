@@ -528,7 +528,7 @@ route fixture; no public compatibility commitment exists.
 **Goal:** Measure the abstraction cost and fix hot-path behavior before high-volume
 resource extraction.
 
-**Changes and provisional gates:**
+**Implemented gates:**
 
 - Measure current metadata-read latency and allocations, then ratify a gateway and
   capability overhead budget; the initial target is at most 5% p95 overhead.
@@ -544,14 +544,42 @@ resource extraction.
   allocation and latency; keep privileged mutations fully audited.
 - Record CI/test growth and run the conformance sample.
 
-**Done when:** Baselines are recorded, budgets are ratified from evidence, and hot
-paths meet the approved budgets. Absolute values remain provisional until measured.
+The Release baseline is recorded in
+`design/baselines/microkernel-step-11d-windows.json`. The initial 5% relative p95
+hypothesis is not a stable shared-runner assertion: repeated local runs varied as the
+owner baseline remained in single-digit microseconds. Step 11D therefore ratifies an
+absolute metadata dispatch budget of 20 microseconds p95 and no more than 512
+additional allocated bytes over direct owner invocation. It also ratifies 50
+milliseconds/1.25 MiB for embedded composition startup, 2 seconds and 512 KiB retained
+per host for 100 parallel compositions, and 2/8/30 milliseconds for deterministic
+8/50/200-route catalog resolution.
+
+Saturation now has a 64-call bounded queue and a 250-millisecond default wait deadline.
+Queue-full or deadline expiry becomes typed `503 Service Unavailable` with
+`Retry-After: 1`; cancellation remains cancellation. Memory, file, and stream content
+handles enforce declared bytes, and stream leases close on EOF, disposal, exception,
+and abort. Readiness performs only a bounded writable-storage probe; explicit storage
+diagnostics retain inventory enumeration. Full read auditing remains enabled because
+its measured 0.204 microseconds and 91 bytes per call fit the ratified
+0.5-microsecond/128-byte budget.
+
+Extension-state locks are bounded to 64 stripes. Buffering, record/owner quotas,
+concurrency tokens, migrations, transactional checkpoints, and crash-safe restore are
+not implemented here and block Step 12A completion.
+
+**Done when:** Baselines are recorded, correctness gates pass cross-platform, and the
+ratified absolute budgets remain informational measurements rather than timing-flaky
+shared-CI assertions.
 
 **Scope:** v1 is per-process and single-node, including many parallel embedded hosts.
 Multi-node storage, distributed coordination, and remote sidecars are not implied.
 
 **Rollback:** Performance changes remain separable from contract changes and can be
 reverted while retaining the measured baseline.
+
+**Lane result:** Step 11D unblocks Lane A at Step 12A, Lane B at Step 13, and Lane C at
+Step 16. It does not unblock 12B before 12A, Step 17, SDK publication/loading,
+sidecars, or multi-node work.
 
 ### Step 12A: Add transactional extension state and checkpoints
 

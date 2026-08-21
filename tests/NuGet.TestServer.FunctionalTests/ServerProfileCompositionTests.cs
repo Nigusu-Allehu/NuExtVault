@@ -168,6 +168,32 @@ public sealed class ServerProfileCompositionTests
     }
 
     [Fact]
+    public async Task One_hundred_parallel_embedded_hosts_keep_mutable_state_isolated()
+    {
+        var starts = Enumerable.Range(0, 100)
+            .Select(_ => NuGetTestServerHost.StartAsync())
+            .ToArray();
+        var hosts = await Task.WhenAll(starts);
+        try
+        {
+            await hosts[0].Packages.AddAsync(
+                TestPackageBuilder.Create("Hundred.Host.Isolation", "1.0.0").Build());
+
+            var reads = hosts.Select(host =>
+                host.Packages.FindAsync("Hundred.Host.Isolation", "1.0.0").AsTask());
+            var packages = await Task.WhenAll(reads);
+
+            Assert.NotNull(packages[0]);
+            Assert.All(packages[1..], Assert.Null);
+            Assert.Equal(100, hosts.Select(host => host.Port).Distinct().Count());
+        }
+        finally
+        {
+            await Task.WhenAll(hosts.Select(host => host.DisposeAsync().AsTask()));
+        }
+    }
+
+    [Fact]
     public void Composition_resolves_the_extension_graph_before_an_application_can_listen()
     {
         var composition = ServerComposition.Create(ServerProfiles.Embedded);

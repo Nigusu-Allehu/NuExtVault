@@ -24,4 +24,19 @@ public sealed class StorageHealthTests
         Assert.Equal(3, report.VulnerabilitySnapshotCount);
         Assert.Equal(1, report.VulnerabilitySnapshotRetentionLimit);
     }
+
+    [Fact]
+    public void Readiness_does_not_enumerate_durable_inventory()
+    {
+        using var storage = new TemporaryDirectory();
+        var inaccessibleInventory = Path.Combine(storage.Path, "packages");
+        Directory.CreateDirectory(inaccessibleInventory);
+        File.WriteAllText(Path.Combine(inaccessibleInventory, "package.nupkg"), "content");
+
+        var report = new StorageHealth(storage.Path).GetReadiness();
+
+        Assert.True(report.Ready);
+        Assert.Equal(0, report.PackageCount);
+        Assert.Equal(0, report.StorageBytes);
+    }
 }
