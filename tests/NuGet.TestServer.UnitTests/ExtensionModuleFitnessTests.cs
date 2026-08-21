@@ -79,7 +79,7 @@ public sealed class ExtensionModuleFitnessTests
             "NuGet.TestServer.RouteFixture.csproj"));
 
         var references = Regex.Matches(project, @"ProjectReference\s+Include=""([^""]+)""")
-            .Select(match => Path.GetFileName(match.Groups[1].Value))
+            .Select(match => Regex.Split(match.Groups[1].Value, @"[\\/]").Last())
             .Order(StringComparer.Ordinal)
             .ToArray();
 
