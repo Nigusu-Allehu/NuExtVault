@@ -191,6 +191,23 @@ After Steps 11A through 11D:
 - Step 21 remains gated on a concrete consumer and transport-neutral parity.
 - Step 22 depends on Step 20 and on Step 21 only when isolation is required.
 
+### Step 13A implementation update
+
+The Lane B split prerequisite separates registration and search contracts, endpoint
+descriptors, package-query adapters, document builders/renderers, operation owners,
+and focused tests. Both surfaces retain the existing `builtin.protocol` operation,
+route, and service-resource owner; this step does not extract either feature.
+Registration and search may depend on ownership-free package metadata primitives,
+while architecture fitness tests reject dependencies on each other's implementation
+namespace.
+
+The split preserves kernel URL projection, authoritative visibility immediately before
+reads, indexed read-your-writes behavior, body-free metadata routes, exact payload and
+HEAD behavior, paging, ordering, filters, rich metadata, symbols, durable restart, and
+parallel host isolation. It adds no public contract, persisted schema, capability,
+loading, package policy, mutation, operations/state, or sidecar behavior. Reverting the
+change restores the combined source layout without data or wire migration.
+
 ## Step 16 implementation update
 
 Lane C now extracts supply-chain policy participation into the internal official

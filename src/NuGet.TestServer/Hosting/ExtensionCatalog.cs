@@ -658,7 +658,11 @@ internal static class BuiltInExtensionCatalog
             operations: Operations(
                 OperationFamily.Registration,
                 OperationFamily.Search),
-            endpoints: ProtocolEndpoints.Protocol,
+            endpoints:
+            [
+                .. RegistrationEndpoints.All,
+                .. SearchEndpoints.All
+            ],
             resources:
             [
                 Resource(

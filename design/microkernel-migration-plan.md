@@ -14,8 +14,13 @@ PR #67. Step 11C moves the transport-neutral extension contracts into
 separately compiled conformance module, and enforces the architecture fitness gates; it
 is merged through PR #69. Step 11D establishes the measured scalability and
 backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
-PR #73, and Lane B Step 13 is merged through PR #74. Step 12A replaces the temporary
-extension-state store with
+PR #73, Lane B Step 13 is merged through PR #74, and Lane A Step 12A is merged through
+PR #75. The Lane B Step 13A prerequisite mechanically separates registration and search
+contracts, endpoint descriptors, query adapters, document builders/renderers, owners,
+and focused tests while retaining `builtin.protocol` ownership. The two feature
+surfaces depend only on neutral package-metadata primitives and no longer reference
+each other's implementation namespaces. Step 12A replaces the temporary extension-state
+store with
 one kernel-owned transactional store reached through the existing state capability:
 restart-monotonic concurrency tokens, namespaced schema identity with ordered
 migrations, atomic multi-key edits published through one write journal, key/record/
@@ -29,7 +34,7 @@ streaming buffer; capture is read-only apart from completing an already committe
 transaction; and a version 2 archive is validated in both directions so it cannot
 deliver participant state its manifest never declared. It
 is implemented and covered by integrated capability, composition, backup,
-boundedness, and hardening tests but is not yet merged. The old Step 12 is paused.
+boundedness, and hardening tests. The old Step 12 is paused.
 Steps 11A through 11D are blocking prerequisites added without renumbering the
 existing tracker issues.
 
@@ -990,9 +995,9 @@ truly disjoint:
 
 - **Lane A:** 12A transactional extension state, then 12B operations/health/backup/
   restore extraction.
-- **Lane B:** Step 13 flat container. Then mechanically split shared registration and
-  search code; Steps 14 and 15 may proceed in parallel only after that split and the
-  Step 11B URL-projection gate.
+- **Lane B:** Step 13 flat container and the Step 13A mechanical registration/search
+  split are complete. Steps 14 and 15 may proceed in parallel after Step 13A merges;
+  the Step 11B URL-projection gate is already complete.
 - **Lane C:** Step 16 supply-chain policy.
 - **Merge point:** Step 17 package management requires the completed read lane and
   policy lane.

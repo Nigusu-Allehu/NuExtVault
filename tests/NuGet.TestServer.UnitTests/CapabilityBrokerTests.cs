@@ -8,6 +8,8 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
+using NuGet.TestServer.Kernel.Owners.Registration;
+using NuGet.TestServer.Kernel.Owners.Search;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
 
@@ -629,7 +631,8 @@ public sealed class CapabilityBrokerTests
         Type[] owners =
         [
             typeof(NuGet.TestServer.Extensions.FlatContainer.FlatContainerOperations),
-            typeof(RegistrationSearchOperations),
+            typeof(RegistrationOperations),
+            typeof(SearchOperations),
             typeof(PublicationOperations),
             typeof(ModerationOperations),
             typeof(VulnerabilityOperations),
