@@ -187,6 +187,23 @@ After Steps 11A through 11D:
 - Step 21 remains gated on a concrete consumer and transport-neutral parity.
 - Step 22 depends on Step 20 and on Step 21 only when isolation is required.
 
+## Step 16 implementation update
+
+Lane C now extracts supply-chain policy participation into the internal official
+`NuTest.SupplyChain` module. The module contributes authoritative signature, scanner,
+ownership, namespace, and quota participants through the Step 11C generic seam.
+Separate audited capabilities expose only signature inspection and scanning against
+opaque, kernel-issued package handles. Ownership and quota facts remain
+kernel-derived; extensions receive no authoritative mutation surface.
+
+The kernel validates declared participants during profile resolution and validates
+the completed active registry before readiness. Admission and validation use
+deterministic all-must-allow aggregation with required participant IDs and minimum
+counts. Missing, failed, timed-out, or abstaining authoritative participants fail
+closed; caller cancellation still propagates. Lifecycle transitions, visibility,
+moderation, recovery, transactions, and audit remain authoritative kernel behavior.
+No Lane A state/checkpoint or Lane B protocol ownership changes are included.
+
 ## Open questions and deadlines
 
 ### Before Step 12A

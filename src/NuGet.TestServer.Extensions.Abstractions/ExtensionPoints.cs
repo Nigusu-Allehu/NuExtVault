@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace NuGet.TestServer.Extensions.Abstractions;
 
 internal interface IOperationHandler<in TRequest, TResponse>
@@ -69,7 +71,9 @@ internal interface IPolicyParticipant<in TContext>
 
 internal sealed record PolicyDecision(
     PolicyDecisionKind Kind,
-    string? ReasonCode);
+    string? ReasonCode,
+    PolicyDecisionEffect Effect = PolicyDecisionEffect.None,
+    string? Detail = null);
 
 internal enum PolicyDecisionKind
 {
@@ -77,3 +81,34 @@ internal enum PolicyDecisionKind
     Deny,
     Abstain
 }
+
+internal enum PolicyDecisionEffect
+{
+    None,
+    Reject,
+    Quarantine,
+    Unauthorized,
+    ResourceLimit
+}
+
+internal enum PolicyAggregationKind
+{
+    AllMustAllow,
+    DenyOverrides
+}
+
+internal sealed record PolicyAggregationRequirement(
+    PolicyAggregationKind Kind,
+    ImmutableArray<string> RequiredAuthoritativeParticipants,
+    int MinimumAuthoritativeParticipants,
+    TimeSpan Timeout);
+
+internal sealed record PolicyParticipantResult(
+    string ParticipantId,
+    bool IsAuthoritative,
+    PolicyDecision Decision);
+
+internal sealed record PolicyAggregationResult(
+    PolicyDecision Decision,
+    ImmutableArray<PolicyParticipantResult> Results,
+    bool FailedClosed);

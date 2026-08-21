@@ -3,6 +3,7 @@ using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
+using NuGet.TestServer.Extensions.SupplyChain;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -16,6 +17,7 @@ internal static class BuiltInExtensionIds
     public const string DurableStorage = "builtin.durable-storage";
     public const string Operations = "builtin.operations";
     public const string SupplyChain = "builtin.supply-chain";
+    public const string SupplyChainPolicy = SupplyChainExtension.ExtensionId;
 }
 
 internal static class BuiltInCapabilityNames
@@ -53,6 +55,9 @@ internal static class BuiltInCapabilityNames
     /// The canonical name lives in the extension abstractions.
     /// </summary>
     public const string HostClockRead = KernelCapabilityNames.HostClockRead;
+    public const string SupplyChainSignatureInspect =
+        KernelCapabilityNames.SupplyChainSignatureInspect;
+    public const string SupplyChainPackageScan = KernelCapabilityNames.SupplyChainPackageScan;
 }
 
 internal sealed record CapabilityGrant(string Name);
@@ -68,7 +73,13 @@ internal sealed record ServerProfile(
     string Name,
     ServerProfileKind Kind,
     ImmutableArray<ExtensionSelection> Extensions,
-    ImmutableArray<CapabilityGrant> Grants);
+    ImmutableArray<CapabilityGrant> Grants,
+    ImmutableArray<ProfilePolicyRequirement> PolicyRequirements = default);
+
+internal sealed record ProfilePolicyRequirement(
+    string PolicyPoint,
+    ImmutableArray<string> RequiredAuthoritativeParticipants,
+    int MinimumAuthoritativeParticipants);
 
 internal static class ServerProfiles
 {
@@ -114,6 +125,28 @@ internal static class ServerProfiles
         BuiltInExtensionIds.SupplyChain,
         Required(BuiltInCapabilityNames.ModerationRead),
         Required(BuiltInCapabilityNames.ModerationDecide));
+    private static readonly ExtensionSelection SupplyChainPolicy = Extension(
+        BuiltInExtensionIds.SupplyChainPolicy,
+        Required(BuiltInCapabilityNames.SupplyChainSignatureInspect),
+        Required(BuiltInCapabilityNames.SupplyChainPackageScan));
+    private static readonly ImmutableArray<ProfilePolicyRequirement> SupplyChainRequirements =
+    [
+        new(
+            SupplyChainPolicyPoints.Admission,
+            [
+                SupplyChainPolicyParticipantIds.Ownership,
+                SupplyChainPolicyParticipantIds.Namespace,
+                SupplyChainPolicyParticipantIds.Quota
+            ],
+            MinimumAuthoritativeParticipants: 3),
+        new(
+            SupplyChainPolicyPoints.Validation,
+            [
+                SupplyChainPolicyParticipantIds.Signature,
+                SupplyChainPolicyParticipantIds.Scanner
+            ],
+            MinimumAuthoritativeParticipants: 2)
+    ];
     public static ServerProfile Embedded { get; } = new(
         "embedded",
         ServerProfileKind.Embedded,
@@ -124,7 +157,8 @@ internal static class ServerProfiles
             EmbeddedVulnerabilities,
             TestControl,
             Operations,
-            SupplyChain
+            SupplyChain,
+            SupplyChainPolicy
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
@@ -144,7 +178,10 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.RestoreInvoke,
             BuiltInCapabilityNames.OperationsQuery,
             BuiltInCapabilityNames.ControlPackagesManage,
-            BuiltInCapabilityNames.ControlInstrumentationManage));
+            BuiltInCapabilityNames.ControlInstrumentationManage,
+            BuiltInCapabilityNames.SupplyChainSignatureInspect,
+            BuiltInCapabilityNames.SupplyChainPackageScan),
+        SupplyChainRequirements);
 
     public static ServerProfile Standard { get; } = new(
         "standard",
@@ -157,7 +194,8 @@ internal static class ServerProfiles
             TestControl,
             DurableStorage,
             Operations,
-            SupplyChain
+            SupplyChain,
+            SupplyChainPolicy
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
@@ -182,7 +220,10 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.DurableStorage,
             BuiltInCapabilityNames.ExtensionStateRead,
             BuiltInCapabilityNames.ExtensionStateWrite,
-            BuiltInCapabilityNames.OutboundHttp));
+            BuiltInCapabilityNames.OutboundHttp,
+            BuiltInCapabilityNames.SupplyChainSignatureInspect,
+            BuiltInCapabilityNames.SupplyChainPackageScan),
+        SupplyChainRequirements);
 
     public static ServerProfile Production { get; } = new(
         "production",
@@ -194,7 +235,8 @@ internal static class ServerProfiles
             DurableVulnerabilities,
             DurableStorage,
             Operations,
-            SupplyChain
+            SupplyChain,
+            SupplyChainPolicy
         ],
         Grants(
             BuiltInCapabilityNames.PackagesIdentityRead,
@@ -216,7 +258,10 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.DurableStorage,
             BuiltInCapabilityNames.ExtensionStateRead,
             BuiltInCapabilityNames.ExtensionStateWrite,
-            BuiltInCapabilityNames.OutboundHttp));
+            BuiltInCapabilityNames.OutboundHttp,
+            BuiltInCapabilityNames.SupplyChainSignatureInspect,
+            BuiltInCapabilityNames.SupplyChainPackageScan),
+        SupplyChainRequirements);
 
     private static ExtensionSelection Extension(
         string id,
@@ -279,7 +324,8 @@ internal sealed record ServerComposition(
         vulnerabilities ??= new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load());
         runtimeState ??= new RuntimeStateConfiguration();
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
-        modules = ExtensionModules.Validate(modules.IsDefault ? [] : modules);
+        modules = ExtensionModules.Validate(
+            [new SupplyChainExtension(), .. (modules.IsDefault ? [] : modules)]);
 
         var catalog = modules.IsEmpty
             ? BuiltInExtensionCatalog.Instance
@@ -288,7 +334,7 @@ internal sealed record ServerComposition(
             profile,
             authentication.Profile == AuthenticationProfile.Production,
             ExtensionModules.CreateContractIndex(modules));
-        ValidateProfile(profile, storageDirectory, authentication, supplyChain);
+        ValidateProfile(profile, storageDirectory, authentication, supplyChain, modules);
         var mode = profile.Kind == ServerProfileKind.Production
             ? ServerMode.Production
             : ServerMode.Test;
@@ -358,12 +404,11 @@ internal sealed record ServerComposition(
         ServerProfile profile,
         string? storageDirectory,
         AuthenticationConfiguration authentication,
-        SupplyChainOptions? supplyChain)
+        SupplyChainOptions? supplyChain,
+        ImmutableArray<IExtensionModule> modules)
     {
-        if (profile.Kind != ServerProfileKind.Production)
-        {
-            return;
-        }
+        ValidatePolicyRequirements(profile, modules);
+        if (profile.Kind != ServerProfileKind.Production) return;
 
         if (string.IsNullOrWhiteSpace(storageDirectory))
         {
@@ -383,6 +428,46 @@ internal sealed record ServerComposition(
         {
             throw new ServerHostingConfigurationException(
                 "Production profile requires a supply-chain policy.");
+        }
+    }
+
+    private static void ValidatePolicyRequirements(
+        ServerProfile profile,
+        ImmutableArray<IExtensionModule> modules)
+    {
+        var selected = profile.Extensions
+            .Select(extension => extension.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var participants = modules
+            .Where(module => selected.Contains(module.Contribution.Manifest.Id))
+            .SelectMany(module => module.Contribution.PolicyParticipants)
+            .ToArray();
+        foreach (var requirement in profile.PolicyRequirements.IsDefault
+                     ? []
+                     : profile.PolicyRequirements)
+        {
+            var authoritative = participants
+                .Where(participant =>
+                    participant.IsAuthoritative &&
+                    string.Equals(
+                        participant.PolicyPoint,
+                        requirement.PolicyPoint,
+                        StringComparison.Ordinal))
+                .Select(participant => participant.ParticipantId)
+                .ToHashSet(StringComparer.Ordinal);
+            var missing = requirement.RequiredAuthoritativeParticipants
+                .Where(id => !authoritative.Contains(id))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            if (authoritative.Count < requirement.MinimumAuthoritativeParticipants ||
+                missing.Length > 0)
+            {
+                throw new ServerHostingConfigurationException(
+                    $"catalog.missing-authoritative-policy-participant: Policy point " +
+                    $"'{requirement.PolicyPoint}' requires at least " +
+                    $"{requirement.MinimumAuthoritativeParticipants} authoritative participants. " +
+                    $"Missing: {string.Join(", ", missing)}.");
+            }
         }
     }
 

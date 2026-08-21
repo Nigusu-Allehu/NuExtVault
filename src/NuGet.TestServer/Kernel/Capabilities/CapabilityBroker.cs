@@ -922,6 +922,11 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.ModerationRead,
                 BuiltInCapabilityNames.ModerationDecide
             ],
+            [BuiltInExtensionIds.SupplyChainPolicy] =
+            [
+                BuiltInCapabilityNames.SupplyChainSignatureInspect,
+                BuiltInCapabilityNames.SupplyChainPackageScan
+            ],
             [BuiltInExtensionIds.TestControl] =
             [
                 BuiltInCapabilityNames.ControlPackagesManage,
@@ -1085,7 +1090,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _grants,
                     _audit,
                     _limits,
-                    _services.SupplyChain),
+                    _services.SupplyChain()),
             var type when type == typeof(IModerationCapability) =>
                 new ModerationCapability(
                     _hostInstanceId,
@@ -1093,7 +1098,23 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _grants,
                     _audit,
                     _limits,
-                    _services.SupplyChain),
+                    _services.SupplyChain()),
+            var type when type == typeof(IPackageSignatureInspectionCapability) =>
+                new PackageSignatureInspectionCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackagePolicyInspection),
+            var type when type == typeof(IPackageScannerCapability) =>
+                new PackageScannerCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackagePolicyInspection),
             var type when type == typeof(IFaultInjectionCapability) =>
                 new FaultInjectionCapability(
                     _hostInstanceId,
@@ -1118,7 +1139,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.PackageStore,
-                    _services.SupplyChain,
+                    _services.SupplyChain(),
                     _services.Diagnostics,
                     _services.PackageLimits),
             var type when type == typeof(IKernelInstrumentationControlCapability) =>
@@ -1165,7 +1186,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.PackageStore,
-                    _services.SupplyChain,
+                    _services.SupplyChain(),
                     _services.Diagnostics,
                     _services.PackageLimits),
             var type when type == typeof(IKernelInstrumentationFixtureCapability) =>
@@ -1267,6 +1288,11 @@ internal static class CapabilityContracts
             [typeof(ISecretReferenceCapability)] = Set(
                 BuiltInCapabilityNames.SecretsResolveReference),
             [typeof(IHostClockCapability)] = Set(BuiltInCapabilityNames.HostClockRead)
+            ,
+            [typeof(IPackageSignatureInspectionCapability)] = Set(
+                BuiltInCapabilityNames.SupplyChainSignatureInspect),
+            [typeof(IPackageScannerCapability)] = Set(
+                BuiltInCapabilityNames.SupplyChainPackageScan)
         };
 
     public static bool Supports(Type type, string capabilityName) =>
@@ -1280,7 +1306,8 @@ internal sealed record CapabilityServices(
     IPackageStore PackageStore,
     IPackageCandidateStore PackageCandidates,
     PackageVisibilityPolicy Visibility,
-    PackageSupplyChainService SupplyChain,
+    Func<PackageSupplyChainService> SupplyChain,
+    PackagePolicyInspectionService PackagePolicyInspection,
     KernelRequestInstrumentation Instrumentation,
     StorageHealth Storage,
     ServerDiagnostics Diagnostics,
@@ -1292,6 +1319,47 @@ internal sealed record CapabilityServices(
     KernelOutboundHttpClient OutboundHttp,
     PackageTransferLimits PackageLimits,
     TimeProvider Clock);
+
+internal sealed class PackageSignatureInspectionCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    PackagePolicyInspectionService inspection)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IPackageSignatureInspectionCapability
+{
+    public ValueTask<PackageSignatureInspection> InspectSignatureAsync(
+        PolicyPackageHandle package,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.SupplyChainSignatureInspect)
+            .InvokeAsync(
+                "inspect-signature",
+                token => inspection.InspectSignatureAsync(package, token),
+                cancellationToken);
+
+}
+
+internal sealed class PackageScannerCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    PackagePolicyInspectionService inspection)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IPackageScannerCapability
+{
+    public ValueTask<PackageScannerInspection> ScanAsync(
+        PolicyPackageHandle package,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.SupplyChainPackageScan)
+            .InvokeAsync(
+                "scan",
+                token => inspection.ScanAsync(package, token),
+                cancellationToken);
+}
 
 internal abstract class CapabilityHandle : ICapabilityHandleIdentity
 {
