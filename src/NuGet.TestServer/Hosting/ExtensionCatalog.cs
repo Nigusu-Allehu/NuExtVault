@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using NuGet.Versioning;
+using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Vulnerabilities;
@@ -655,18 +656,11 @@ internal static class BuiltInExtensionCatalog
         Manifest(
             BuiltInExtensionIds.Protocol,
             operations: Operations(
-                OperationFamily.FlatContainer,
                 OperationFamily.Registration,
                 OperationFamily.Search),
             endpoints: ProtocolEndpoints.Protocol,
             resources:
             [
-                Resource(
-                    "PackageBaseAddress",
-                    "3.0.0",
-                    OperationIds.FlatContainerGetVersions,
-                    "/flatcontainer/",
-                    order: 10),
                 Resource(
                     "RegistrationsBaseUrl",
                     "3.6.0",
@@ -702,7 +696,6 @@ internal static class BuiltInExtensionCatalog
             [
                 Required(BuiltInCapabilityNames.PackagesIdentityRead),
                 Required(BuiltInCapabilityNames.PackagesMetadataRead),
-                Required(BuiltInCapabilityNames.PackagesContentRead),
                 Required(BuiltInCapabilityNames.VulnerabilityStateRead)
             ]),
         Manifest(
@@ -795,6 +788,8 @@ internal static class BuiltInExtensionCatalog
                 Required(BuiltInCapabilityNames.ModerationRead),
                 Required(BuiltInCapabilityNames.ModerationDecide)
             ]),
+        // Official modules contribute their own manifests through the module seam.
+        .. OfficialExtensionModules.Manifests
     ];
 
     public static ExtensionCatalog Instance { get; } =

@@ -12,8 +12,11 @@ projects absolute URLs in the kernel from typed route references and is merged t
 PR #67. Step 11C moves the transport-neutral extension contracts into
 `NuGet.TestServer.Extensions.Abstractions`, proves closed-world composition with a
 separately compiled conformance module, and enforces the architecture fitness gates; it
-is implemented but not yet merged. The old Step 12 is paused. Steps 11A through 11D
-are blocking prerequisites added without renumbering the existing tracker issues.
+is merged through PR #69. Step 11D establishes the measured scalability and
+backpressure baseline and is merged through PR #71. Lane B Step 13 moves the
+flat-container and symbol reads into the official `NuGet.FlatContainer` extension. The
+old Step 12 is paused. Steps 11A through 11D are blocking prerequisites added without
+renumbering the existing tracker issues.
 
 The implementation is currently a closed built-in modular system for discovery and
 loading, but composition itself is no longer closed: a module compiled against the
@@ -640,6 +643,12 @@ the owner adapter.
 
 ### Step 13: Extract flat-container and symbol reads
 
+**Status:** Implemented. The official `NuGet.FlatContainer` extension
+(`builtin.flat-container`) is the sole owner of `NuGet.FlatContainer.GetVersions`,
+`GetPackage`, `GetNuspec`, `GetHash`, and `GetSymbol`, of the `flatcontainer.versions`
+and `flatcontainer.content` routes, and of the advertised `PackageBaseAddress/3.0.0`
+resource. Registration and search ownership is unchanged.
+
 **Goal:** Move the simplest high-volume protocol resource while proving streaming.
 
 **Changes:**
@@ -648,6 +657,21 @@ the owner adapter.
 - Use brokered metadata and streaming content handles.
 - Use the authoritative resource-class visibility decision before every response.
 - Preserve range, HEAD, cancellation, integrity, and transfer-limit behavior.
+
+**Implemented as:**
+
+- The extension is contributed as an official module through the generic Step 11C
+  module seam: its manifest, endpoint descriptors, service resource, profile
+  selection, and capability requests come from `IExtensionModule.Contribution`, and the
+  kernel registers it in the same loop it uses for separately compiled modules.
+- The owner consumes only narrow, action-scoped capabilities
+  (`packages.metadata.read`, `packages.identity.read`, `packages.content.read`, and the
+  new `packages.symbols.read`) that return serializable values and kernel-issued
+  content descriptors; the owner has no execution context, stream, store, or rendering
+  escape.
+- The kernel applies the authoritative resource-class visibility decision inside each
+  capability call, immediately before the value is returned, and leases package content
+  as a bounded, cancellable stream.
 
 **Tests first:**
 

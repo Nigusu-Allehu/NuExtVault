@@ -34,6 +34,13 @@ internal abstract class EndpointRequest
 
     public abstract string GetRoute(string name);
 
+    /// <summary>
+    /// Reads a declared route parameter and normalizes it with the kernel's package
+    /// version rules. Package identity and normalization stay kernel-owned, so a binder
+    /// never re-implements them.
+    /// </summary>
+    public abstract string GetNormalizedPackageVersion(string name);
+
     public abstract string? GetQuery(string name);
 
     public abstract int? GetQueryInt32(string name);

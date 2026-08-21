@@ -538,8 +538,10 @@ preserves the existing resource order and compatibility aliases. Adding another
 internal resource consists of registering its typed contribution with its owner; the
 service-index operation itself does not change. Vulnerability index/page operations
 and refresh lifecycle are owned by the official `NuGet.Vulnerabilities` extension;
-flat-container, registration, search, publication, and symbol publication remain in
-their existing owners.
+flat-container version, content, nuspec, hash, and symbol reads are owned by the
+official `NuGet.FlatContainer` extension, which also contributes the advertised
+`PackageBaseAddress` resource. Registration, search, publication, and symbol
+publication remain in their existing owners.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:

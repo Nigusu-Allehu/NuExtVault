@@ -37,12 +37,9 @@ internal static class BuiltInOperationOwners
         if (selected.Contains(BuiltInExtensionIds.Protocol))
         {
             var capabilities = broker.ForOwner(BuiltInExtensionIds.Protocol);
-            var packages = capabilities.GetRequired<IPackageReadCapability>(
-                BuiltInCapabilityNames.PackagesMetadataRead);
-            new ProtocolReadOperations(
-                packages).Register(builder);
             new RegistrationSearchOperations(
-                packages,
+                capabilities.GetRequired<IPackageReadCapability>(
+                    BuiltInCapabilityNames.PackagesMetadataRead),
                 capabilities.GetRequired<IVulnerabilityReadCapability>(
                     BuiltInCapabilityNames.VulnerabilityStateRead)).Register(builder);
         }
@@ -85,9 +82,11 @@ internal static class BuiltInOperationOwners
                     BuiltInCapabilityNames.OperationsQuery)).Register(builder);
         }
 
-        // Separately compiled modules are composed through the same generic seam: the
-        // host never names a module, its operations, its routes, or its capabilities.
-        foreach (var module in modules
+        // Official and separately compiled modules are composed through the same generic
+        // seam: the host never names a module, its operations, its routes, or its
+        // capabilities.
+        foreach (var module in OfficialExtensionModules.All
+                     .Concat(modules)
                      .Where(module => selected.Contains(module.Contribution.Manifest.Id))
                      .OrderBy(
                          module => module.Contribution.Manifest.Id,

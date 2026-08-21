@@ -135,6 +135,7 @@ public sealed class ExtensionModuleFitnessTests
         {
             "NuGet.TestServer.Extensions.Abstractions",
             "NuGet.TestServer.Extensions.Control",
+            "NuGet.TestServer.Extensions.FlatContainer",
             "NuGet.TestServer.Extensions.Vulnerabilities",
             "NuGet.TestServer.Kernel",
             "NuGet.TestServer.Kernel.Capabilities",
@@ -269,9 +270,12 @@ internal static class ExtensionFacingCapabilities
         "IExtensionStateCapability",
         "IKernelInstrumentationControlCapability",
         "IOutboundHttpCapability",
+        "IPackageContentReadCapability",
         "IPackageControlCapability",
+        "IPackageMetadataReadCapability",
         "IPackageScannerCapability",
         "IPackageSignatureInspectionCapability",
+        "IPackageSymbolReadCapability",
         "IVulnerabilityCatalogCapability"
     ];
 

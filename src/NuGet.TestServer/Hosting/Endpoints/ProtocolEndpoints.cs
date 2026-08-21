@@ -1,9 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Routing;
-using NuGet.TestServer.Packages;
-using NuGet.Versioning;
 
 namespace NuGet.TestServer.Hosting.Endpoints;
 
@@ -35,58 +32,12 @@ internal static class ProtocolEndpoints
         }
     ];
 
+    /// <summary>
+    /// Registration and search descriptors. Flat-container and symbol reads are owned by
+    /// the official <c>NuGet.FlatContainer</c> extension and are declared there.
+    /// </summary>
     public static ImmutableArray<EndpointDescriptor> Protocol { get; } =
     [
-        new()
-        {
-            Name = "flatcontainer.versions",
-            Methods = ["GET", "HEAD"],
-            Head = EndpointHeadPolicy.MirrorsGet,
-            PathTemplate = "/flatcontainer/{id}/index.json",
-            RouteParameters =
-            [
-                new EndpointParameter("id", Kind: RouteParameterKind.PackageId)
-            ],
-            AllowsResourceBaseReference = true,
-            Body = EndpointBodyBinding.None,
-            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
-            Limits = EndpointLimits.BodyFree,
-            Operations =
-            [
-                EndpointDescriptor.Operation<GetPackageVersionsRequest, GetPackageVersionsResponse>(
-                    OperationIds.FlatContainerGetVersions)
-            ],
-            Handler = EndpointHandler.Create<GetPackageVersionsRequest, GetPackageVersionsResponse>(
-                OperationIds.FlatContainerGetVersions,
-                request => new GetPackageVersionsRequest(request.GetRoute("id")))
-        },
-        new()
-        {
-            Name = "flatcontainer.content",
-            Methods = ["GET", "HEAD"],
-            Head = EndpointHeadPolicy.MirrorsGet,
-            PathTemplate = "/flatcontainer/{id}/{version}/{fileName}",
-            RouteParameters =
-            [
-                new EndpointParameter("id", Kind: RouteParameterKind.PackageId),
-                new EndpointParameter("version", Kind: RouteParameterKind.PackageVersion),
-                new EndpointParameter("fileName")
-            ],
-            Body = EndpointBodyBinding.None,
-            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Read),
-            Limits = EndpointLimits.BodyFree,
-            Operations =
-            [
-                EndpointDescriptor.Operation<GetPackageRequest, GetPackageResponse>(
-                    OperationIds.FlatContainerGetPackage),
-                EndpointDescriptor.Operation<GetNuspecRequest, GetNuspecResponse>(
-                    OperationIds.FlatContainerGetNuspec),
-                EndpointDescriptor.Operation<GetPackageHashRequest, GetPackageHashResponse>(
-                    OperationIds.FlatContainerGetHash)
-            ],
-            Handler = EndpointHandler.Create((request, _) =>
-                ValueTask.FromResult(BindFlatContainerContent(request)))
-        },
         new()
         {
             Name = "registration.index",
@@ -199,45 +150,4 @@ internal static class ProtocolEndpoints
                     request.GetQuery("packageType")))
         }
     ];
-
-    private static EndpointInvocation BindFlatContainerContent(EndpointRequest request)
-    {
-        var id = request.GetRoute("id");
-        var version = request.GetRoute("version");
-        var fileName = request.GetRoute("fileName");
-        var package = new PackageIdentity(id, version);
-        var normalizedId = id.ToLowerInvariant();
-        var normalizedVersion = NormalizeVersion(version);
-        if (fileName.Equals(
-                $"{normalizedId}.{normalizedVersion}.nupkg",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return EndpointInvocation.Operation<GetPackageRequest, GetPackageResponse>(
-                OperationIds.FlatContainerGetPackage,
-                new GetPackageRequest(package));
-        }
-
-        if (fileName.Equals($"{normalizedId}.nuspec", StringComparison.OrdinalIgnoreCase))
-        {
-            return EndpointInvocation.Operation<GetNuspecRequest, GetNuspecResponse>(
-                OperationIds.FlatContainerGetNuspec,
-                new GetNuspecRequest(package));
-        }
-
-        if (fileName.Equals(
-                $"{normalizedId}.{normalizedVersion}.nupkg.sha512",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return EndpointInvocation.Operation<GetPackageHashRequest, GetPackageHashResponse>(
-                OperationIds.FlatContainerGetHash,
-                new GetPackageHashRequest(package));
-        }
-
-        return EndpointInvocation.Result(new OperationResult(OperationResultStatus.NotFound));
-    }
-
-    internal static string NormalizeVersion(string version) =>
-        NuGetVersion.TryParse(version, out var parsed)
-            ? TestPackage.NormalizeVersion(parsed)
-            : version.ToLowerInvariant();
 }

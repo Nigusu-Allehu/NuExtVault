@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using NuGet.Packaging;
+using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
@@ -544,15 +545,6 @@ internal interface IPackageReadCapability
         int take,
         string? packageType,
         CancellationToken token);
-
-    ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token);
-
-    ValueTask<CapabilityPackageContent?> OpenContentAsync(
-        string id,
-        string version,
-        PackageResourceClass resourceClass,
-        CancellationToken token);
-
 }
 
 internal sealed record CapabilityPackageMetadata(
@@ -587,10 +579,53 @@ internal sealed record CapabilityPackageSearchItem(
     CapabilityPackageMetadata Package,
     IReadOnlyList<CapabilityPackageMetadata> Versions);
 
-internal sealed record CapabilityPackageContent(
-    Stream Stream,
-    string Sha512,
-    long Length);
+/// <summary>
+/// The extension-facing package metadata read capability. Every member is action-scoped
+/// and serializable: versions and hashes cross the boundary as plain values, nuspec
+/// bytes cross it as a kernel-issued content descriptor, and the authoritative
+/// resource-class visibility decision is applied by the kernel immediately before a
+/// value is returned.
+/// </summary>
+internal interface IPackageMetadataReadCapability
+{
+    ValueTask<ImmutableArray<string>> GetReadableVersionsAsync(
+        string packageId,
+        CancellationToken token);
+
+    ValueTask<ContentDescriptor?> OpenNuspecAsync(
+        string packageId,
+        string version,
+        CancellationToken token);
+
+    ValueTask<string?> GetPackageHashAsync(
+        string packageId,
+        string version,
+        CancellationToken token);
+}
+
+/// <summary>
+/// The extension-facing package content read capability. Package bytes never cross the
+/// boundary: the kernel leases a bounded, cancellable stream and returns a handle.
+/// </summary>
+internal interface IPackageContentReadCapability
+{
+    ValueTask<ContentDescriptor?> OpenPackageAsync(
+        string packageId,
+        string version,
+        CancellationToken token);
+}
+
+/// <summary>
+/// The extension-facing symbol read capability. It is separate from package content so
+/// symbol access can be granted, denied, and audited on its own.
+/// </summary>
+internal interface IPackageSymbolReadCapability
+{
+    ValueTask<ContentDescriptor?> OpenSymbolsAsync(
+        string packageId,
+        string version,
+        CancellationToken token);
+}
 
 internal interface IPackageMutationCapability
 {
@@ -893,14 +928,37 @@ internal sealed record SecretReferenceHandle(string Id);
 
 internal static class BuiltInOwnerCapabilityRequirements
 {
-    public static IReadOnlyDictionary<string, ImmutableArray<string>> All { get; } =
+    public static IReadOnlyDictionary<string, ImmutableArray<string>> All { get; } = Compose();
+
+    private static IReadOnlyDictionary<string, ImmutableArray<string>> Compose()
+    {
+        var requirements = KernelOwners().ToDictionary(
+            owner => owner.Key,
+            owner => owner.Value,
+            StringComparer.OrdinalIgnoreCase);
+
+        // Official modules declare their own requirements; the kernel reads them through
+        // the same contribution seam it uses for any other module.
+        foreach (var module in OfficialExtensionModules.All)
+        {
+            requirements[module.Contribution.Manifest.Id] =
+            [
+                .. module.Contribution.Manifest.RequestedCapabilities
+                    .Select(capability => capability.Name)
+                    .Order(StringComparer.Ordinal)
+            ];
+        }
+
+        return requirements;
+    }
+
+    private static IReadOnlyDictionary<string, ImmutableArray<string>> KernelOwners() =>
         new Dictionary<string, ImmutableArray<string>>(StringComparer.OrdinalIgnoreCase)
         {
             [BuiltInExtensionIds.Protocol] =
             [
                 BuiltInCapabilityNames.PackagesIdentityRead,
                 BuiltInCapabilityNames.PackagesMetadataRead,
-                BuiltInCapabilityNames.PackagesContentRead,
                 BuiltInCapabilityNames.VulnerabilityStateRead
             ],
             [BuiltInExtensionIds.Publication] =
@@ -1067,6 +1125,18 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
         {
             var type when type == typeof(IPackageReadCapability) =>
                 new PackageReadCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.PackageCandidates,
+                    _services.Visibility),
+            var type when type == typeof(IPackageMetadataReadCapability) ||
+                          type == typeof(IPackageContentReadCapability) ||
+                          type == typeof(IPackageSymbolReadCapability) =>
+                new PackageResourceReadCapability(
                     _hostInstanceId,
                     _ownerId,
                     _grants,
@@ -1243,8 +1313,14 @@ internal static class CapabilityContracts
         {
             [typeof(IPackageReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesIdentityRead,
-                BuiltInCapabilityNames.PackagesMetadataRead,
+                BuiltInCapabilityNames.PackagesMetadataRead),
+            [typeof(IPackageMetadataReadCapability)] = Set(
+                BuiltInCapabilityNames.PackagesIdentityRead,
+                BuiltInCapabilityNames.PackagesMetadataRead),
+            [typeof(IPackageContentReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesContentRead),
+            [typeof(IPackageSymbolReadCapability)] = Set(
+                BuiltInCapabilityNames.PackagesSymbolsRead),
             [typeof(IPackageMutationCapability)] = Set(
                 BuiltInCapabilityNames.PackagesMetadataWrite,
                 BuiltInCapabilityNames.PackagesContentWrite,
@@ -1518,51 +1594,6 @@ internal sealed class PackageReadCapability(
                 },
                 token);
 
-    public ValueTask<byte[]?> FindSymbolAsync(string id, string version, CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.PackagesContentRead)
-            .InvokeAsync(
-                "find-symbol",
-                async ct =>
-                {
-                    var content = await store.FindSymbolAsync(id, version, ct);
-                    if (content is not null && content.LongLength > MaximumStreamBytes)
-                    {
-                        throw new CapabilityStreamLimitExceededException(
-                            content.LongLength,
-                            MaximumStreamBytes);
-                    }
-
-                    return content;
-                },
-                token);
-
-    public ValueTask<CapabilityPackageContent?> OpenContentAsync(
-        string id,
-        string version,
-        PackageResourceClass resourceClass,
-        CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.PackagesContentRead)
-            .InvokeAsync(
-                "open-content",
-                async ct =>
-                {
-                    var package = await store.FindAsync(id, version, ct);
-                    if (package is null || !visibility.CanRead(package, resourceClass))
-                    {
-                        return null;
-                    }
-
-                    return new CapabilityPackageContent(
-                        StreamGate(BuiltInCapabilityNames.PackagesContentRead).LeaseStream(
-                            "consume-content",
-                            package.OpenReadStream(),
-                            package.ContentLength,
-                            ct),
-                        package.PackageHash,
-                        package.ContentLength);
-                },
-                token);
-
     private static IReadOnlyList<CapabilityPackageMetadata> Map(
         IEnumerable<TestPackage> packages) =>
         [.. packages.Select(Map)];
@@ -1591,6 +1622,169 @@ internal sealed class PackageReadCapability(
             package.DependencyGroups,
             package.Published,
             package.IsListed);
+}
+
+/// <summary>
+/// The kernel implementation of the narrow package resource read capabilities. It
+/// resolves authoritative package state, applies the resource-class visibility decision
+/// immediately before returning, and hands content to the extension only as a bounded,
+/// kernel-issued content handle.
+/// </summary>
+internal sealed class PackageResourceReadCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    IPackageStore store,
+    IPackageCandidateStore candidates,
+    PackageVisibilityPolicy visibility)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IPackageMetadataReadCapability,
+        IPackageContentReadCapability,
+        IPackageSymbolReadCapability
+{
+    public ValueTask<ImmutableArray<string>> GetReadableVersionsAsync(
+        string packageId,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "readable-versions",
+                async ct =>
+                {
+                    var stored = await candidates.FindStoredByIdAsync(packageId, ct);
+                    return stored
+                        .Where(package => visibility.CanRead(
+                            package,
+                            PackageResourceClass.VersionEnumeration))
+                        .Select(package => package.NormalizedVersion)
+                        .ToImmutableArray();
+                },
+                token);
+
+    public ValueTask<ContentDescriptor?> OpenNuspecAsync(
+        string packageId,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesIdentityRead)
+            .InvokeAsync(
+                "open-nuspec",
+                async ct =>
+                {
+                    var package = await FindReadableAsync(packageId, version, ct);
+                    if (package is null)
+                    {
+                        return null;
+                    }
+
+                    var nuspec = package.NuspecContent;
+                    var handle = OperationExecutionScope.Required.Content.RegisterBytes(
+                        nuspec,
+                        "text/xml; charset=utf-8");
+                    return new ContentDescriptor(
+                        handle,
+                        null,
+                        nuspec.Length,
+                        SupportsRanges: false);
+                },
+                token);
+
+    public ValueTask<string?> GetPackageHashAsync(
+        string packageId,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesIdentityRead)
+            .InvokeAsync(
+                "package-hash",
+                async ct => (await FindReadableAsync(packageId, version, ct))?.PackageHash,
+                token);
+
+    public ValueTask<ContentDescriptor?> OpenPackageAsync(
+        string packageId,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesContentRead)
+            .InvokeAsync(
+                "open-package",
+                async ct =>
+                {
+                    var package = await FindReadableAsync(packageId, version, ct);
+                    if (package is null)
+                    {
+                        return null;
+                    }
+
+                    Stream content;
+                    try
+                    {
+                        content = package.OpenReadStream();
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        return null;
+                    }
+
+                    var handle = OperationExecutionScope.Required.Content.RegisterStream(
+                        StreamGate(BuiltInCapabilityNames.PackagesContentRead).LeaseStream(
+                            "consume-content",
+                            content,
+                            package.ContentLength,
+                            ct),
+                        "application/octet-stream",
+                        package.ContentLength,
+                        supportsRanges: true);
+                    return new ContentDescriptor(
+                        handle,
+                        package.PackageHash,
+                        package.ContentLength,
+                        SupportsRanges: true);
+                },
+                token);
+
+    public ValueTask<ContentDescriptor?> OpenSymbolsAsync(
+        string packageId,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesSymbolsRead)
+            .InvokeAsync(
+                "open-symbols",
+                async ct =>
+                {
+                    var symbols = await store.FindSymbolAsync(packageId, version, ct);
+                    if (symbols is null)
+                    {
+                        return null;
+                    }
+
+                    if (symbols.LongLength > MaximumStreamBytes)
+                    {
+                        throw new CapabilityStreamLimitExceededException(
+                            symbols.LongLength,
+                            MaximumStreamBytes);
+                    }
+
+                    var handle = OperationExecutionScope.Required.Content.RegisterBytes(
+                        symbols,
+                        "application/octet-stream");
+                    return new ContentDescriptor(
+                        handle,
+                        null,
+                        symbols.Length,
+                        SupportsRanges: false);
+                },
+                token);
+
+    private async ValueTask<TestPackage?> FindReadableAsync(
+        string packageId,
+        string version,
+        CancellationToken token)
+    {
+        var package = await store.FindAsync(packageId, version, token);
+        return package is not null &&
+               visibility.CanRead(package, PackageResourceClass.ExactContent)
+            ? package
+            : null;
+    }
 }
 
 internal sealed class PackageMutationCapability(

@@ -177,7 +177,11 @@ After Steps 11A through 11D:
 - Lane A runs 12A transactional state/checkpoints, then 12B operations, health,
   backup, and restore.
 - Lane B runs Step 13 flat container, mechanically separates shared registration and
-  search code, then may run Steps 14 and 15 in parallel after URL projection.
+  search code, then may run Steps 14 and 15 in parallel after URL projection. Step 13
+  is implemented: flat-container and symbol reads, their routes, and the
+  `PackageBaseAddress` resource are owned by the official `NuGet.FlatContainer`
+  extension, contributed through the generic module seam; registration and search
+  ownership is unchanged.
 - Lane C runs Step 16 supply-chain policy.
 - Step 17 package management waits for the read and policy lanes.
 - Step 18 performs the physical official assembly split.
