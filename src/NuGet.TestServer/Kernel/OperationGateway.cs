@@ -1,12 +1,13 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Kernel;
 
 /// <summary>
-/// The kernel HTTP gateway. Route handlers bind inputs and call the gateway; the
-/// gateway owns dispatch, error mapping, and response serialization so no feature
+/// The kernel HTTP gateway. The generated route table calls the gateway; the gateway
+/// owns binding, dispatch, error mapping, and response serialization so no feature
 /// logic remains in the route table.
 /// </summary>
 internal sealed class OperationGateway(
@@ -31,46 +32,57 @@ internal sealed class OperationGateway(
         };
     }
 
-    public Task<IResult> ExecuteAsync<TRequest, TResponse>(
+    /// <summary>
+    /// Executes one generated route: binds the request through the descriptor handler,
+    /// dispatches the declared operation, and renders the protocol-compatible response.
+    /// </summary>
+    public async Task<IResult> ExecuteEndpointAsync(
+        KernelRouteEndpoint endpoint,
         HttpContext context,
-        string operationId,
-        TRequest request,
-        CancellationToken cancellationToken) =>
-        ExecuteAsync<TRequest, TResponse>(
-            context,
-            operationId,
-            _ => ValueTask.FromResult(request),
-            cancellationToken);
-
-    public async Task<IResult> ExecuteAsync<TRequest, TResponse>(
-        HttpContext context,
-        string operationId,
-        Func<OperationExecutionContext, ValueTask<TRequest>> bind,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(bind);
         var execution = CreateExecution(context);
-        TRequest request;
+        var request = new HttpEndpointRequest(context, execution, endpoint.Limits);
+        if (endpoint.Descriptor.Body.Kind != EndpointBodyKind.None &&
+            endpoint.Limits.MaxRequestBytes > 0)
+        {
+            request.LimitRequestBody(endpoint.Limits.MaxRequestBytes);
+        }
+
+        EndpointInvocation invocation;
         try
         {
-            request = await bind(execution);
-        }
-        catch (BadHttpRequestException)
-        {
-            throw;
+            invocation = await endpoint.Descriptor.Handler.BindAsync(request, cancellationToken);
         }
         catch (OperationBindingException exception)
         {
             return OperationResults.Render(exception.Result, execution);
         }
 
-        var response = await dispatcher.DispatchAsync<TRequest, TResponse>(
-            new OperationId(operationId),
-            request,
-            execution,
+        var result = await invocation.ExecuteAsync(
+            new EndpointDispatcher(dispatcher, execution),
             cancellationToken);
-        return OperationResults.Render(response, execution);
+        return OperationResults.Render(result, execution);
+    }
+
+    private sealed class EndpointDispatcher(
+        OperationDispatcher dispatcher,
+        OperationExecutionContext execution) : IEndpointOperationDispatcher
+    {
+        public async ValueTask<OperationHttpResult> DispatchAsync<TRequest, TResponse>(
+            string operationId,
+            TRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await dispatcher.DispatchAsync<TRequest, TResponse>(
+                new OperationId(operationId),
+                request,
+                execution,
+                cancellationToken);
+            return OperationResults.Resolve(response, execution);
+        }
     }
 }
 
@@ -78,7 +90,9 @@ internal sealed class OperationGateway(
 /// Thrown by route binding when the current protocol rejects a request before an
 /// operation can be dispatched.
 /// </summary>
-internal sealed class OperationBindingException(OperationHttpResult result) : Exception
+internal sealed class OperationBindingException(
+    OperationHttpResult result,
+    Exception? innerException = null) : Exception(null, innerException)
 {
     public OperationHttpResult Result { get; } = result;
 }
@@ -87,22 +101,27 @@ internal static class OperationResults
 {
     public static IResult Render<TResponse>(
         OperationResponse<TResponse> response,
+        OperationExecutionContext execution) =>
+        Render(Resolve(response, execution), execution);
+
+    /// <summary>
+    /// Chooses the protocol-compatible rendering for an operation response: the owner's
+    /// attached result when present, otherwise the kernel error or success policy.
+    /// </summary>
+    public static OperationHttpResult Resolve<TResponse>(
+        OperationResponse<TResponse> response,
         OperationExecutionContext execution)
     {
         ArgumentNullException.ThrowIfNull(response);
         ArgumentNullException.ThrowIfNull(execution);
         if (response.Error is not null)
         {
-            return Render(
-                execution.Result ?? OperationErrorPolicy.CreateResult(response.Error),
-                execution);
+            return execution.Result ?? OperationErrorPolicy.CreateResult(response.Error);
         }
 
-        return Render(
-            execution.Result ?? new OperationHttpResult(
-                StatusCodes.Status200OK,
-                new JsonResponseBody(response.Value!)),
-            execution);
+        return execution.Result ?? new OperationHttpResult(
+            StatusCodes.Status200OK,
+            new JsonResponseBody(response.Value!));
     }
 
     public static IResult Render(OperationHttpResult result, OperationExecutionContext execution)

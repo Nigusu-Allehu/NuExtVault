@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -63,7 +64,7 @@ public sealed class ExtensionCatalogTests
             Manifest("extension.a", operations: ["operation.shared"]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.b", "extension.a")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.b", "extension.a")));
 
         Assert.Equal(
             "catalog.operation-owner-conflict: Operation 'operation.shared' is owned by " +
@@ -75,11 +76,31 @@ public sealed class ExtensionCatalogTests
     public void Duplicate_concrete_routes_fail_deterministically()
     {
         var catalog = Catalog(
-            Manifest("extension.b", routes: [new("GET", "/packages/{id}")]),
-            Manifest("extension.a", routes: [new("get", "/packages/{id}")]));
+            Manifest(
+                "extension.b",
+                operations: [TestEndpointDescriptors.OperationB],
+                endpoints:
+                [
+                    TestEndpointDescriptors.Endpoint(
+                        "b.route",
+                        "GET",
+                        "/packages/{id}",
+                        TestEndpointDescriptors.OperationB)
+                ]),
+            Manifest(
+                "extension.a",
+                operations: [TestEndpointDescriptors.OperationA],
+                endpoints:
+                [
+                    TestEndpointDescriptors.Endpoint(
+                        "a.route",
+                        "get",
+                        "/packages/{id}",
+                        TestEndpointDescriptors.OperationA)
+                ]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.b", "extension.a")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.b", "extension.a")));
 
         Assert.Equal(
             "catalog.route-conflict: Route 'GET /packages/{id}' is owned by " +
@@ -96,7 +117,7 @@ public sealed class ExtensionCatalogTests
                 dependencies: [new("extension.missing", ExtensionVersionRange.Major(1))]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.consumer")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.consumer")));
 
         Assert.Equal(
             "catalog.missing-dependency: Extension 'extension.consumer' requires missing " +
@@ -119,7 +140,7 @@ public sealed class ExtensionCatalogTests
                 dependencies: [new("extension.b", ExtensionVersionRange.Major(1))]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.c", "extension.b", "extension.a")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.c", "extension.b", "extension.a")));
 
         Assert.Equal(
             "catalog.dependency-cycle: Dependency cycle detected: " +
@@ -137,7 +158,7 @@ public sealed class ExtensionCatalogTests
             Manifest("extension.provider", version: new(1, 5, 0)));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.provider", "extension.consumer")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.provider", "extension.consumer")));
 
         Assert.Equal(
             "catalog.incompatible-dependency: Extension 'extension.consumer' requires " +
@@ -151,14 +172,14 @@ public sealed class ExtensionCatalogTests
         var catalog = Catalog(
             Manifest(
                 "extension.consumer",
-                operations: ["NuGet.Search.Query"],
-                routes: [new("GET", "/query")],
+                operations: [TestEndpointDescriptors.OperationA],
+                endpoints: [SearchEndpoint],
                 resources:
                 [
                     new ServiceResourceContribution(
                         "SearchQueryService",
                         "3.5.0",
-                        new OperationId("NuGet.Search.Query"),
+                        new OperationId(TestEndpointDescriptors.OperationA),
                         "/query",
                         ServiceResourceVisibility.Advertised,
                         ServiceResourceAccess.Read,
@@ -170,7 +191,7 @@ public sealed class ExtensionCatalogTests
                 ]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.consumer")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.consumer")));
 
         Assert.Equal(
             "catalog.missing-linked-resource: Resource 'SearchQueryService/3.5.0' from " +
@@ -187,7 +208,7 @@ public sealed class ExtensionCatalogTests
                 capabilities: [new("packages.read", IsRequired: true)]));
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
-            () => catalog.Resolve(Profile("extension.consumer")));
+            () => catalog.ResolveWithTestContracts(Profile("extension.consumer")));
 
         Assert.Equal(
             "catalog.missing-capability-grant: Extension 'extension.consumer' requires " +
@@ -212,7 +233,7 @@ public sealed class ExtensionCatalogTests
             [new ExtensionSelection("extension.consumer", [])],
             [new CapabilityGrant("packages.metadata.read")]);
 
-        var graph = catalog.Resolve(profile);
+        var graph = catalog.ResolveWithTestContracts(profile);
 
         var extension = Assert.Single(graph.Extensions);
         Assert.Equal(["packages.metadata.read"], graph.Capabilities
@@ -235,14 +256,42 @@ public sealed class ExtensionCatalogTests
             Manifest(
                 "extension.c",
                 dependencies: [new("extension.a", ExtensionVersionRange.Major(1))],
-                routes: [new("GET", "/c")]),
-            Manifest("extension.b", routes: [new("POST", "/b")]),
-            Manifest("extension.a", routes: [new("GET", "/a")])
+                operations: [TestEndpointDescriptors.OperationC],
+                endpoints:
+                [
+                    TestEndpointDescriptors.Endpoint(
+                        "c.route",
+                        "GET",
+                        "/c",
+                        TestEndpointDescriptors.OperationC)
+                ]),
+            Manifest(
+                "extension.b",
+                operations: [TestEndpointDescriptors.OperationB],
+                endpoints:
+                [
+                    TestEndpointDescriptors.Endpoint(
+                        "b.route",
+                        "POST",
+                        "/b",
+                        TestEndpointDescriptors.OperationB)
+                ]),
+            Manifest(
+                "extension.a",
+                operations: [TestEndpointDescriptors.OperationA],
+                endpoints:
+                [
+                    TestEndpointDescriptors.Endpoint(
+                        "a.route",
+                        "GET",
+                        "/a",
+                        TestEndpointDescriptors.OperationA)
+                ])
         };
         var profile = Profile("extension.c", "extension.b", "extension.a");
 
-        var first = Catalog(manifests).Resolve(profile);
-        var second = Catalog(manifests.Reverse().ToArray()).Resolve(profile);
+        var first = Catalog(manifests).ResolveWithTestContracts(profile);
+        var second = Catalog(manifests.Reverse().ToArray()).ResolveWithTestContracts(profile);
 
         Assert.Equal(["extension.a", "extension.b", "extension.c"], first.Extensions.Select(x => x.Id));
         Assert.Equal(
@@ -266,6 +315,13 @@ public sealed class ExtensionCatalogTests
 
     private static ExtensionCatalog Catalog(params ExtensionManifest[] manifests) => new(manifests);
 
+    private static readonly EndpointDescriptor SearchEndpoint =
+        TestEndpointDescriptors.Endpoint(
+            "consumer.query",
+            "GET",
+            "/query",
+            TestEndpointDescriptors.OperationA);
+
     private static ServerProfile Profile(params string[] extensionIds) => new(
         "test",
         ServerProfileKind.Embedded,
@@ -277,7 +333,7 @@ public sealed class ExtensionCatalogTests
         ExtensionVersion? version = null,
         ImmutableArray<ExtensionDependency> dependencies = default,
         ImmutableArray<string> operations = default,
-        ImmutableArray<RouteDescriptor> routes = default,
+        ImmutableArray<EndpointDescriptor> endpoints = default,
         ImmutableArray<ServiceResourceContribution> resources = default,
         ImmutableArray<CapabilityRequest> capabilities = default) =>
         new(
@@ -287,7 +343,7 @@ public sealed class ExtensionCatalogTests
             HostCompatibility: ExtensionVersionRange.Major(1),
             Dependencies: dependencies.IsDefault ? [] : dependencies,
             Operations: operations.IsDefault ? [] : operations,
-            Routes: routes.IsDefault ? [] : routes,
+            Endpoints: endpoints.IsDefault ? [] : endpoints,
             Resources: resources.IsDefault ? [] : resources,
             RequestedCapabilities: capabilities.IsDefault ? [] : capabilities);
 }

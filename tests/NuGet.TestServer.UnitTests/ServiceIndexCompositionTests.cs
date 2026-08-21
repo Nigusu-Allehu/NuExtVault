@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Routing;
 using NuGet.TestServer.Kernel;
 
 namespace NuGet.TestServer.UnitTests;
@@ -106,7 +107,7 @@ public sealed class ServiceIndexCompositionTests
                 Manifest(
                     "builtin.synthetic",
                     operations: ["NuTest.Synthetic.Get"],
-                    routes: [new RouteDescriptor("GET", "/synthetic/{id}")],
+                    endpoints: [Endpoint("synthetic.route", "/synthetic/{id}", "NuTest.Synthetic.Get")],
                     resources:
                     [
                         Contribution(
@@ -116,7 +117,7 @@ public sealed class ServiceIndexCompositionTests
                             "/synthetic/",
                             "/synthetic/{id}")
                     ]))
-            .Resolve(Profile("builtin.synthetic"));
+            .ResolveWith(Profile("builtin.synthetic"));
 
         var projected = ServiceIndexResourceRegistry.Create(graph)
             .Project("https://example.test");
@@ -132,7 +133,7 @@ public sealed class ServiceIndexCompositionTests
                     Manifest(
                         "extension.a",
                         operations: ["NuTest.A.Get"],
-                        routes: [new("GET", "/a")],
+                        endpoints: [Endpoint("a.route", "/a", "NuTest.A.Get")],
                         resources:
                         [
                             Contribution("NuTest.Shared", "1.0.0", "NuTest.A.Get", "/a", "/a")
@@ -140,12 +141,12 @@ public sealed class ServiceIndexCompositionTests
                     Manifest(
                         "extension.b",
                         operations: ["NuTest.B.Get"],
-                        routes: [new("GET", "/b")],
+                        endpoints: [Endpoint("b.route", "/b", "NuTest.B.Get")],
                         resources:
                         [
                             Contribution("NuTest.Shared", "1.0.0", "NuTest.B.Get", "/b", "/b")
                         ]))
-                .Resolve(Profile("extension.a", "extension.b")));
+                .ResolveWith(Profile("extension.a", "extension.b")));
 
         Assert.StartsWith("catalog.resource-owner-conflict:", exception.Message, StringComparison.Ordinal);
     }
@@ -175,7 +176,8 @@ public sealed class ServiceIndexCompositionTests
             Catalog(
                     Manifest(
                         "extension.resource",
-                        routes: [new("GET", "/resource")],
+                        operations: ["NuTest.Resource.Get"],
+                        endpoints: [Endpoint("resource.route", "/resource", "NuTest.Resource.Get")],
                         resources:
                         [
                             Contribution(
@@ -185,7 +187,7 @@ public sealed class ServiceIndexCompositionTests
                                 "/resource",
                                 "/resource")
                         ]))
-                .Resolve(Profile("extension.resource")));
+                .ResolveWith(Profile("extension.resource")));
 
         Assert.StartsWith(
             "catalog.missing-resource-operation:",
@@ -201,7 +203,8 @@ public sealed class ServiceIndexCompositionTests
                     Manifest("extension.owner", operations: ["NuTest.Resource.Get"]),
                     Manifest(
                         "extension.resource",
-                        routes: [new("GET", "/resource")],
+                        operations: ["NuTest.Other.Get"],
+                        endpoints: [Endpoint("resource.route", "/resource", "NuTest.Other.Get")],
                         resources:
                         [
                             Contribution(
@@ -211,7 +214,7 @@ public sealed class ServiceIndexCompositionTests
                                 "/resource",
                                 "/resource")
                         ]))
-                .Resolve(Profile("extension.owner", "extension.resource")));
+                .ResolveWith(Profile("extension.owner", "extension.resource")));
 
         Assert.StartsWith(
             "catalog.resource-operation-owner-mismatch:",
@@ -227,7 +230,7 @@ public sealed class ServiceIndexCompositionTests
                     Manifest(
                         "extension.resource",
                         operations: ["NuTest.Resource.Get"],
-                        routes: [new("GET", "/resource")],
+                        endpoints: [Endpoint("resource.route", "/resource", "NuTest.Resource.Get")],
                         resources:
                         [
                             Contribution(
@@ -237,7 +240,7 @@ public sealed class ServiceIndexCompositionTests
                                 "/different-route",
                                 "/resource")
                         ]))
-                .Resolve(Profile("extension.resource")));
+                .ResolveWith(Profile("extension.resource")));
 
         Assert.StartsWith("catalog.missing-resource-route:", exception.Message, StringComparison.Ordinal);
     }
@@ -336,11 +339,11 @@ public sealed class ServiceIndexCompositionTests
             Manifest(
                 $"extension.{index}",
                 operations: [contribution.OperationId.Value],
-                routes: [new RouteDescriptor("GET", contribution.RouteName)],
+                endpoints: [Endpoint($"resource.{index}", RoutePathFor(contribution), contribution.OperationId.Value)],
                 resources: [contribution]));
         var catalog = Catalog([.. manifests]);
         return ServiceIndexResourceRegistry.Create(
-            catalog.Resolve(Profile(manifests.Select(manifest => manifest.Id).ToArray())));
+            catalog.ResolveWith(Profile(manifests.Select(manifest => manifest.Id).ToArray())));
     }
 
     private static ServiceResourceContribution Contribution(
@@ -370,6 +373,14 @@ public sealed class ServiceIndexCompositionTests
 
     private static ExtensionCatalog Catalog(params ExtensionManifest[] manifests) => new(manifests);
 
+    private static EndpointDescriptor Endpoint(string name, string path, string operationId) =>
+        TestEndpointDescriptors.Endpoint(name, "GET", path, operationId);
+
+    private static string RoutePathFor(ServiceResourceContribution contribution) =>
+        contribution.RouteName.EndsWith('/')
+            ? $"{contribution.RouteName}{{id}}/index.json"
+            : contribution.RouteName;
+
     private static ServerProfile Profile(params string[] extensionIds) => new(
         "test",
         ServerProfileKind.Embedded,
@@ -379,7 +390,7 @@ public sealed class ServiceIndexCompositionTests
     private static ExtensionManifest Manifest(
         string id,
         ImmutableArray<string> operations = default,
-        ImmutableArray<RouteDescriptor> routes = default,
+        ImmutableArray<EndpointDescriptor> endpoints = default,
         ImmutableArray<ServiceResourceContribution> resources = default) =>
         new(
             1,
@@ -388,7 +399,7 @@ public sealed class ServiceIndexCompositionTests
             ExtensionVersionRange.Major(1),
             [],
             operations.IsDefault ? [] : operations,
-            routes.IsDefault ? [] : routes,
+            endpoints.IsDefault ? [] : endpoints,
             resources.IsDefault ? [] : resources,
             []);
 }

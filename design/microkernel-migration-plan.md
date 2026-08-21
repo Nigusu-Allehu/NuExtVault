@@ -6,7 +6,9 @@ Approved migration plan. Each implementation step still requires its own focused
 proposal and explicit approval under `AGENTS.md`.
 
 Implementation status: Steps 1 through 11 are implemented through merged PR #62 and
-pass Windows, Ubuntu, and macOS CI. The old Step 12 is paused. Steps 11A through 11D
+pass Windows, Ubuntu, and macOS CI. Step 11A generates every active route from
+validated, startup-frozen endpoint descriptors and is implemented but not yet merged.
+The old Step 12 is paused. Steps 11A through 11D
 are blocking prerequisites added without renumbering the existing tracker issues.
 
 The implementation is currently a closed built-in modular system, not yet a
@@ -47,7 +49,7 @@ The primary migration hotspots are:
 - `Hosting/ServerApplication.cs`
   - Registers the concrete services.
   - Owns middleware.
-  - Maps protocol, moderation, health, and test-control endpoints.
+  - Generates the frozen route table from the resolved endpoint descriptors.
   - Builds service-index, registration, and search documents.
 - `Hosting/NuGetTestServerHost.cs`
   - Exposes many direct construction overloads.

@@ -63,14 +63,16 @@ internal sealed class OperationRegistryBuilder
         return this;
     }
 
-    public OperationRegistry Build(ResolvedExtensionGraph graph)
+    public OperationRegistry Build(
+        ResolvedExtensionGraph graph,
+        IReadOnlyDictionary<string, OperationBinding>? contracts = null)
     {
         ArgumentNullException.ThrowIfNull(graph);
         var declaredOwners = graph.Operations.ToDictionary(
             operation => operation.OperationId,
             operation => operation.ExtensionId,
             StringComparer.Ordinal);
-        var bindings = OperationContracts.Bindings.ToDictionary(
+        var bindings = contracts ?? OperationContracts.Bindings.ToDictionary(
             binding => binding.Contract.Id.Value,
             StringComparer.Ordinal);
         var registrations = new Dictionary<string, OperationRegistration>(StringComparer.Ordinal);

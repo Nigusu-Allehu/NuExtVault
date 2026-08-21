@@ -239,13 +239,21 @@ internal sealed record ServerComposition(
     SupplyChainOptions? SupplyChain,
     IPackagePolicyScanner? PackageScanner,
     TemporaryStorageLease? StorageLease,
-    bool EnableVulnerabilityPersistence)
+    bool EnableVulnerabilityPersistence,
+    ImmutableArray<ExtensionContribution> Contributions)
 {
     /// <summary>
-    /// Identifies this host instance. Kernel content handles, registries, and
+    /// Identifies this host instance. Kernel content handles, registries, routes, and
     /// diagnostics are scoped to it.
     /// </summary>
     public string InstanceId { get; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// True when the host authenticates production identities. Routes and access
+    /// policies that require a production identity resolve against this flag.
+    /// </summary>
+    public bool HasProductionIdentity =>
+        Authentication.Profile == AuthenticationProfile.Production;
 
     public static ServerComposition Create(
         ServerProfile profile,
@@ -260,17 +268,23 @@ internal sealed record ServerComposition(
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null,
         TemporaryStorageLease? storageLease = null,
-        bool enableVulnerabilityPersistence = false)
+        bool enableVulnerabilityPersistence = false,
+        ImmutableArray<ExtensionContribution> contributions = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
         authentication ??= AuthenticationConfiguration.Anonymous;
         vulnerabilities ??= new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load());
         runtimeState ??= new RuntimeStateConfiguration();
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
+        contributions = contributions.IsDefault ? [] : contributions;
 
-        var extensionGraph = BuiltInExtensionCatalog.Instance.Resolve(
+        var catalog = contributions.IsEmpty
+            ? BuiltInExtensionCatalog.Instance
+            : BuiltInExtensionCatalog.CreateWith(contributions);
+        var extensionGraph = catalog.Resolve(
             profile,
-            authentication.Profile == AuthenticationProfile.Production);
+            authentication.Profile == AuthenticationProfile.Production,
+            ExtensionContribution.CreateContractIndex(contributions));
         ValidateProfile(profile, storageDirectory, authentication, supplyChain);
         var mode = profile.Kind == ServerProfileKind.Production
             ? ServerMode.Production
@@ -294,7 +308,8 @@ internal sealed record ServerComposition(
             supplyChain,
             packageScanner,
             storageLease,
-            enableVulnerabilityPersistence);
+            enableVulnerabilityPersistence,
+            contributions);
     }
 
     public static ServerComposition CreateProductionWithTemporaryStorage(
@@ -307,7 +322,8 @@ internal sealed record ServerComposition(
         int maximumAuthenticationFailures = 5,
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null,
-        bool enableVulnerabilityPersistence = false)
+        bool enableVulnerabilityPersistence = false,
+        ImmutableArray<ExtensionContribution> contributions = default)
     {
         var lease = TemporaryStorageLease.Create();
         try
@@ -325,7 +341,8 @@ internal sealed record ServerComposition(
                 supplyChain,
                 packageScanner,
                 lease,
-                enableVulnerabilityPersistence);
+                enableVulnerabilityPersistence,
+                contributions);
         }
         catch
         {

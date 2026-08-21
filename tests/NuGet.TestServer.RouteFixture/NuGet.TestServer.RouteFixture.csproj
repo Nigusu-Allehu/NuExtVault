@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <Description>
+      Test-only, separately compiled route fixture. It contributes the /flavors/index.json
+      endpoint through the kernel descriptor path only.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\NuGet.TestServer\NuGet.TestServer.csproj" />
+  </ItemGroup>
+
+</Project>

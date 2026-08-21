@@ -300,7 +300,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         return await StartCompositionAsync(composition, token);
     }
 
-    private static async Task<NuGetTestServerHost> StartCompositionAsync(
+    internal static async Task<NuGetTestServerHost> StartCompositionAsync(
         ServerComposition composition,
         CancellationToken token)
     {

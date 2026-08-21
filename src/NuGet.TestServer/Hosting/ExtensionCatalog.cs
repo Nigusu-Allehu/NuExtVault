@@ -2,7 +2,11 @@ using System.Collections.Immutable;
 using System.Text;
 using NuGet.Versioning;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Control;
+using NuGet.TestServer.Extensions.Vulnerabilities;
+using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Hosting;
 
@@ -44,15 +48,6 @@ internal sealed record ExtensionDependency(
     string ExtensionId,
     ExtensionVersionRange VersionRange);
 
-internal sealed record RouteDescriptor(
-    string Method,
-    string Path,
-    bool RequiresProductionIdentity = false)
-{
-    public bool AppliesTo(bool hasProductionIdentity) =>
-        !RequiresProductionIdentity || hasProductionIdentity;
-}
-
 internal sealed record ExtensionManifest(
     int SchemaVersion,
     string Id,
@@ -60,11 +55,17 @@ internal sealed record ExtensionManifest(
     ExtensionVersionRange HostCompatibility,
     ImmutableArray<ExtensionDependency> Dependencies,
     ImmutableArray<string> Operations,
-    ImmutableArray<RouteDescriptor> Routes,
+    ImmutableArray<EndpointDescriptor> Endpoints,
     ImmutableArray<ServiceResourceContribution> Resources,
     ImmutableArray<CapabilityRequest> RequestedCapabilities);
 
 internal sealed record ResolvedOperation(string OperationId, string ExtensionId);
+
+/// <summary>
+/// A validated endpoint descriptor together with its owning extension. Every active
+/// route in the host is generated from this list.
+/// </summary>
+internal sealed record ResolvedEndpoint(EndpointDescriptor Descriptor, string ExtensionId);
 
 internal sealed record ResolvedRoute(string Method, string Path, string ExtensionId);
 
@@ -82,22 +83,11 @@ internal sealed record ResolvedExtensionGraph(
     string ProfileName,
     ImmutableArray<ExtensionManifest> Extensions,
     ImmutableArray<ResolvedOperation> Operations,
+    ImmutableArray<ResolvedEndpoint> Endpoints,
     ImmutableArray<ResolvedRoute> Routes,
     ImmutableArray<ResolvedServiceIndexResource> Resources,
     ImmutableArray<ResolvedCapability> Capabilities,
-    string Diagnostics)
-{
-    public ResolvedExtensionGraph(
-        string profileName,
-        ImmutableArray<ExtensionManifest> extensions,
-        ImmutableArray<ResolvedOperation> operations,
-        ImmutableArray<ResolvedRoute> routes,
-        ImmutableArray<ResolvedServiceIndexResource> resources,
-        string diagnostics)
-        : this(profileName, extensions, operations, routes, resources, [], diagnostics)
-    {
-    }
-}
+    string Diagnostics);
 
 internal sealed class ExtensionCatalog
 {
@@ -126,7 +116,8 @@ internal sealed class ExtensionCatalog
 
     public ResolvedExtensionGraph Resolve(
         ServerProfile profile,
-        bool hasProductionIdentity = false)
+        bool hasProductionIdentity = false,
+        IReadOnlyDictionary<string, OperationBinding>? contracts = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         var selected = ResolveSelectedManifests(profile);
@@ -140,7 +131,15 @@ internal sealed class ExtensionCatalog
         var capabilities = ResolveCapabilities(profile, ordered);
 
         var operations = ResolveOperations(ordered);
-        var routes = ResolveRoutes(ordered, hasProductionIdentity);
+        var endpoints = EndpointDescriptorValidator.Validate(
+            ordered,
+            operations.ToDictionary(
+                operation => operation.OperationId,
+                operation => operation.ExtensionId,
+                StringComparer.Ordinal),
+            contracts ?? DefaultContracts,
+            hasProductionIdentity);
+        var routes = ResolveRoutes(endpoints);
         var resources = ResolveResources(ordered, operations, routes);
         ValidateResourceLinks(resources);
         var diagnostics = CreateDiagnostics(profile, ordered, routes, resources, capabilities);
@@ -149,11 +148,17 @@ internal sealed class ExtensionCatalog
             profile.Name,
             [.. ordered],
             operations,
+            endpoints,
             routes,
             resources,
             capabilities,
             diagnostics);
     }
+
+    private static IReadOnlyDictionary<string, OperationBinding> DefaultContracts { get; } =
+        OperationContracts.Bindings.ToDictionary(
+            binding => binding.Contract.Id.Value,
+            StringComparer.Ordinal);
 
     private ExtensionManifest[] ResolveSelectedManifests(ServerProfile profile)
     {
@@ -395,41 +400,18 @@ internal sealed class ExtensionCatalog
     }
 
     private static ImmutableArray<ResolvedRoute> ResolveRoutes(
-        IReadOnlyList<ExtensionManifest> manifests,
-        bool hasProductionIdentity)
-    {
-        var owners = new Dictionary<string, ResolvedRoute>(StringComparer.OrdinalIgnoreCase);
-        foreach (var manifest in manifests.OrderBy(value => value.Id, ExtensionIdComparer.Instance))
-        {
-            foreach (var route in manifest.Routes
-                         .Where(route => route.AppliesTo(hasProductionIdentity))
-                         .OrderBy(route => route.Method, StringComparer.OrdinalIgnoreCase)
-                         .ThenBy(route => route.Path, StringComparer.OrdinalIgnoreCase))
-            {
-                var normalized = new ResolvedRoute(
-                    route.Method.ToUpperInvariant(),
-                    route.Path,
-                    manifest.Id);
-                var key = $"{normalized.Method} {normalized.Path}";
-                if (owners.TryGetValue(key, out var existing))
-                {
-                    throw Failure(
-                        "route-conflict",
-                        $"Route '{existing.Method} {existing.Path}' is owned by " +
-                        $"'{existing.ExtensionId}' and '{manifest.Id}'.");
-                }
-
-                owners.Add(key, normalized);
-            }
-        }
-
-        return
-        [
-            .. owners.Values
-                .OrderBy(route => route.Method, StringComparer.Ordinal)
-                .ThenBy(route => route.Path, StringComparer.Ordinal)
-        ];
-    }
+        ImmutableArray<ResolvedEndpoint> endpoints) =>
+    [
+        .. endpoints
+            .SelectMany(endpoint => EndpointDescriptorValidator
+                .NormalizeMethods(endpoint.Descriptor)
+                .Select(method => new ResolvedRoute(
+                    method,
+                    endpoint.Descriptor.PathTemplate,
+                    endpoint.ExtensionId)))
+            .OrderBy(route => route.Method, StringComparer.Ordinal)
+            .ThenBy(route => route.Path, StringComparer.Ordinal)
+    ];
 
     private static ImmutableArray<ResolvedServiceIndexResource> ResolveResources(
         IReadOnlyList<ExtensionManifest> manifests,
@@ -706,12 +688,17 @@ internal sealed class ExtensionCatalog
     }
 }
 
+
+/// <summary>
+/// The built-in extension manifests. Routes are declared as typed endpoint descriptors
+/// and are the only source of the generated route table.
+/// </summary>
 internal static class BuiltInExtensionCatalog
 {
     private static readonly ExtensionVersion Version = new(1, 0, 0);
     private static readonly ExtensionVersionRange Compatibility = ExtensionVersionRange.Major(1);
 
-    public static ExtensionCatalog Instance { get; } = new(
+    public static ImmutableArray<ExtensionManifest> Manifests { get; } =
     [
         Manifest(
             BuiltInExtensionIds.Protocol,
@@ -719,16 +706,7 @@ internal static class BuiltInExtensionCatalog
                 OperationFamily.FlatContainer,
                 OperationFamily.Registration,
                 OperationFamily.Search),
-            routes:
-            [
-                .. ReadRoutes(
-                    "/flatcontainer/{id}/index.json",
-                    "/flatcontainer/{id}/{version}/{fileName}",
-                    "/registration/{id}/index.json",
-                    "/registration/{id}/page/{lower}/{upper}.json",
-                    "/registration/{id}/{version}.json",
-                    "/query")
-            ],
+            endpoints: ProtocolEndpoints.Protocol,
             resources:
             [
                 Resource(
@@ -778,21 +756,12 @@ internal static class BuiltInExtensionCatalog
         Manifest(
             BuiltInExtensionIds.ServiceIndex,
             operations: Operations(OperationFamily.ServiceIndex),
-            routes: [.. ReadRoutes("/v3/index.json")]),
+            endpoints: ProtocolEndpoints.ServiceIndex),
         Manifest(
             BuiltInExtensionIds.Publication,
             dependencies: [Dependency(BuiltInExtensionIds.Protocol)],
             operations: Operations(OperationFamily.PackageManagement),
-            routes:
-            [
-                new("PUT", "/package"),
-                new("PUT", "/symbolpackage"),
-                new("DELETE", "/package/{id}/{version}"),
-                new(
-                    "DELETE",
-                    "/package/{id}/{version}/hard",
-                    RequiresProductionIdentity: true)
-            ],
+            endpoints: PublicationEndpoints.Descriptors,
             resources:
             [
                 Resource(
@@ -823,12 +792,7 @@ internal static class BuiltInExtensionCatalog
         Manifest(
             BuiltInExtensionIds.Vulnerabilities,
             operations: Operations(OperationFamily.Vulnerabilities),
-            routes:
-            [
-                .. ReadRoutes(
-                    "/v3/vulnerabilities/index.json",
-                    "/v3/vulnerabilities/{snapshotId}/{pageName}.json")
-            ],
+            endpoints: VulnerabilityEndpoints.Descriptors,
             resources:
             [
                 Resource(
@@ -843,22 +807,7 @@ internal static class BuiltInExtensionCatalog
             BuiltInExtensionIds.TestControl,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
             operations: Operations(OperationFamily.TestControl),
-            routes:
-            [
-                new("GET", "/__test/state"),
-                new("POST", "/__test/reset"),
-                new("GET", "/__test/packages"),
-                new("POST", "/__test/packages"),
-                new("DELETE", "/__test/packages/{id}/{version}"),
-                new("POST", "/__test/packages/{id}/{version}/list"),
-                new("POST", "/__test/packages/{id}/{version}/unlist"),
-                new("PUT", "/__test/packages/{id}/{version}/metadata"),
-                new("GET", "/__test/requests"),
-                new("DELETE", "/__test/requests"),
-                new("GET", "/__test/faults"),
-                new("POST", "/__test/faults"),
-                new("DELETE", "/__test/faults")
-            ],
+            endpoints: ControlEndpoints.Descriptors,
             capabilities:
             [
                 Required(BuiltInCapabilityNames.ControlPackagesManage),
@@ -874,13 +823,7 @@ internal static class BuiltInExtensionCatalog
                 OperationFamily.Diagnostics,
                 OperationFamily.Backup,
                 OperationFamily.Restore),
-            routes:
-            [
-                new("GET", "/health/live"),
-                new("GET", "/health/ready"),
-                new("GET", "/health/storage"),
-                new("GET", "/__test/health")
-            ],
+            endpoints: HealthEndpoints.Descriptors,
             capabilities:
             [
                 Required(BuiltInCapabilityNames.OperationsQuery),
@@ -891,24 +834,33 @@ internal static class BuiltInExtensionCatalog
             BuiltInExtensionIds.SupplyChain,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
             operations: Operations(OperationFamily.Moderation),
-            routes:
-            [
-                new("POST", "/__admin/packages/{id}/{version}/{action}"),
-                new("GET", "/__admin/supply-chain/audit"),
-                new("GET", "/__admin/packages/{id}/{version}/validations")
-            ],
+            endpoints: ModerationEndpoints.Descriptors,
             capabilities:
             [
                 Required(BuiltInCapabilityNames.ModerationRead),
                 Required(BuiltInCapabilityNames.ModerationDecide)
             ]),
-    ]);
+    ];
+
+    public static ExtensionCatalog Instance { get; } = new(Manifests);
+
+    /// <summary>
+    /// Creates a catalog that also contains separately compiled contributions. Adding a
+    /// route requires a descriptor, a binder, and an owner; it never requires a change
+    /// to kernel routing source.
+    /// </summary>
+    public static ExtensionCatalog CreateWith(IEnumerable<ExtensionContribution> contributions)
+    {
+        ArgumentNullException.ThrowIfNull(contributions);
+        return new ExtensionCatalog(
+            Manifests.Concat(contributions.Select(contribution => contribution.Manifest)));
+    }
 
     private static ExtensionManifest Manifest(
         string id,
         ImmutableArray<ExtensionDependency> dependencies = default,
         ImmutableArray<string> operations = default,
-        ImmutableArray<RouteDescriptor> routes = default,
+        ImmutableArray<EndpointDescriptor> endpoints = default,
         ImmutableArray<ServiceResourceContribution> resources = default,
         ImmutableArray<CapabilityRequest> capabilities = default) =>
         new(
@@ -918,7 +870,7 @@ internal static class BuiltInExtensionCatalog
             Compatibility,
             dependencies.IsDefault ? [] : dependencies,
             operations.IsDefault ? [] : operations,
-            routes.IsDefault ? [] : routes,
+            endpoints.IsDefault ? [] : endpoints,
             resources.IsDefault ? [] : resources,
             capabilities.IsDefault ? [] : capabilities);
 
@@ -955,14 +907,5 @@ internal static class BuiltInExtensionCatalog
             .Where(contract => families.Contains(contract.Family))
             .Select(contract => contract.Id.Value)
             .Order(StringComparer.Ordinal)
-    ];
-
-    private static ImmutableArray<RouteDescriptor> ReadRoutes(params string[] paths) =>
-    [
-        .. paths.SelectMany(path => new[]
-        {
-            new RouteDescriptor("GET", path),
-            new RouteDescriptor("HEAD", path)
-        })
     ];
 }

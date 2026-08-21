@@ -4,9 +4,9 @@ using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Vulnerabilities;
-using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Kernel.Routing;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
@@ -183,7 +183,12 @@ public static class ServerApplication
             composition.ExtensionGraph,
             provider.GetRequiredService<ServiceIndexResourceRegistry>(),
             officialExtensions,
-            packageLimits));
+            packageLimits,
+            composition.Contributions));
+        builder.Services.AddSingleton(_ => KernelRouteTable.Create(
+            composition.ExtensionGraph,
+            packageLimits,
+            composition.HasProductionIdentity));
         builder.Services.AddSingleton(provider => new OperationDispatcher(
             provider.GetRequiredService<OperationRegistry>(),
             provider.GetRequiredService<ServerDiagnostics>()));
@@ -194,6 +199,7 @@ public static class ServerApplication
             provider.GetRequiredService<KernelRequestInstrumentation>()));
 
         var app = builder.Build();
+        KernelRouteTable routes;
         try
         {
             if (composition.StorageLease is not null)
@@ -205,6 +211,10 @@ public static class ServerApplication
 
             // Ownership, contracts, and route coverage are validated before listening.
             _ = app.Services.GetRequiredService<OperationGateway>();
+
+            // The route table is generated from validated descriptors and frozen here,
+            // before any listener exists.
+            routes = app.Services.GetRequiredService<KernelRouteTable>();
         }
         catch
         {
@@ -213,10 +223,7 @@ public static class ServerApplication
         }
 
         MapMiddleware(app);
-        ProtocolEndpoints.Map(app);
-        ModerationEndpoints.Map(app);
-        HealthEndpoints.Map(app);
-        OfficialExtensionEndpointBindings.Map(app, officialExtensions);
+        KernelEndpointMapper.Map(app, routes);
 
         return app;
     }
@@ -292,7 +299,4 @@ public static class ServerApplication
 
         app.UseMiddleware<NuGetAuthenticationMiddleware>();
     }
-
-    public sealed record PackageContentRequest(string? Content);
-
 }
