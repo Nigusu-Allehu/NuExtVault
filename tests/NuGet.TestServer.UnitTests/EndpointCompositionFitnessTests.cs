@@ -78,6 +78,29 @@ public sealed class EndpointCompositionFitnessTests
     }
 
     [Fact]
+    public void Extension_contracts_and_official_owners_have_no_public_origin_access()
+    {
+        var roots = new[]
+        {
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Abstractions"),
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer", "Kernel", "Owners"),
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer", "Extensions")
+        };
+        var forbidden = new Regex(
+            @"\bBaseAddress\b|Request\.(Host|Scheme)|X-Forwarded-(Host|Proto|Prefix)|" +
+            @"HttpContext|https?://\{|\$""\{[^""]+\}/(registration|flatcontainer|v3/vulnerabilities)",
+            RegexOptions.CultureInvariant);
+        var offenders = roots
+            .SelectMany(root => Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
+            .Where(file => forbidden.IsMatch(File.ReadAllText(file)))
+            .Select(file => Path.GetRelativePath(RepositoryRoot, file))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Empty(offenders);
+    }
+
+    [Fact]
     public void Every_mapped_endpoint_comes_from_the_frozen_route_table()
     {
         using var host = TestServerApplication.Build(ServerProfiles.Embedded);

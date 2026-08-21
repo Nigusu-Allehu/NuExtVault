@@ -189,6 +189,8 @@ public static class ServerApplication
             composition.ExtensionGraph,
             packageLimits,
             composition.HasProductionIdentity));
+        builder.Services.AddSingleton(provider => new KernelUrlProjector(
+            provider.GetRequiredService<KernelRouteTable>()));
         builder.Services.AddSingleton(provider => new OperationDispatcher(
             provider.GetRequiredService<OperationRegistry>(),
             provider.GetRequiredService<ServerDiagnostics>()));
@@ -196,7 +198,9 @@ public static class ServerApplication
             provider.GetRequiredService<OperationDispatcher>(),
             provider.GetRequiredService<ISecurityAuditSink>(),
             composition.InstanceId,
-            provider.GetRequiredService<KernelRequestInstrumentation>()));
+            provider.GetRequiredService<KernelRequestInstrumentation>(),
+            provider.GetRequiredService<KernelUrlProjector>(),
+            composition.Hosting.Transport));
 
         var app = builder.Build();
         KernelRouteTable routes;

@@ -41,7 +41,7 @@ public sealed class ProtocolCompatibilityBaselineTests
     }
 
     [Fact]
-    public async Task Service_index_urls_use_the_trusted_proxy_scheme_and_forwarded_host()
+    public async Task Service_index_urls_use_trusted_forwarded_scheme_host_and_prefix()
     {
         var security = ProductionSecurityConfiguration.Create(
         [
@@ -49,8 +49,10 @@ public sealed class ProtocolCompatibilityBaselineTests
         ]);
         await using var server = await NuGetTestServerHost.StartProductionAsync(security);
         using var request = new HttpRequestMessage(HttpMethod.Get, "/v3/index.json");
-        request.Headers.Host = "packages.example.test";
+        request.Headers.Host = "internal.example.test";
         request.Headers.Add("X-Forwarded-Proto", "https");
+        request.Headers.Add("X-Forwarded-Host", "packages.example.test");
+        request.Headers.Add("X-Forwarded-Prefix", "/nuget");
         request.Headers.Add("X-NuGet-ApiKey", "reader-key");
 
         using var response = await server.HttpClient.SendAsync(request);
@@ -60,7 +62,7 @@ public sealed class ProtocolCompatibilityBaselineTests
         Assert.All(
             document.RootElement.GetProperty("resources").EnumerateArray(),
             resource => Assert.StartsWith(
-                "https://packages.example.test/",
+                "https://packages.example.test/nuget/",
                 resource.GetProperty("@id").GetString(),
                 StringComparison.Ordinal));
     }

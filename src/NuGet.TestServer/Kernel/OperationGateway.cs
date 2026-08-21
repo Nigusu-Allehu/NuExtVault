@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Kernel;
@@ -14,7 +15,9 @@ internal sealed class OperationGateway(
     OperationDispatcher dispatcher,
     ISecurityAuditSink audits,
     string hostInstanceId,
-    KernelRequestInstrumentation instrumentation)
+    KernelRequestInstrumentation instrumentation,
+    KernelUrlProjector urls,
+    TransportSecurityOptions transport)
 {
     public string HostInstanceId { get; } = hostInstanceId;
 
@@ -58,13 +61,21 @@ internal sealed class OperationGateway(
         }
         catch (OperationBindingException exception)
         {
-            return OperationResults.Render(exception.Result, execution);
+            return OperationResults.Render(
+                exception.Result,
+                execution,
+                urls,
+                () => PublicUrlOrigin.FromRequest(context, transport));
         }
 
         var result = await invocation.ExecuteAsync(
             new EndpointDispatcher(dispatcher, execution),
             cancellationToken);
-        return OperationResults.Render(result, execution);
+        return OperationResults.Render(
+            result,
+            execution,
+            urls,
+            () => PublicUrlOrigin.FromRequest(context, transport));
     }
 
     private sealed class EndpointDispatcher(
@@ -101,8 +112,10 @@ internal static class OperationResults
 {
     public static IResult Render<TResponse>(
         OperationResponse<TResponse> response,
-        OperationExecutionContext execution) =>
-        Render(Resolve(response, execution), execution);
+        OperationExecutionContext execution,
+        KernelUrlProjector urls,
+        Func<PublicUrlOrigin> origin) =>
+        Render(Resolve(response, execution), execution, urls, origin);
 
     /// <summary>
     /// Chooses the protocol-compatible rendering for an operation response: the owner's
@@ -124,7 +137,11 @@ internal static class OperationResults
             new JsonResponseBody(response.Value!));
     }
 
-    public static IResult Render(OperationHttpResult result, OperationExecutionContext execution)
+    public static IResult Render(
+        OperationHttpResult result,
+        OperationExecutionContext execution,
+        KernelUrlProjector urls,
+        Func<PublicUrlOrigin> origin)
     {
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(execution);
@@ -139,7 +156,10 @@ internal static class OperationResults
             TextResponseBody text => Results.Text(text.Value, text.ContentType),
             ContentResponseBody content => RenderContent(content, execution),
             JsonResponseBody json => result.Location is null
-                ? Results.Json(json.Value, statusCode: result.StatusCode)
+                ? Results.Json(
+                    json.Value,
+                    urls.CreateJsonOptions(origin),
+                    statusCode: result.StatusCode)
                 : CreatedResult(result, json.Value),
             _ => throw new InvalidOperationException("Unsupported operation response body.")
         };
