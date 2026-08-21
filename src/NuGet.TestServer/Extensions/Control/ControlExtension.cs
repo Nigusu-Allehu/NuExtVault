@@ -1,4 +1,4 @@
-using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Kernel.Capabilities;
 
 namespace NuGet.TestServer.Extensions.Control;
@@ -6,13 +6,13 @@ namespace NuGet.TestServer.Extensions.Control;
 internal sealed class ControlExtension
 {
     public void RegisterOperations(
-        OperationRegistryBuilder builder,
+        IOperationOwnerRegistry registry,
         IPackageControlCapability packages,
         IKernelInstrumentationControlCapability instrumentation)
     {
-        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(packages);
         ArgumentNullException.ThrowIfNull(instrumentation);
-        new ControlOperations(packages, instrumentation).Register(builder);
+        new ControlOperations(packages, instrumentation).Register(registry);
     }
 }

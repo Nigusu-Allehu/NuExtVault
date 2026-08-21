@@ -50,10 +50,10 @@ public sealed class ControlExtensionTests
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             candidate => candidate.GetParameters()
                 .Select(parameter => parameter.ParameterType)
-                .SequenceEqual([typeof(IPackageControlCapability)]));
+                .SequenceEqual([typeof(IPackageFixtureCapability)]));
 
         Assert.Equal(
-            [typeof(IPackageControlCapability)],
+            [typeof(IPackageFixtureCapability)],
             constructor.GetParameters().Select(parameter => parameter.ParameterType));
     }
 

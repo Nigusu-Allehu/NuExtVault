@@ -43,8 +43,6 @@ internal sealed class HttpEndpointRequest(
 {
     public override string Method => context.Request.Method.ToUpperInvariant();
 
-    public override string Path => context.Request.Path.Value ?? "/";
-
     public override string? ContentType => context.Request.ContentType;
 
     public override long? ContentLength => context.Request.ContentLength;
@@ -86,7 +84,7 @@ internal sealed class HttpEndpointRequest(
         return int.TryParse(value, out var parsed)
             ? parsed
             : throw BindingFailure(
-                StatusCodes.Status400BadRequest,
+                OperationResultStatus.InvalidRequest,
                 $"Failed to bind parameter \"{name}\" from \"{value}\".");
     }
 
@@ -101,7 +99,7 @@ internal sealed class HttpEndpointRequest(
         return bool.TryParse(value, out var parsed)
             ? parsed
             : throw BindingFailure(
-                StatusCodes.Status400BadRequest,
+                OperationResultStatus.InvalidRequest,
                 $"Failed to bind parameter \"{name}\" from \"{value}\".");
     }
 
@@ -127,17 +125,17 @@ internal sealed class HttpEndpointRequest(
         }
         catch (InvalidDataException exception)
         {
-            throw new OperationBindingException(new OperationHttpResult(
-                StatusCodes.Status413PayloadTooLarge,
-                new ProblemResponseBody(exception.Message)));
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.PayloadTooLarge,
+                new OperationProblemBody(exception.Message)));
         }
 
         var file = form.Files.FirstOrDefault();
         if (file is null)
         {
-            throw new OperationBindingException(new OperationHttpResult(
-                StatusCodes.Status500InternalServerError,
-                new ProblemResponseBody(missingFileDetail)));
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.InternalError,
+                new OperationProblemBody(missingFileDetail)));
         }
 
         return execution.Content.RegisterStream(
@@ -155,7 +153,7 @@ internal sealed class HttpEndpointRequest(
         if (!HasJsonContentType())
         {
             throw BindingFailure(
-                StatusCodes.Status415UnsupportedMediaType,
+                OperationResultStatus.UnsupportedMediaType,
                 "Expected a supported JSON media type but got \"" +
                 (ContentType ?? string.Empty) + "\".");
         }
@@ -168,13 +166,13 @@ internal sealed class HttpEndpointRequest(
         catch (JsonException exception)
         {
             throw BindingFailure(
-                StatusCodes.Status400BadRequest,
+                OperationResultStatus.InvalidRequest,
                 "Failed to read parameter from the request body as JSON.",
                 exception);
         }
 
         return body ?? throw BindingFailure(
-            StatusCodes.Status400BadRequest,
+            OperationResultStatus.InvalidRequest,
             "Implicit body inferred for parameter but no body was provided.");
     }
 
@@ -215,10 +213,10 @@ internal sealed class HttpEndpointRequest(
     }
 
     private static OperationBindingException BindingFailure(
-        int statusCode,
+        OperationResultStatus status,
         string detail,
         Exception? innerException = null) =>
         new(
-            new OperationHttpResult(statusCode, new ProblemResponseBody(detail)),
+            new OperationResult(status, new OperationProblemBody(detail)),
             innerException);
 }

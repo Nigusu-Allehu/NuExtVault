@@ -113,9 +113,9 @@ internal sealed class PublicationOperations(
         var package = TestPackage.FromContent(symbols);
         await mutations.AddSymbolAsync(symbols, token);
         var identity = new PackageIdentity(package.Identity.Id, package.NormalizedVersion);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status201Created,
-            new JsonResponseBody(new { id = identity.Id, version = identity.Version }),
+        context.Complete(new OperationResult(
+            OperationResultStatus.Created,
+            new OperationDocumentBody(new { id = identity.Id, version = identity.Version }),
             $"/__test/packages/{Uri.EscapeDataString(identity.Id)}/{identity.Version}/symbols"));
         return OperationResponse<PushSymbolsResponse>.Success(new PushSymbolsResponse(identity));
     }
@@ -138,9 +138,9 @@ internal sealed class PublicationOperations(
                         package.IsListed,
                         package.Published))
             ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(response.Packages.Select(package => new
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(response.Packages.Select(package => new
             {
                 id = package.Package.Id,
                 version = package.Package.Version,
@@ -170,7 +170,7 @@ internal sealed class PublicationOperations(
             return OperationResponse<UnlistPackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
+        context.Complete(new OperationResult(OperationResultStatus.NoContent));
         return OperationResponse<UnlistPackageResponse>.Success(
             new UnlistPackageResponse(request.Package));
     }
@@ -195,7 +195,7 @@ internal sealed class PublicationOperations(
             return OperationResponse<RelistPackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
+        context.Complete(new OperationResult(OperationResultStatus.NoContent));
         return OperationResponse<RelistPackageResponse>.Success(
             new RelistPackageResponse(request.Package));
     }
@@ -221,7 +221,7 @@ internal sealed class PublicationOperations(
             return OperationResponse<DeletePackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
+        context.Complete(new OperationResult(OperationResultStatus.NoContent));
         return OperationResponse<DeletePackageResponse>.Success(
             new DeletePackageResponse(request.Package));
     }
@@ -258,32 +258,32 @@ internal sealed class PublicationOperations(
             ? new MemoryStream(bytes.ToArray(), writable: false)
             : throw new InvalidOperationException("Package content has no readable payload."));
 
-    private static OperationHttpResult RenderPublication(
+    private static OperationResult RenderPublication(
         PackagePublicationResult publication,
         string requestPath) =>
         publication.Outcome switch
         {
-            PackagePublicationOutcome.Published => new OperationHttpResult(
-                StatusCodes.Status201Created,
-                new JsonResponseBody(publication),
+            PackagePublicationOutcome.Published => new OperationResult(
+                OperationResultStatus.Created,
+                new OperationDocumentBody(publication),
                 requestPath),
-            PackagePublicationOutcome.Duplicate => new OperationHttpResult(
-                StatusCodes.Status200OK,
-                new JsonResponseBody(publication)),
-            PackagePublicationOutcome.Quarantined => new OperationHttpResult(
-                StatusCodes.Status202Accepted,
-                new JsonResponseBody(publication),
+            PackagePublicationOutcome.Duplicate => new OperationResult(
+                OperationResultStatus.Ok,
+                new OperationDocumentBody(publication)),
+            PackagePublicationOutcome.Quarantined => new OperationResult(
+                OperationResultStatus.Accepted,
+                new OperationDocumentBody(publication),
                 requestPath),
-            PackagePublicationOutcome.Rejected => new OperationHttpResult(
-                StatusCodes.Status422UnprocessableEntity,
-                new JsonResponseBody(publication)),
-            PackagePublicationOutcome.Unauthorized => new OperationHttpResult(
-                StatusCodes.Status403Forbidden),
-            PackagePublicationOutcome.QuotaExceeded => new OperationHttpResult(
-                StatusCodes.Status429TooManyRequests),
-            _ => new OperationHttpResult(
-                StatusCodes.Status409Conflict,
-                new JsonResponseBody(publication))
+            PackagePublicationOutcome.Rejected => new OperationResult(
+                OperationResultStatus.Unprocessable,
+                new OperationDocumentBody(publication)),
+            PackagePublicationOutcome.Unauthorized => new OperationResult(
+                OperationResultStatus.Forbidden),
+            PackagePublicationOutcome.QuotaExceeded => new OperationResult(
+                OperationResultStatus.TooManyRequests),
+            _ => new OperationResult(
+                OperationResultStatus.Conflict,
+                new OperationDocumentBody(publication))
         };
 
     private static PublicationOutcome MapOutcome(PackagePublicationOutcome outcome) =>

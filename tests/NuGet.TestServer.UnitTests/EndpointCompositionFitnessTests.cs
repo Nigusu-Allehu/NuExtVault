@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;

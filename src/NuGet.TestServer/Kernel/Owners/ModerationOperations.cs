@@ -57,7 +57,7 @@ internal sealed class ModerationOperations(IModerationCapability moderation)
                     $"'{request.Package.Version}' does not exist."));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
+        context.Complete(new OperationResult(OperationResultStatus.NoContent));
         return OperationResponse<ModeratePackageResponse>.Success(
             new ModeratePackageResponse(request.Package, request.Action));
     }
@@ -94,9 +94,9 @@ internal sealed class ModerationOperations(IModerationCapability moderation)
                             entry.Timestamp);
                     })
             ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(history)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(history)));
         return OperationResponse<GetModerationAuditResponse>.Success(response);
     }
 
@@ -116,9 +116,9 @@ internal sealed class ModerationOperations(IModerationCapability moderation)
                     validation.Outcome,
                     validation.Detail))
             ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(validations)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(validations)));
         return OperationResponse<GetPackageValidationsResponse>.Success(response);
     }
 

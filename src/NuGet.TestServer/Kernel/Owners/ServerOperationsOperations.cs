@@ -54,9 +54,9 @@ internal sealed class ServerOperationsOperations(IServerOperationsCapability ope
         var response = new GetLivenessResponse(
             "healthy",
             operations.Mode);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new { status = response.Status, mode = response.Mode })));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(new { status = response.Status, mode = response.Mode })));
         return ValueTask.FromResult(OperationResponse<GetLivenessResponse>.Success(response));
     }
 
@@ -67,11 +67,11 @@ internal sealed class ServerOperationsOperations(IServerOperationsCapability ope
     {
         var report = await operations.GetReadinessAsync(token);
         var response = new GetReadinessResponse(report.Status, report.Dependency, report.Ready);
-        context.Complete(new OperationHttpResult(
+        context.Complete(new OperationResult(
             response.Ready
-                ? StatusCodes.Status200OK
-                : StatusCodes.Status503ServiceUnavailable,
-            new JsonResponseBody(new
+                ? OperationResultStatus.Ok
+                : OperationResultStatus.Unavailable,
+            new OperationDocumentBody(new
             {
                 status = response.Status,
                 dependency = response.Dependency
@@ -108,9 +108,9 @@ internal sealed class ServerOperationsOperations(IServerOperationsCapability ope
                     report.VulnerabilitySnapshotRetentionLimit.ToString(
                         System.Globalization.CultureInfo.InvariantCulture))
             ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(report)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(report)));
         return OperationResponse<GetStorageHealthResponse>.Success(response);
     }
 
@@ -125,9 +125,9 @@ internal sealed class ServerOperationsOperations(IServerOperationsCapability ope
             diagnostics.FailedRequestCount,
             diagnostics.PublishedPackageCount,
             diagnostics.StorageFailureCount);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(response)));
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(response)));
         return OperationResponse<GetDiagnosticsResponse>.Success(response);
     }
 

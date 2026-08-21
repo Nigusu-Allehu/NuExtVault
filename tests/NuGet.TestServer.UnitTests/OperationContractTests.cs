@@ -65,7 +65,11 @@ public sealed class OperationContractTests
     [Fact]
     public void Every_current_endpoint_family_has_typed_contracts()
     {
-        var expected = Enum.GetValues<OperationFamily>();
+        var expected = typeof(OperationFamily)
+            .GetProperties(BindingFlags.Public | BindingFlags.Static)
+            .Where(property => property.PropertyType == typeof(OperationFamily))
+            .Select(property => Assert.IsType<OperationFamily>(property.GetValue(null)))
+            .ToArray();
         var actual = OperationContracts.All.Select(contract => contract.Family).Distinct();
 
         Assert.Empty(expected.Except(actual));

@@ -93,9 +93,9 @@ internal static class ModerationEndpoints
     {
         if (string.IsNullOrWhiteSpace(reason))
         {
-            throw new OperationBindingException(new OperationHttpResult(
-                StatusCodes.Status400BadRequest,
-                new JsonResponseBody("A moderation reason is required.")));
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.InvalidRequest,
+                new OperationDocumentBody("A moderation reason is required.")));
         }
 
         return action.ToLowerInvariant() switch
@@ -104,9 +104,9 @@ internal static class ModerationEndpoints
             "reject" => ModerationAction.Reject,
             "quarantine" => ModerationAction.Quarantine,
             "delete" => ModerationAction.Delete,
-            _ => throw new OperationBindingException(new OperationHttpResult(
-                StatusCodes.Status400BadRequest,
-                new JsonResponseBody(
+            _ => throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.InvalidRequest,
+                new OperationDocumentBody(
                     "Moderation action must be approve, reject, quarantine, or delete.")))
         };
     }

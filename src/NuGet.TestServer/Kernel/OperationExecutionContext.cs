@@ -43,14 +43,51 @@ internal sealed class OperationExecutionContext
     /// The protocol-compatible response an owner rendered for the current request.
     /// Kernel error policy is used when an owner does not attach one.
     /// </summary>
-    public OperationHttpResult? Result { get; private set; }
+    public OperationResult? Result { get; private set; }
 
     public static OperationExecutionContext CreateDetached() => new("detached");
 
-    public void Complete(OperationHttpResult result)
+    public void Complete(OperationResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         Result = result;
+    }
+}
+
+/// <summary>
+/// The kernel-internal ambient execution for the operation currently being dispatched.
+/// Capability implementations use it to resolve kernel-issued content handles, so an
+/// extension never needs the execution context to move bounded content.
+/// </summary>
+internal static class OperationExecutionScope
+{
+    private static readonly AsyncLocal<OperationExecutionContext?> CurrentExecution = new();
+
+    public static OperationExecutionContext? Current => CurrentExecution.Value;
+
+    public static OperationExecutionContext Required =>
+        CurrentExecution.Value ?? throw new InvalidOperationException(
+            "No kernel operation execution is active on this call.");
+
+    public static IDisposable Enter(OperationExecutionContext execution)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        var previous = CurrentExecution.Value;
+        CurrentExecution.Value = execution;
+        return new Scope(previous);
+    }
+
+    private sealed class Scope(OperationExecutionContext? previous) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                CurrentExecution.Value = previous;
+            }
+        }
     }
 }
 

@@ -233,7 +233,7 @@ internal static class ProtocolEndpoints
                 new GetPackageHashRequest(package));
         }
 
-        return EndpointInvocation.Result(new OperationHttpResult(StatusCodes.Status404NotFound));
+        return EndpointInvocation.Result(new OperationResult(OperationResultStatus.NotFound));
     }
 
     internal static string NormalizeVersion(string version) =>

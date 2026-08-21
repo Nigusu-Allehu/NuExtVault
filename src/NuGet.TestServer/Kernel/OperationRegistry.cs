@@ -44,7 +44,7 @@ internal sealed class OperationRegistry
     }
 }
 
-internal sealed class OperationRegistryBuilder
+internal sealed class OperationRegistryBuilder : IOperationOwnerRegistry
 {
     private readonly List<PendingRegistration> _registrations = [];
 
@@ -62,6 +62,10 @@ internal sealed class OperationRegistryBuilder
             (request, context, token) => InvokeAsync(owner, request, context, token)));
         return this;
     }
+
+    IOperationOwnerRegistry IOperationOwnerRegistry.Register<TRequest, TResponse>(
+        string extensionId,
+        IOperationOwner<TRequest, TResponse> owner) => Register(extensionId, owner);
 
     public OperationRegistry Build(
         ResolvedExtensionGraph graph,

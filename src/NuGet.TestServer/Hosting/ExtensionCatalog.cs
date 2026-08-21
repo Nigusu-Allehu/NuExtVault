@@ -10,55 +10,6 @@ using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Hosting;
 
-internal sealed record ExtensionVersion(int Major, int Minor, int Patch) :
-    IComparable<ExtensionVersion>
-{
-    public int CompareTo(ExtensionVersion? other)
-    {
-        if (other is null)
-        {
-            return 1;
-        }
-
-        var major = Major.CompareTo(other.Major);
-        if (major != 0)
-        {
-            return major;
-        }
-
-        var minor = Minor.CompareTo(other.Minor);
-        return minor != 0 ? minor : Patch.CompareTo(other.Patch);
-    }
-
-    public override string ToString() => $"{Major}.{Minor}.{Patch}";
-}
-
-internal sealed record ExtensionVersionRange(ExtensionVersion Minimum, ExtensionVersion Maximum)
-{
-    public static ExtensionVersionRange Major(int major) =>
-        new(new ExtensionVersion(major, 0, 0), new ExtensionVersion(major + 1, 0, 0));
-
-    public bool Contains(ExtensionVersion version) =>
-        version.CompareTo(Minimum) >= 0 && version.CompareTo(Maximum) < 0;
-
-    public override string ToString() => $"[{Minimum},{Maximum})";
-}
-
-internal sealed record ExtensionDependency(
-    string ExtensionId,
-    ExtensionVersionRange VersionRange);
-
-internal sealed record ExtensionManifest(
-    int SchemaVersion,
-    string Id,
-    ExtensionVersion Version,
-    ExtensionVersionRange HostCompatibility,
-    ImmutableArray<ExtensionDependency> Dependencies,
-    ImmutableArray<string> Operations,
-    ImmutableArray<EndpointDescriptor> Endpoints,
-    ImmutableArray<ServiceResourceContribution> Resources,
-    ImmutableArray<CapabilityRequest> RequestedCapabilities);
-
 internal sealed record ResolvedOperation(string OperationId, string ExtensionId);
 
 /// <summary>
@@ -802,7 +753,10 @@ internal static class BuiltInExtensionCatalog
                     "/v3/vulnerabilities/index.json",
                     order: 70)
             ],
-            capabilities: []),
+            capabilities:
+            [
+                Required(BuiltInCapabilityNames.VulnerabilityStateRead)
+            ]),
         Manifest(
             BuiltInExtensionIds.TestControl,
             dependencies: [Dependency(BuiltInExtensionIds.Publication)],
@@ -845,15 +799,15 @@ internal static class BuiltInExtensionCatalog
     public static ExtensionCatalog Instance { get; } = new(Manifests);
 
     /// <summary>
-    /// Creates a catalog that also contains separately compiled contributions. Adding a
-    /// route requires a descriptor, a binder, and an owner; it never requires a change
-    /// to kernel routing source.
+    /// Creates a catalog that also contains separately compiled modules. Adding a route
+    /// requires a descriptor, a binder, and an owner in the module; it never requires a
+    /// change to kernel routing, composition, or catalog source.
     /// </summary>
-    public static ExtensionCatalog CreateWith(IEnumerable<ExtensionContribution> contributions)
+    public static ExtensionCatalog CreateWith(IEnumerable<IExtensionModule> modules)
     {
-        ArgumentNullException.ThrowIfNull(contributions);
+        ArgumentNullException.ThrowIfNull(modules);
         return new ExtensionCatalog(
-            Manifests.Concat(contributions.Select(contribution => contribution.Manifest)));
+            Manifests.Concat(modules.Select(module => module.Contribution.Manifest)));
     }
 
     private static ExtensionManifest Manifest(

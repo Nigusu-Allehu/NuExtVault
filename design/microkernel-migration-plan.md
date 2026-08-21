@@ -7,12 +7,19 @@ proposal and explicit approval under `AGENTS.md`.
 
 Implementation status: Steps 1 through 11 are implemented through merged PR #62 and
 pass Windows, Ubuntu, and macOS CI. Step 11A generates every active route from
-validated, startup-frozen endpoint descriptors and is implemented but not yet merged.
-The old Step 12 is paused. Steps 11A through 11D
+validated, startup-frozen endpoint descriptors and is merged through PR #65. Step 11B
+projects absolute URLs in the kernel from typed route references and is merged through
+PR #67. Step 11C moves the transport-neutral extension contracts into
+`NuGet.TestServer.Extensions.Abstractions`, proves closed-world composition with a
+separately compiled conformance module, and enforces the architecture fitness gates; it
+is implemented but not yet merged. The old Step 12 is paused. Steps 11A through 11D
 are blocking prerequisites added without renumbering the existing tracker issues.
 
-The implementation is currently a closed built-in modular system, not yet a
-genuinely independently loadable extension platform.
+The implementation is currently a closed built-in modular system for discovery and
+loading, but composition itself is no longer closed: a module compiled against the
+extension abstractions alone contributes a route, an operation, a resource, and a
+requested capability with no kernel source change. Filesystem discovery, assembly load
+contexts, and SDK publication remain out of scope.
 
 Target architecture:
 [`design/microkernel-extension-architecture.md`](../design/microkernel-extension-architecture.md).
@@ -455,6 +462,10 @@ contracts use route references.
 
 ### Step 11C: Prove closed-world composition and enforce fitness gates
 
+**Status:** Implemented. `tests/NuGet.TestServer.RouteFixture` now references only
+`src/NuGet.TestServer.Extensions.Abstractions` and contributes `/flavors/index.json`
+through `IExtensionModule`.
+
 **Goal:** Demonstrate composition independently of built-in registration before more
 large extraction or SDK work.
 
@@ -469,6 +480,29 @@ large extraction or SDK work.
   rendering result; reach zero kernel-specific rendering escapes.
 - Canonicalize capability names across code, manifests, tests, and documentation.
 - Decompose any owner-shaped capability before proceeding.
+
+**Implemented shape:**
+
+- The transport-neutral contracts a module needs moved into the contract assembly:
+  `EndpointDescriptor` and its binding surface, `ExtensionManifest`,
+  `ExtensionSelection`, `CapabilityRequest`, `IOperationOwnerRegistry`,
+  `IExtensionCapabilities`, `IExtensionModule`, and `ExtensionModuleContribution`.
+- `OperationHttpResult` is gone. `OperationResult` is one immutable, versioned,
+  transport-neutral rendering contract with semantic outcomes; the kernel is the only
+  component that maps an outcome onto an HTTP status code and serializes a body.
+- Owners attach a rendering to `OperationResponse<T>`, so the official Control and
+  Vulnerabilities owners no longer take `OperationExecutionContext`. Content moves
+  through kernel-issued `StreamHandle` values resolved inside the kernel.
+- `OperationFamily` is an open value, so a module declares its own family
+  (`Contoso.Flavors`) instead of borrowing a built-in one.
+- Extension-facing capabilities were decomposed: `IPackageControlCapability` and
+  `IKernelInstrumentationControlCapability` now exchange abstraction documents and
+  stream handles, and the kernel-internal fixture surfaces
+  (`IPackageFixtureCapability`, `IKernelInstrumentationFixtureCapability`) keep the
+  programmatic test host working. `IVulnerabilityCatalogCapability` replaces the
+  vulnerability owner's direct snapshot access.
+- `host.clock.read` (`IHostClockCapability`) is the narrow, serializable kernel
+  capability the conformance module requests and the broker grants or denies.
 
 **Tests first:**
 

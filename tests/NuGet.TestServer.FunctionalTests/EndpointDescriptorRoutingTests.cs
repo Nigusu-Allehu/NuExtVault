@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using NuGet.TestServer.Authentication;
+using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.RouteFixture;
@@ -258,20 +259,5 @@ public sealed class EndpointDescriptorRoutingTests
         Assert.Equal(HttpStatusCode.InternalServerError, empty.StatusCode);
     }
 
-    private static async Task<NuGetTestServerHost> StartWithFlavorsAsync()
-    {
-        var profile = ServerProfiles.Embedded with
-        {
-            Extensions =
-            [
-                .. ServerProfiles.Embedded.Extensions,
-                FlavorsExtension.Contribution.Selection
-            ]
-        };
-        var composition = ServerComposition.Create(
-            profile,
-            authentication: AuthenticationConfiguration.Anonymous,
-            contributions: [FlavorsExtension.Contribution]);
-        return await NuGetTestServerHost.StartCompositionAsync(composition, CancellationToken.None);
-    }
+    private static Task<NuGetTestServerHost> StartWithFlavorsAsync() => FlavorsHost.StartAsync();
 }

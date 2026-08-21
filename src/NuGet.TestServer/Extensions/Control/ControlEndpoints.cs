@@ -1,9 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
-using NuGet.TestServer.Faults;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Routing;
-using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Extensions.Control;
 
@@ -94,9 +91,9 @@ internal static class ControlEndpoints
                         OperationIds.ControlUpdatePackageMetadata,
                         new UpdatePackageMetadataRequest(
                             ReadIdentity(request),
-                            CreateMetadataDocument(
-                                await request.ReadRequiredJsonAsync<PackageRepositoryMetadata>(
-                                    token)))))
+                            await request
+                                .ReadRequiredJsonAsync<PackageRepositoryMetadataDocument>(
+                                    token))))
         },
         Simple<GetRequestsRequest, GetRequestsResponse>(
             "control.requests.list",
@@ -132,8 +129,8 @@ internal static class ControlEndpoints
             Handler = EndpointHandler.Create(async (request, token) =>
                 EndpointInvocation.Operation<AddFaultRequest, AddFaultResponse>(
                     OperationIds.ControlAddFault,
-                    new AddFaultRequest(ControlOperations.CreateFaultDocument(
-                        await request.ReadRequiredJsonAsync<FaultRule>(token)))))
+                    new AddFaultRequest(CreateFaultDocument(
+                        await request.ReadRequiredJsonAsync<ControlFaultRuleRequest>(token)))))
         },
         Simple<ClearFaultsRequest, ClearFaultsResponse>(
             "control.faults.clear",
@@ -189,6 +186,15 @@ internal static class ControlEndpoints
     private static PackageIdentity ReadIdentity(EndpointRequest request) =>
         new(request.GetRoute("id"), request.GetRoute("version"));
 
+    private static FaultRuleDocument CreateFaultDocument(ControlFaultRuleRequest rule) =>
+        new(
+            rule.Id,
+            rule.Method ?? string.Empty,
+            rule.PathContains ?? string.Empty,
+            rule.StatusCode,
+            (long)rule.Delay.TotalMilliseconds,
+            rule.RemainingMatches);
+
     private static async ValueTask<EndpointInvocation> BindControlPackageAsync(
         EndpointRequest request,
         CancellationToken token)
@@ -234,9 +240,9 @@ internal static class ControlEndpoints
         }
         catch (FormatException)
         {
-            throw new OperationBindingException(new OperationHttpResult(
-                StatusCodes.Status400BadRequest,
-                new ProblemResponseBody("Package content must be valid base64.")));
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.InvalidRequest,
+                new OperationProblemBody("Package content must be valid base64.")));
         }
 
         return EndpointInvocation.Operation<AddControlPackageRequest, AddControlPackageResponse>(
@@ -246,35 +252,31 @@ internal static class ControlEndpoints
     }
 
     private static OperationBindingException LegacyLimitExceeded(long legacyPackageLimit) =>
-        new(new OperationHttpResult(
-            StatusCodes.Status413PayloadTooLarge,
-            new ProblemResponseBody(
+        new(new OperationResult(
+            OperationResultStatus.PayloadTooLarge,
+            new OperationProblemBody(
                 $"Legacy JSON control uploads are limited to {legacyPackageLimit} decoded " +
                 "bytes. Use 'application/octet-stream' for larger packages.")));
 
     private static OperationBindingException InvalidJson() =>
-        new(new OperationHttpResult(
-            StatusCodes.Status400BadRequest,
-            new ProblemResponseBody(
+        new(new OperationResult(
+            OperationResultStatus.InvalidRequest,
+            new OperationProblemBody(
                 "The package request must contain valid JSON and base64 content.")));
-
-    private static PackageRepositoryMetadataDocument CreateMetadataDocument(
-        PackageRepositoryMetadata metadata) =>
-        new(
-            metadata.Owners is null ? default : [.. metadata.Owners],
-            metadata.Downloads,
-            metadata.Verified,
-            metadata.Deprecation is { } deprecation
-                ? new PackageDeprecationDocument(
-                    deprecation.Reasons is null ? default : [.. deprecation.Reasons],
-                    deprecation.Message,
-                    deprecation.AlternatePackage is { } alternate
-                        ? new PackageAlternateDocument(alternate.Id, alternate.Range)
-                        : null)
-                : null);
 }
 
 /// <summary>
 /// The legacy JSON control upload payload.
 /// </summary>
 internal sealed record PackageContentRequest(string? Content);
+
+/// <summary>
+/// The legacy fault-rule wire shape accepted by <c>POST /__test/faults</c>.
+/// </summary>
+internal sealed record ControlFaultRuleRequest(
+    string Id,
+    string? Method,
+    string? PathContains,
+    int StatusCode,
+    int RemainingMatches,
+    TimeSpan Delay);

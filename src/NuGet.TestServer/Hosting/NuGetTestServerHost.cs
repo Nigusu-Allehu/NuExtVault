@@ -29,9 +29,9 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         {
             var capabilities = application.Services.GetRequiredService<CapabilityBroker>()
                 .ForOwner(BuiltInExtensionIds.TestControl);
-            var packageControl = capabilities.GetRequired<IPackageControlCapability>(
+            var packageControl = capabilities.GetRequired<IPackageFixtureCapability>(
                 BuiltInCapabilityNames.ControlPackagesManage);
-            var instrumentation = capabilities.GetRequired<IKernelInstrumentationControlCapability>(
+            var instrumentation = capabilities.GetRequired<IKernelInstrumentationFixtureCapability>(
                 BuiltInCapabilityNames.ControlInstrumentationManage);
             Packages = new PackageControlClient(packageControl);
             Faults = new FaultControlClient(
@@ -349,11 +349,11 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
 
 public sealed class PackageControlClient
 {
-    private readonly IPackageControlCapability? _capability;
+    private readonly IPackageFixtureCapability? _capability;
     private readonly IPackageStore? _store;
     private readonly PackageSupplyChainService? _supplyChain;
 
-    internal PackageControlClient(IPackageControlCapability capability)
+    internal PackageControlClient(IPackageFixtureCapability capability)
     {
         _capability = capability;
     }
@@ -396,7 +396,7 @@ public sealed class PackageControlClient
 public sealed class FaultControlClient
 {
     private readonly IFaultInjectionCapability? _capability;
-    private readonly IKernelInstrumentationControlCapability? _controlCapability;
+    private readonly IKernelInstrumentationFixtureCapability? _controlCapability;
     private readonly FaultRuleStore? _legacyStore;
 
     internal FaultControlClient(IFaultInjectionCapability? capability)
@@ -404,7 +404,7 @@ public sealed class FaultControlClient
         _capability = capability;
     }
 
-    internal FaultControlClient(IKernelInstrumentationControlCapability capability)
+    internal FaultControlClient(IKernelInstrumentationFixtureCapability capability)
     {
         _controlCapability = capability;
     }
@@ -436,7 +436,7 @@ public sealed class FaultControlClient
         }
 
         var conflict = _controlCapability is not null
-            ? await _controlCapability.TryAddFaultAsync(rule, token)
+            ? await _controlCapability.TryAddFaultRuleAsync(rule, token)
             : await GetCapability().TryAddFaultAsync(rule, token);
         if (conflict is not null)
         {
@@ -466,7 +466,7 @@ public sealed class FaultControlClient
 public sealed class RequestControlClient
 {
     private readonly IRequestRecordingCapability? _capability;
-    private readonly IKernelInstrumentationControlCapability? _controlCapability;
+    private readonly IKernelInstrumentationFixtureCapability? _controlCapability;
     private readonly RequestRecorder? _legacyRecorder;
 
     internal RequestControlClient(IRequestRecordingCapability? capability)
@@ -474,7 +474,7 @@ public sealed class RequestControlClient
         _capability = capability;
     }
 
-    internal RequestControlClient(IKernelInstrumentationControlCapability capability)
+    internal RequestControlClient(IKernelInstrumentationFixtureCapability capability)
     {
         _controlCapability = capability;
     }
@@ -494,7 +494,7 @@ public sealed class RequestControlClient
         }
 
         return _controlCapability is not null
-            ? _controlCapability.GetRequestsAsync(token)
+            ? _controlCapability.GetRequestRecordsAsync(token)
             : GetCapability().GetRequestsAsync(token);
     }
 

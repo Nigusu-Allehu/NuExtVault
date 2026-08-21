@@ -1,86 +1,87 @@
 using NuGet.TestServer.Extensions.Abstractions;
-using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
-using NuGet.TestServer.Packages;
 using NuGet.Versioning;
 
 namespace NuGet.TestServer.Extensions.Control;
 
 /// <summary>
-/// Test-control owners. They wrap the existing package, fault, and request stores.
+/// Test-control owners. They reach kernel state only through action-scoped
+/// capabilities, and they describe responses with the transport-neutral rendering
+/// contract. They never see an execution context, an HTTP request context, a status
+/// code, or a serializer.
 /// </summary>
 internal sealed class ControlOperations(
     IPackageControlCapability packages,
     IKernelInstrumentationControlCapability instrumentation)
 {
-    public void Register(OperationRegistryBuilder builder)
+    public void Register(IOperationOwnerRegistry registry)
     {
-        ArgumentNullException.ThrowIfNull(builder);
-        builder.Register(
+        ArgumentNullException.ThrowIfNull(registry);
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<GetControlStateRequest, GetControlStateResponse>(
+            OperationOwner.Create<GetControlStateRequest, GetControlStateResponse>(
                 OperationIds.ControlGetState,
                 GetStateAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<ResetControlStateRequest, ResetControlStateResponse>(
+            OperationOwner.Create<ResetControlStateRequest, ResetControlStateResponse>(
                 OperationIds.ControlReset,
                 ResetAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<GetControlPackagesRequest, GetControlPackagesResponse>(
+            OperationOwner.Create<GetControlPackagesRequest, GetControlPackagesResponse>(
                 OperationIds.ControlGetPackages,
                 GetPackagesAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<AddControlPackageRequest, AddControlPackageResponse>(
+            OperationOwner.Create<AddControlPackageRequest, AddControlPackageResponse>(
                 OperationIds.ControlAddPackage,
                 AddPackageAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<DeleteControlPackageRequest, DeleteControlPackageResponse>(
+            OperationOwner.Create<DeleteControlPackageRequest, DeleteControlPackageResponse>(
                 OperationIds.ControlDeletePackage,
                 DeletePackageAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<RelistControlPackageRequest, RelistControlPackageResponse>(
+            OperationOwner.Create<RelistControlPackageRequest, RelistControlPackageResponse>(
                 OperationIds.ControlRelistPackage,
                 RelistPackageAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<UnlistControlPackageRequest, UnlistControlPackageResponse>(
+            OperationOwner.Create<UnlistControlPackageRequest, UnlistControlPackageResponse>(
                 OperationIds.ControlUnlistPackage,
                 UnlistPackageAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<UpdatePackageMetadataRequest, UpdatePackageMetadataResponse>(
+            OperationOwner.Create<UpdatePackageMetadataRequest, UpdatePackageMetadataResponse>(
                 OperationIds.ControlUpdatePackageMetadata,
                 UpdateMetadataAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<GetRequestsRequest, GetRequestsResponse>(
+            OperationOwner.Create<GetRequestsRequest, GetRequestsResponse>(
                 OperationIds.ControlGetRequests,
                 GetRequestsAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<ClearRequestsRequest, ClearRequestsResponse>(
+            OperationOwner.Create<ClearRequestsRequest, ClearRequestsResponse>(
                 OperationIds.ControlClearRequests,
                 ClearRequestsAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<GetFaultsRequest, GetFaultsResponse>(
+            OperationOwner.Create<GetFaultsRequest, GetFaultsResponse>(
                 OperationIds.ControlGetFaults,
                 GetFaultsAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<AddFaultRequest, AddFaultResponse>(
+            OperationOwner.Create<AddFaultRequest, AddFaultResponse>(
                 OperationIds.ControlAddFault,
                 AddFaultAsync));
-        builder.Register(
+        registry.Register(
             BuiltInExtensionIds.TestControl,
-            new DelegateOperationOwner<ClearFaultsRequest, ClearFaultsResponse>(
+            OperationOwner.Create<ClearFaultsRequest, ClearFaultsResponse>(
                 OperationIds.ControlClearFaults,
                 ClearFaultsAsync));
     }
@@ -93,9 +94,34 @@ internal sealed class ControlOperations(
         published = summary.Published
     };
 
+    /// <summary>
+    /// The legacy fault-rule wire shape. The typed contract stays canonical; this is
+    /// only the document the kernel serializes for compatibility.
+    /// </summary>
+    internal static object RenderFault(FaultRuleDocument fault) => new
+    {
+        id = fault.Id,
+        method = string.IsNullOrEmpty(fault.Method) ? null : fault.Method,
+        pathContains = string.IsNullOrEmpty(fault.RoutePattern) ? null : fault.RoutePattern,
+        statusCode = fault.StatusCode,
+        remainingMatches = fault.RemainingMatches ?? 0,
+        delay = TimeSpan.FromMilliseconds(fault.DelayMilliseconds)
+    };
+
+    internal static object RenderRequest(RequestRecordDocument record) => new
+    {
+        sequence = record.Sequence,
+        timestamp = record.OccurredAt,
+        method = record.Method,
+        path = record.Route,
+        statusCode = record.StatusCode,
+        durationMilliseconds = record.ElapsedMilliseconds,
+        faultRuleId = record.FaultRuleId,
+        authenticatedUser = record.Identity
+    };
+
     private async ValueTask<OperationResponse<GetControlStateResponse>> GetStateAsync(
         GetControlStateRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         var storedPackages = await packages.GetAllAsync(token);
@@ -108,9 +134,9 @@ internal sealed class ControlOperations(
             requestRecords.Count,
             instrumentation.RequestCapacity,
             instrumentation.EvictedRequestCount);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new
+        return OperationResponse<GetControlStateResponse>.Success(
+            response,
+            OperationResult.Ok(new
             {
                 packageCount = response.PackageCount,
                 faultCount = response.FaultCount,
@@ -118,56 +144,46 @@ internal sealed class ControlOperations(
                 requestCount = response.RequestCount,
                 requestCapacity = response.RequestCapacity,
                 evictedRequestCount = response.EvictedRequestCount
-            })));
-        return OperationResponse<GetControlStateResponse>.Success(response);
+            }));
     }
 
     private async ValueTask<OperationResponse<ResetControlStateResponse>> ResetAsync(
         ResetControlStateRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         await packages.ResetAsync(token);
         await instrumentation.ClearFaultsAsync(token);
         await instrumentation.ClearRequestsAsync(token);
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
-        return OperationResponse<ResetControlStateResponse>.Success(new ResetControlStateResponse());
+        return OperationResponse<ResetControlStateResponse>.Success(
+            new ResetControlStateResponse(),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<GetControlPackagesResponse>> GetPackagesAsync(
         GetControlPackagesRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
-        var response = new GetControlPackagesResponse(
-            [.. (await packages.GetAllAsync(token)).Select(CreateSummary)]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(response.Packages.Select(RenderSummary).ToArray())));
-        return OperationResponse<GetControlPackagesResponse>.Success(response);
+        var response = new GetControlPackagesResponse([.. await packages.GetAllAsync(token)]);
+        return OperationResponse<GetControlPackagesResponse>.Success(
+            response,
+            OperationResult.Ok(response.Packages.Select(RenderSummary).ToArray()));
     }
 
     private async ValueTask<OperationResponse<AddControlPackageResponse>> AddPackageAsync(
         AddControlPackageRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
-        var content = context.Content.Resolve(request.Content);
-        var summary = CreateSummary(await packages.AddContentAsync(
-            content.Stream ?? new MemoryStream(content.Bytes!.Value.ToArray(), writable: false),
-            token));
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status201Created,
-            new JsonResponseBody(RenderSummary(summary)),
-            $"/__test/packages/{Uri.EscapeDataString(summary.Package.Id)}/" +
-            $"{summary.Package.Version}"));
+        var summary = await packages.AddContentAsync(request.Content, token);
         return OperationResponse<AddControlPackageResponse>.Success(
-            new AddControlPackageResponse(summary));
+            new AddControlPackageResponse(summary),
+            OperationResult.Created(
+                RenderSummary(summary),
+                $"/__test/packages/{Uri.EscapeDataString(summary.Package.Id)}/" +
+                $"{summary.Package.Version}"));
     }
 
     private async ValueTask<OperationResponse<DeleteControlPackageResponse>> DeletePackageAsync(
         DeleteControlPackageRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         if (!await packages.DeleteAsync(request.Package.Id, request.Package.Version, token))
@@ -175,14 +191,13 @@ internal sealed class ControlOperations(
             return OperationResponse<DeleteControlPackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<DeleteControlPackageResponse>.Success(
-            new DeleteControlPackageResponse(request.Package));
+            new DeleteControlPackageResponse(request.Package),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<RelistControlPackageResponse>> RelistPackageAsync(
         RelistControlPackageRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         if (!await packages.SetListedAsync(
@@ -194,14 +209,13 @@ internal sealed class ControlOperations(
             return OperationResponse<RelistControlPackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<RelistControlPackageResponse>.Success(
-            new RelistControlPackageResponse(request.Package));
+            new RelistControlPackageResponse(request.Package),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<UnlistControlPackageResponse>> UnlistPackageAsync(
         UnlistControlPackageRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         if (!await packages.SetListedAsync(
@@ -213,150 +227,93 @@ internal sealed class ControlOperations(
             return OperationResponse<UnlistControlPackageResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<UnlistControlPackageResponse>.Success(
-            new UnlistControlPackageResponse(request.Package));
+            new UnlistControlPackageResponse(request.Package),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<UpdatePackageMetadataResponse>> UpdateMetadataAsync(
         UpdatePackageMetadataRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         var validationError = Validate(request.Metadata);
         if (validationError is not null)
         {
             return OperationResponse<UpdatePackageMetadataResponse>.Failure(
-                OperationErrorPolicy.InvalidRequest(validationError));
+                OperationErrors.InvalidRequest(validationError));
         }
 
-        var metadata = new PackageRepositoryMetadata(
-            [.. request.Metadata.Owners],
-            request.Metadata.Downloads,
-            request.Metadata.Verified,
-            request.Metadata.Deprecation is { } deprecation
-                ? new PackageDeprecation(
-                    [.. deprecation.Reasons],
-                    deprecation.Message!,
-                    deprecation.AlternatePackage is { } alternate
-                        ? new AlternatePackage(alternate.Id, alternate.Range)
-                        : null)
-                : null);
         if (!await packages.SetRepositoryMetadataAsync(
                 request.Package.Id,
                 request.Package.Version,
-                metadata,
+                request.Metadata,
                 token))
         {
             return OperationResponse<UpdatePackageMetadataResponse>.Failure(NotFound(request.Package));
         }
 
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
         return OperationResponse<UpdatePackageMetadataResponse>.Success(
-            new UpdatePackageMetadataResponse(request.Package));
+            new UpdatePackageMetadataResponse(request.Package),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<GetRequestsResponse>> GetRequestsAsync(
         GetRequestsRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
-        var records = await instrumentation.GetRequestsAsync(token);
-        var response = new GetRequestsResponse(
-            [
-                .. records.Select(record => new RequestRecordDocument(
-                    record.Sequence,
-                    record.Timestamp,
-                    record.Method,
-                    record.Path,
-                    record.StatusCode,
-                    record.DurationMilliseconds,
-                    record.FaultRuleId,
-                    record.AuthenticatedUser))
-            ]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(records)));
-        return OperationResponse<GetRequestsResponse>.Success(response);
+        var response = new GetRequestsResponse([.. await instrumentation.GetRequestsAsync(token)]);
+        return OperationResponse<GetRequestsResponse>.Success(
+            response,
+            OperationResult.Ok(response.Requests.Select(RenderRequest).ToArray()));
     }
 
     private async ValueTask<OperationResponse<ClearRequestsResponse>> ClearRequestsAsync(
         ClearRequestsRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         await instrumentation.ClearRequestsAsync(token);
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
-        return OperationResponse<ClearRequestsResponse>.Success(new ClearRequestsResponse());
+        return OperationResponse<ClearRequestsResponse>.Success(
+            new ClearRequestsResponse(),
+            OperationResult.NoContent());
     }
 
     private async ValueTask<OperationResponse<GetFaultsResponse>> GetFaultsAsync(
         GetFaultsRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
-        var rules = await instrumentation.GetFaultsAsync(token);
-        var response = new GetFaultsResponse([.. rules.Select(CreateFaultDocument)]);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(rules)));
-        return OperationResponse<GetFaultsResponse>.Success(response);
+        var response = new GetFaultsResponse([.. await instrumentation.GetFaultsAsync(token)]);
+        return OperationResponse<GetFaultsResponse>.Success(
+            response,
+            OperationResult.Ok(response.Faults.Select(RenderFault).ToArray()));
     }
 
     private async ValueTask<OperationResponse<AddFaultResponse>> AddFaultAsync(
         AddFaultRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
-        var rule = CreateFaultRule(request.Fault);
-        var conflict = await instrumentation.TryAddFaultAsync(rule, token);
+        var conflict = await instrumentation.TryAddFaultAsync(request.Fault, token);
         if (conflict is not null)
         {
             return OperationResponse<AddFaultResponse>.Failure(
-                OperationErrorPolicy.Conflict(conflict));
+                OperationErrors.Conflict(conflict));
         }
 
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status201Created,
-            new JsonResponseBody(rule),
-            $"/__test/faults/{Uri.EscapeDataString(rule.Id)}"));
         return OperationResponse<AddFaultResponse>.Success(
-            new AddFaultResponse(CreateFaultDocument(rule)));
+            new AddFaultResponse(request.Fault),
+            OperationResult.Created(
+                RenderFault(request.Fault),
+                $"/__test/faults/{Uri.EscapeDataString(request.Fault.Id)}"));
     }
 
     private async ValueTask<OperationResponse<ClearFaultsResponse>> ClearFaultsAsync(
         ClearFaultsRequest request,
-        OperationExecutionContext context,
         CancellationToken token)
     {
         await instrumentation.ClearFaultsAsync(token);
-        context.Complete(new OperationHttpResult(StatusCodes.Status204NoContent));
-        return OperationResponse<ClearFaultsResponse>.Success(new ClearFaultsResponse());
+        return OperationResponse<ClearFaultsResponse>.Success(
+            new ClearFaultsResponse(),
+            OperationResult.NoContent());
     }
-
-    internal static FaultRuleDocument CreateFaultDocument(FaultRule rule) =>
-        new(
-            rule.Id,
-            rule.Method ?? string.Empty,
-            rule.PathContains ?? string.Empty,
-            (int)rule.StatusCode,
-            (long)rule.Delay.TotalMilliseconds,
-            rule.RemainingMatches);
-
-    internal static FaultRule CreateFaultRule(FaultRuleDocument document) =>
-        new(
-            document.Id,
-            string.IsNullOrEmpty(document.Method) ? null : document.Method,
-            string.IsNullOrEmpty(document.RoutePattern) ? null : document.RoutePattern,
-            (System.Net.HttpStatusCode)document.StatusCode,
-            document.RemainingMatches ?? 0,
-            TimeSpan.FromMilliseconds(document.DelayMilliseconds));
-
-    private static PackageSummaryDocument CreateSummary(ControlPackageMetadata package) =>
-        new(
-            new PackageIdentity(package.Id, package.NormalizedVersion),
-            package.IsListed,
-            package.Published);
 
     private static string? Validate(PackageRepositoryMetadataDocument metadata)
     {
@@ -395,6 +352,6 @@ internal sealed class ControlOperations(
     }
 
     private static OperationError NotFound(PackageIdentity package) =>
-        OperationErrorPolicy.NotFound(
+        OperationErrors.NotFound(
             $"Package '{package.Id}' version '{package.Version}' does not exist.");
 }

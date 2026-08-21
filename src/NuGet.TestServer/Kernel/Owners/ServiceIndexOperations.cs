@@ -26,9 +26,9 @@ internal sealed class ServiceIndexOperations(ServiceIndexResourceRegistry resour
     {
         token.ThrowIfCancellationRequested();
         var response = new GetServiceIndexResponse("3.0.0", resources.Resources);
-        context.Complete(new OperationHttpResult(
-            StatusCodes.Status200OK,
-            new JsonResponseBody(new Dictionary<string, object?>
+        context.Complete(new OperationResult(
+            OperationResultStatus.Ok,
+            new OperationDocumentBody(new Dictionary<string, object?>
             {
                 ["version"] = response.Version,
                 ["resources"] = response.Resources.Select(CreateDocument).ToArray()
