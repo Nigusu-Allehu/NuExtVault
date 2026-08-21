@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\NuGet.TestServer\NuGet.TestServer.csproj" />
     <ProjectReference Include="..\..\src\NuGet.TestServer.Cli\NuGet.TestServer.Cli.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.RouteFixture\NuGet.TestServer.RouteFixture.csproj" />
   </ItemGroup>
 
 </Project>

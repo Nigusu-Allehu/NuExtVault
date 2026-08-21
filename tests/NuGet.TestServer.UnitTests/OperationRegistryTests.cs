@@ -196,6 +196,8 @@ public sealed class OperationRegistryTests
             ],
             [],
             [],
+            [],
+            [],
             "profile=test\n");
 
     private static DelegateOperationOwner<SearchRequest, SearchResponse> SearchOwner() =>

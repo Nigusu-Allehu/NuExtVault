@@ -1,68 +1,93 @@
-using NuGet.TestServer.Authentication;
+using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Hosting.Endpoints;
 
 /// <summary>
-/// Moderation and operational routes. Handlers bind inputs and dispatch through the
-/// operation registry.
+/// Moderation endpoint descriptors. Binding failures return protocol-compatible client
+/// errors before any moderation operation is dispatched.
 /// </summary>
 internal static class ModerationEndpoints
 {
-    public static void Map(WebApplication app)
-    {
-        app.MapPost(
-                "/__admin/packages/{id}/{version}/{action}",
-                (
-                    HttpContext context,
-                    string id,
-                    string version,
-                    string action,
-                    string? reason,
-                    OperationGateway gateway,
-                    CancellationToken token) =>
-                    gateway.ExecuteAsync<ModeratePackageRequest, ModeratePackageResponse>(
-                        context,
-                        OperationIds.ModerationModerate,
-                        _ => ValueTask.FromResult(new ModeratePackageRequest(
-                            new PackageIdentity(id, version),
-                            BindAction(action, reason),
-                            context.User.Identity?.Name ?? "administrator",
-                            reason!)),
-                        token))
-            .WithMetadata(NuGetAccessRequirement.Admin)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.ModerationModerate));
-
-        app.MapGet(
-                "/__admin/supply-chain/audit",
-                (HttpContext context, OperationGateway gateway, CancellationToken token) =>
-                    gateway.ExecuteAsync<GetModerationAuditRequest, GetModerationAuditResponse>(
-                        context,
-                        OperationIds.ModerationGetAudit,
-                        new GetModerationAuditRequest(null, int.MaxValue),
-                        token))
-            .WithMetadata(NuGetAccessRequirement.Admin)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.ModerationGetAudit));
-
-        app.MapGet(
-                "/__admin/packages/{id}/{version}/validations",
-                (
-                    HttpContext context,
-                    string id,
-                    string version,
-                    OperationGateway gateway,
-                    CancellationToken token) =>
-                    gateway.ExecuteAsync<
-                        GetPackageValidationsRequest,
-                        GetPackageValidationsResponse>(
-                        context,
-                        OperationIds.ModerationGetValidations,
-                        new GetPackageValidationsRequest(new PackageIdentity(id, version)),
-                        token))
-            .WithMetadata(NuGetAccessRequirement.Admin)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.ModerationGetValidations));
-    }
+    public static ImmutableArray<EndpointDescriptor> Descriptors { get; } =
+    [
+        new()
+        {
+            Name = "moderation.moderate",
+            Methods = ["POST"],
+            PathTemplate = "/__admin/packages/{id}/{version}/{action}",
+            RouteParameters =
+            [
+                new EndpointParameter("id"),
+                new EndpointParameter("version"),
+                new EndpointParameter("action")
+            ],
+            QueryParameters = [new EndpointParameter("reason")],
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Admin),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<ModeratePackageRequest, ModeratePackageResponse>(
+                    OperationIds.ModerationModerate)
+            ],
+            Handler = EndpointHandler.Create<ModeratePackageRequest, ModeratePackageResponse>(
+                OperationIds.ModerationModerate,
+                request =>
+                {
+                    var reason = request.GetQuery("reason");
+                    return new ModeratePackageRequest(
+                        new PackageIdentity(request.GetRoute("id"), request.GetRoute("version")),
+                        BindAction(request.GetRoute("action"), reason),
+                        request.Caller.IdentityOr("administrator"),
+                        reason!);
+                })
+        },
+        new()
+        {
+            Name = "moderation.audit",
+            Methods = ["GET"],
+            PathTemplate = "/__admin/supply-chain/audit",
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Admin),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<GetModerationAuditRequest, GetModerationAuditResponse>(
+                    OperationIds.ModerationGetAudit)
+            ],
+            Handler = EndpointHandler.Create<GetModerationAuditRequest, GetModerationAuditResponse>(
+                OperationIds.ModerationGetAudit,
+                _ => new GetModerationAuditRequest(null, int.MaxValue))
+        },
+        new()
+        {
+            Name = "moderation.validations",
+            Methods = ["GET"],
+            PathTemplate = "/__admin/packages/{id}/{version}/validations",
+            RouteParameters =
+            [
+                new EndpointParameter("id"),
+                new EndpointParameter("version")
+            ],
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Admin),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor
+                    .Operation<GetPackageValidationsRequest, GetPackageValidationsResponse>(
+                        OperationIds.ModerationGetValidations)
+            ],
+            Handler = EndpointHandler
+                .Create<GetPackageValidationsRequest, GetPackageValidationsResponse>(
+                    OperationIds.ModerationGetValidations,
+                    request => new GetPackageValidationsRequest(
+                        new PackageIdentity(request.GetRoute("id"), request.GetRoute("version"))))
+        }
+    ];
 
     private static ModerationAction BindAction(string action, string? reason)
     {
@@ -87,54 +112,81 @@ internal static class ModerationEndpoints
     }
 }
 
+/// <summary>
+/// Health and readiness endpoint descriptors owned by the operations extension.
+/// </summary>
 internal static class HealthEndpoints
 {
-    public static void Map(WebApplication app)
-    {
-        app.MapGet(
-                "/health/live",
-                (HttpContext context, OperationGateway gateway, CancellationToken token) =>
-                    Liveness(context, gateway, token))
-            .WithMetadata(NuGetAccessRequirement.Anonymous)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.HealthGetLiveness));
-
-        app.MapGet(
-                "/__test/health",
-                (HttpContext context, OperationGateway gateway, CancellationToken token) =>
-                    Liveness(context, gateway, token))
-            .WithMetadata(NuGetAccessRequirement.Anonymous)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.HealthGetLiveness));
-
-        app.MapGet(
-                "/health/ready",
-                (HttpContext context, OperationGateway gateway, CancellationToken token) =>
-                    gateway.ExecuteAsync<GetReadinessRequest, GetReadinessResponse>(
-                        context,
-                        OperationIds.HealthGetReadiness,
-                        new GetReadinessRequest(),
-                        token))
-            .WithMetadata(NuGetAccessRequirement.Anonymous)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.HealthGetReadiness));
-
-        app.MapGet(
-                "/health/storage",
-                (HttpContext context, OperationGateway gateway, CancellationToken token) =>
-                    gateway.ExecuteAsync<GetStorageHealthRequest, GetStorageHealthResponse>(
-                        context,
-                        OperationIds.HealthGetStorage,
-                        new GetStorageHealthRequest(),
-                        token))
-            .WithMetadata(NuGetAccessRequirement.Control)
-            .WithMetadata(new OperationRouteMetadata(OperationIds.HealthGetStorage));
-    }
-
-    private static Task<IResult> Liveness(
-        HttpContext context,
-        OperationGateway gateway,
-        CancellationToken token) =>
-        gateway.ExecuteAsync<GetLivenessRequest, GetLivenessResponse>(
-            context,
+    private static IEndpointHandler Liveness { get; } =
+        EndpointHandler.Create<GetLivenessRequest, GetLivenessResponse>(
             OperationIds.HealthGetLiveness,
-            new GetLivenessRequest(),
-            token);
+            _ => new GetLivenessRequest());
+
+    public static ImmutableArray<EndpointDescriptor> Descriptors { get; } =
+    [
+        new()
+        {
+            Name = "health.live",
+            Methods = ["GET"],
+            PathTemplate = "/health/live",
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Anonymous),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<GetLivenessRequest, GetLivenessResponse>(
+                    OperationIds.HealthGetLiveness)
+            ],
+            Handler = Liveness
+        },
+        new()
+        {
+            Name = "health.live-legacy",
+            Methods = ["GET"],
+            PathTemplate = "/__test/health",
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Anonymous),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<GetLivenessRequest, GetLivenessResponse>(
+                    OperationIds.HealthGetLiveness)
+            ],
+            Handler = Liveness
+        },
+        new()
+        {
+            Name = "health.ready",
+            Methods = ["GET"],
+            PathTemplate = "/health/ready",
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Anonymous),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<GetReadinessRequest, GetReadinessResponse>(
+                    OperationIds.HealthGetReadiness)
+            ],
+            Handler = EndpointHandler.Create<GetReadinessRequest, GetReadinessResponse>(
+                OperationIds.HealthGetReadiness,
+                _ => new GetReadinessRequest())
+        },
+        new()
+        {
+            Name = "health.storage",
+            Methods = ["GET"],
+            PathTemplate = "/health/storage",
+            Body = EndpointBodyBinding.None,
+            Access = EndpointAccessPolicy.Of(EndpointAccessKind.Control),
+            Limits = EndpointLimits.BodyFree,
+            Operations =
+            [
+                EndpointDescriptor.Operation<GetStorageHealthRequest, GetStorageHealthResponse>(
+                    OperationIds.HealthGetStorage)
+            ],
+            Handler = EndpointHandler.Create<GetStorageHealthRequest, GetStorageHealthResponse>(
+                OperationIds.HealthGetStorage,
+                _ => new GetStorageHealthRequest())
+        }
+    ];
 }

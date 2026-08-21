@@ -6,6 +6,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/NuGet.TestServer.FunctionalTests/NuGet.TestServer.FunctionalTests.csproj" />
+    <Project Path="tests/NuGet.TestServer.RouteFixture/NuGet.TestServer.RouteFixture.csproj" />
     <Project Path="tests/NuGet.TestServer.UnitTests/NuGet.TestServer.UnitTests.csproj" />
   </Folder>
 </Solution>

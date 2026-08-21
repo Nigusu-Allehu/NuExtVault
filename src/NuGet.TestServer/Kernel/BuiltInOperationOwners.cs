@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -18,13 +19,15 @@ internal static class BuiltInOperationOwners
         ResolvedExtensionGraph graph,
         ServiceIndexResourceRegistry resources,
         OfficialExtensionComposition officialExtensions,
-        PackageTransferLimits limits)
+        PackageTransferLimits limits,
+        ImmutableArray<ExtensionContribution> contributions = default)
     {
         ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(officialExtensions);
         ArgumentNullException.ThrowIfNull(limits);
+        contributions = contributions.IsDefault ? [] : contributions;
         var builder = new OperationRegistryBuilder();
         var selected = graph.Extensions
             .Select(extension => extension.Id)
@@ -81,6 +84,13 @@ internal static class BuiltInOperationOwners
                     BuiltInCapabilityNames.OperationsQuery)).Register(builder);
         }
 
-        return builder.Build(graph);
+        foreach (var contribution in contributions
+                     .Where(contribution => selected.Contains(contribution.Manifest.Id))
+                     .OrderBy(contribution => contribution.Manifest.Id, StringComparer.Ordinal))
+        {
+            contribution.RegisterOperations(builder);
+        }
+
+        return builder.Build(graph, ExtensionContribution.CreateContractIndex(contributions));
     }
 }

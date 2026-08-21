@@ -314,6 +314,8 @@ public sealed class OperationDispatcherTests
                 [new ResolvedOperation(operationId ?? SearchOperation.Value, BuiltInExtensionIds.Protocol)],
                 [],
                 [],
+                [],
+                [],
                 "profile=test\n");
             var registry = new OperationRegistryBuilder()
                 .Register(BuiltInExtensionIds.Protocol, owner)

@@ -22,6 +22,7 @@
     <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
     <InternalsVisibleTo Include="NuGet.TestServer.Cli" />
     <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
+    <InternalsVisibleTo Include="NuGet.TestServer.RouteFixture" />
     <InternalsVisibleTo Include="NuGet.TestServer.UnitTests" />
   </ItemGroup>
 
