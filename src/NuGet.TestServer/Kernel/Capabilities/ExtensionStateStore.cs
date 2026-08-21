@@ -7,6 +7,11 @@ using System.Text.RegularExpressions;
 
 namespace NuGet.TestServer.Kernel.Capabilities;
 
+/// <summary>
+/// The version 1 extension state format. It is no longer an active state owner: the
+/// transactional store uses it to adopt records written by earlier builds, to keep the
+/// downgrade mirror current, and to read legacy owner-scoped file sets.
+/// </summary>
 internal sealed partial class ExtensionStateStore
 {
     private readonly string? _root;
@@ -156,6 +161,16 @@ internal sealed partial class ExtensionStateStore
         CancellationToken token,
         long maximumBytes = long.MaxValue)
     {
+        var payload = await ReadRawAsync(ownerId, key, token, maximumBytes);
+        return payload is null ? default : JsonSerializer.Deserialize<T>(payload);
+    }
+
+    public async ValueTask<byte[]?> ReadRawAsync(
+        string ownerId,
+        string key,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue)
+    {
         var path = GetPath(ownerId, key);
         var gate = GetLock(path);
         await gate.WaitAsync(token);
@@ -163,7 +178,7 @@ internal sealed partial class ExtensionStateStore
         {
             if (!File.Exists(path))
             {
-                return default;
+                return null;
             }
 
             byte[] content;
@@ -184,16 +199,7 @@ internal sealed partial class ExtensionStateStore
                     throw new ExtensionStateException("Extension state metadata is invalid.");
                 }
 
-                var payload = Convert.FromBase64String(envelope.Payload);
-                var expected = Convert.FromHexString(envelope.Sha256);
-                var actual = SHA256.HashData(payload);
-                if (!CryptographicOperations.FixedTimeEquals(expected, actual))
-                {
-                    throw new ExtensionStateException(
-                        "Extension state integrity validation failed.");
-                }
-
-                return JsonSerializer.Deserialize<T>(payload);
+                return ReadPayload(envelope);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -218,13 +224,27 @@ internal sealed partial class ExtensionStateStore
         }
     }
 
-    public async ValueTask WriteAsync<T>(
+    public ValueTask WriteAsync<T>(
         string ownerId,
         string key,
         T value,
         CancellationToken token,
+        long maximumBytes = long.MaxValue) =>
+        WriteRawAsync(
+            ownerId,
+            key,
+            JsonSerializer.SerializeToUtf8Bytes(value),
+            token,
+            maximumBytes);
+
+    public async ValueTask WriteRawAsync(
+        string ownerId,
+        string key,
+        byte[] payload,
+        CancellationToken token,
         long maximumBytes = long.MaxValue)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         token.ThrowIfCancellationRequested();
         var path = GetPath(ownerId, key);
         var gate = GetLock(path);
@@ -232,13 +252,7 @@ internal sealed partial class ExtensionStateStore
         try
         {
             token.ThrowIfCancellationRequested();
-            var payload = JsonSerializer.SerializeToUtf8Bytes(value);
-            var envelope = new StateEnvelope(
-                1,
-                key,
-                Convert.ToBase64String(payload),
-                Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant());
-            var content = JsonSerializer.SerializeToUtf8Bytes(envelope);
+            var content = CreateCompatibilityEnvelope(key, payload);
             if (content.LongLength > maximumBytes)
             {
                 throw new CapabilityStreamLimitExceededException(
@@ -314,6 +328,82 @@ internal sealed partial class ExtensionStateStore
         return Path.Combine(_root, ownerNamespace, $"{keyName}.json");
     }
 
+    /// <summary>
+    /// The version 1 record path. The transactional store keeps this mirror current so an
+    /// earlier server build can still read the same state.
+    /// </summary>
+    public string GetCompatibilityPath(string ownerId, string key) => GetPath(ownerId, key);
+
+    public static byte[] CreateCompatibilityEnvelope(string key, byte[] payload) =>
+        JsonSerializer.SerializeToUtf8Bytes(new StateEnvelope(
+            1,
+            key,
+            Convert.ToBase64String(payload),
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()));
+
+    public static (string Key, byte[] Payload)? TryReadCompatibilityRecord(string path)
+    {
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<StateEnvelope>(File.ReadAllBytes(path));
+            if (envelope is null || envelope.Version != 1)
+            {
+                return null;
+            }
+
+            return (envelope.Key, ReadPayload(envelope));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException or
+            FormatException or ExtensionStateException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads a version 1 envelope's identity without decoding its payload. The payload
+    /// property is skipped by the reader, so a mirror can be compared with the record it
+    /// projects without ever materializing the record.
+    /// </summary>
+    public static (string Key, string Sha256)? TryReadCompatibilityIdentity(string path)
+    {
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<StateEnvelopeIdentity>(
+                File.ReadAllBytes(path));
+            if (envelope is null ||
+                envelope.Version != 1 ||
+                string.IsNullOrWhiteSpace(envelope.Key) ||
+                string.IsNullOrWhiteSpace(envelope.Sha256))
+            {
+                return null;
+            }
+
+            return (envelope.Key, envelope.Sha256);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException or
+            FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] ReadPayload(StateEnvelope envelope)
+    {
+        var payload = Convert.FromBase64String(envelope.Payload);
+        StatePayloadInstrumentation.Materialized(payload.LongLength);
+        var expected = Convert.FromHexString(envelope.Sha256);
+        var actual = SHA256.HashData(payload);
+        if (!CryptographicOperations.FixedTimeEquals(expected, actual))
+        {
+            throw new ExtensionStateException("Extension state integrity validation failed.");
+        }
+
+        return payload;
+    }
+
     private SemaphoreSlim GetLock(string path)
     {
         var hash = StringComparer.Ordinal.GetHashCode(path);
@@ -365,6 +455,8 @@ internal sealed partial class ExtensionStateStore
     private static partial Regex StateKeyRegex();
 
     private sealed record StateEnvelope(int Version, string Key, string Payload, string Sha256);
+
+    private sealed record StateEnvelopeIdentity(int Version, string Key, string Sha256);
 }
 
 internal sealed record LegacyStateFileSetRegistration(

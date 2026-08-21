@@ -164,7 +164,7 @@ public static class ServerApplication
             MaximumStreamBytes: Math.Max(
                 packageLimits.MaxRequestBodyBytes,
                 packageLimits.MaxPackageBytes)));
-        builder.Services.AddSingleton(CreateExtensionStateStore(storageDirectory));
+        builder.Services.AddSingleton(_ => CreateExtensionStateStore(storageDirectory));
         builder.Services.AddSingleton(provider => new CapabilityBroker(
             composition.InstanceId,
             composition.ExtensionGraph,
@@ -182,7 +182,7 @@ public static class ServerApplication
                 composition.Hosting,
                 composition.StorageDirectory,
                 officialExtensions.VulnerabilitySnapshots,
-                provider.GetRequiredService<ExtensionStateStore>(),
+                provider.GetRequiredService<TransactionalStateStore>(),
                 officialExtensions,
                 provider.GetRequiredService<KernelOutboundHttpClient>(),
                 packageLimits,
@@ -262,11 +262,11 @@ public static class ServerApplication
         return app;
     }
 
-    private static ExtensionStateStore CreateExtensionStateStore(string? storageDirectory)
+    private static TransactionalStateStore CreateExtensionStateStore(string? storageDirectory)
     {
         if (storageDirectory is null)
         {
-            return new ExtensionStateStore(root: null);
+            return new TransactionalStateStore(root: null, KernelStateParticipants.BuiltIn);
         }
 
         var legacyVulnerabilities = new LegacyStateFileSetRegistration(
@@ -274,8 +274,10 @@ public static class ServerApplication
             MaximumFileBytes: 32L * 1024 * 1024,
             MaximumTotalBytes: 512L * 1024 * 1024,
             MaximumFileCount: 64).Validate();
-        return new ExtensionStateStore(
+        return new TransactionalStateStore(
             Path.Combine(storageDirectory, "extension-state"),
+            KernelStateParticipants.BuiltIn,
+            quotas: null,
             ImmutableDictionary<
                     string,
                     ImmutableDictionary<string, LegacyStateFileSetRegistration>>

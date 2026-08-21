@@ -433,7 +433,12 @@ public sealed class CapabilityBrokerTests
     public async Task Extension_state_is_owner_namespaced_atomic_and_integrity_protected()
     {
         using var directory = new TemporaryDirectory();
-        var store = new ExtensionStateStore(directory.Path);
+        using var store = new TransactionalStateStore(
+            directory.Path,
+            [
+                new StateParticipantDescriptor("owner.first", "1.0.0", "first", 1),
+                new StateParticipantDescriptor("owner.second", "1.0.0", "second", 1)
+            ]);
         var grants = ImmutableHashSet.Create(
             StringComparer.Ordinal,
             BuiltInCapabilityNames.ExtensionStateRead,
@@ -471,8 +476,8 @@ public sealed class CapabilityBrokerTests
             CancellationToken.None))!.Value);
 
         var stateFile = Assert.Single(Directory.EnumerateFiles(
-            directory.Path,
-            "*.json",
+            Path.Combine(directory.Path, TransactionalStateStore.ActiveDirectoryName),
+            $"*{TransactionalStateStore.RecordExtension}",
             SearchOption.AllDirectories));
         await File.AppendAllTextAsync(stateFile, "corrupt");
         await Assert.ThrowsAsync<ExtensionStateException>(
@@ -483,17 +488,21 @@ public sealed class CapabilityBrokerTests
     public async Task Extension_state_lock_cardinality_is_bounded()
     {
         using var directory = new TemporaryDirectory();
-        var store = new ExtensionStateStore(directory.Path);
+        using var store = new TransactionalStateStore(
+            directory.Path,
+            [new StateParticipantDescriptor("owner", "1.0.0", "schema", 1)],
+            new StateStoreQuotas(MaximumRecordsPerOwner: 1000));
 
         await Task.WhenAll(Enumerable.Range(0, 1000).Select(
             index => store.WriteAsync(
                     "owner",
                     $"key-{index}",
-                    new StateValue(index.ToString()),
+                    System.Text.Encoding.UTF8.GetBytes(index.ToString()),
+                    null,
                     CancellationToken.None)
                 .AsTask()));
 
-        Assert.InRange(store.LockCount, 1, ExtensionStateStore.LockStripeCount);
+        Assert.InRange(store.LockCount, 1, TransactionalStateStore.LockStripeCount);
     }
 
     [Fact]
@@ -516,7 +525,14 @@ public sealed class CapabilityBrokerTests
                         legacyDirectory.Path,
                         MaximumFileBytes: 16,
                         MaximumTotalBytes: 16).Validate()));
-        var store = new ExtensionStateStore(stateDirectory.Path, registrations);
+        using var store = new TransactionalStateStore(
+            stateDirectory.Path,
+            [
+                new StateParticipantDescriptor("owner.first", "1.0.0", "first", 1),
+                new StateParticipantDescriptor("owner.second", "1.0.0", "second", 1)
+            ],
+            quotas: null,
+            registrations);
         var grants = ImmutableHashSet.Create(
             StringComparer.Ordinal,
             BuiltInCapabilityNames.ExtensionStateRead);

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Text.Json;
 using NuGet.Packaging;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
@@ -870,12 +871,22 @@ internal interface IExtensionStateCapability
 {
     ValueTask<T?> ReadAsync<T>(string key, CancellationToken token);
 
+    ValueTask<ExtensionStateEntry<T>?> ReadEntryAsync<T>(string key, CancellationToken token);
+
     ValueTask WriteAsync<T>(string key, T value, CancellationToken token);
+
+    ValueTask<long> WriteEntryAsync<T>(
+        string key,
+        T value,
+        long? expectedConcurrencyToken,
+        CancellationToken token);
 
     ValueTask<ExtensionStateFileSet?> ReadLegacyFileSetAsync(
         string logicalName,
         CancellationToken token);
 }
+
+internal sealed record ExtensionStateEntry<T>(T Value, long ConcurrencyToken);
 
 internal sealed record ExtensionStateFile(string LogicalName, byte[] Content);
 
@@ -1390,7 +1401,7 @@ internal sealed record CapabilityServices(
     ServerHostingOptions Hosting,
     string? StorageDirectory,
     VulnerabilitySnapshotProvider Vulnerabilities,
-    ExtensionStateStore ExtensionState,
+    TransactionalStateStore ExtensionState,
     IExtensionHealthSource ExtensionHealth,
     KernelOutboundHttpClient OutboundHttp,
     PackageTransferLimits PackageLimits,
@@ -2550,25 +2561,56 @@ internal sealed class ExtensionStateCapability(
     ImmutableHashSet<string> grants,
     CapabilityAuditLog audit,
     CapabilityLimits limits,
-    ExtensionStateStore store)
+    TransactionalStateStore store)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
         IExtensionStateCapability
 {
-    public ValueTask<T?> ReadAsync<T>(string key, CancellationToken token) =>
+    public async ValueTask<T?> ReadAsync<T>(string key, CancellationToken token) =>
+        (await ReadEntryAsync<T>(key, token)) is { } entry ? entry.Value : default;
+
+    public ValueTask<ExtensionStateEntry<T>?> ReadEntryAsync<T>(
+        string key,
+        CancellationToken token) =>
         Gate(BuiltInCapabilityNames.ExtensionStateRead)
             .InvokeAsync(
                 "read",
-                ct => store.ReadAsync<T>(OwnerId, key, ct, MaximumStreamBytes),
+                async ct =>
+                {
+                    var record = await store.ReadAsync(OwnerId, key, ct, MaximumStreamBytes);
+                    if (record is null)
+                    {
+                        return null;
+                    }
+
+                    var value = Deserialize<T>(record.Value);
+                    return value is null
+                        ? null
+                        : new ExtensionStateEntry<T>(value, record.ETag);
+                },
                 token);
 
     public async ValueTask WriteAsync<T>(string key, T value, CancellationToken token) =>
-        await Gate(BuiltInCapabilityNames.ExtensionStateWrite)
+        await WriteEntryAsync(key, value, expectedConcurrencyToken: null, token);
+
+    public ValueTask<long> WriteEntryAsync<T>(
+        string key,
+        T value,
+        long? expectedConcurrencyToken,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateWrite)
             .InvokeAsync(
                 "write",
                 async ct =>
                 {
-                    await store.WriteAsync(OwnerId, key, value, ct, MaximumStreamBytes);
-                    return true;
+                    var payload = JsonSerializer.SerializeToUtf8Bytes(value);
+                    var record = await store.WriteAsync(
+                        OwnerId,
+                        key,
+                        payload,
+                        expectedConcurrencyToken,
+                        ct,
+                        MaximumStreamBytes);
+                    return record.ETag;
                 },
                 token);
 
@@ -2584,6 +2626,20 @@ internal sealed class ExtensionStateCapability(
                     ct,
                     MaximumStreamBytes),
                 token);
+
+    private static T? Deserialize<T>(byte[] payload)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(payload);
+        }
+        catch (JsonException exception)
+        {
+            throw new ExtensionStateException(
+                "Extension state could not be deserialized.",
+                exception);
+        }
+    }
 }
 
 internal sealed class OutboundHttpCapability(

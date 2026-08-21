@@ -13,10 +13,25 @@ PR #67. Step 11C moves the transport-neutral extension contracts into
 `NuGet.TestServer.Extensions.Abstractions`, proves closed-world composition with a
 separately compiled conformance module, and enforces the architecture fitness gates; it
 is merged through PR #69. Step 11D establishes the measured scalability and
-backpressure baseline and is merged through PR #71. Lane B Step 13 moves the
-flat-container and symbol reads into the official `NuGet.FlatContainer` extension. The
-old Step 12 is paused. Steps 11A through 11D are blocking prerequisites added without
-renumbering the existing tracker issues.
+backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
+PR #73, and Lane B Step 13 is merged through PR #74. Step 12A replaces the temporary
+extension-state store with
+one kernel-owned transactional store reached through the existing state capability:
+restart-monotonic concurrency tokens, namespaced schema identity with ordered
+migrations, atomic multi-key edits published through one write journal, key/record/
+owner-byte/owner-count quotas, 64 lock stripes, frozen leased checkpoints,
+journalled crash-safe restore whose journals are only accepted when the store
+generated them, migration that quarantines rather than deletes persisted state for
+an inactive extension, version 2 backup manifests with typed participants, and
+version 1 read and downgrade compatibility. Opening the store, capturing a backup,
+and validating a staged restore are bounded by descriptors, record headers, and one
+streaming buffer; capture is read-only apart from completing an already committed
+transaction; and a version 2 archive is validated in both directions so it cannot
+deliver participant state its manifest never declared. It
+is implemented and covered by integrated capability, composition, backup,
+boundedness, and hardening tests but is not yet merged. The old Step 12 is paused.
+Steps 11A through 11D are blocking prerequisites added without renumbering the
+existing tracker issues.
 
 The implementation is currently a closed built-in modular system for discovery and
 loading, but composition itself is no longer closed: a module compiled against the
@@ -567,8 +582,8 @@ its measured 0.204 microseconds and 91 bytes per call fit the ratified
 0.5-microsecond/128-byte budget.
 
 Extension-state locks are bounded to 64 stripes. Buffering, record/owner quotas,
-concurrency tokens, migrations, transactional checkpoints, and crash-safe restore are
-not implemented here and block Step 12A completion.
+concurrency tokens, migrations, transactional checkpoints, and crash-safe restore were
+not implemented in Step 11D and are delivered by Step 12A.
 
 **Done when:** Baselines are recorded, correctness gates pass cross-platform, and the
 ratified absolute budgets remain informational measurements rather than timing-flaky
@@ -611,6 +626,16 @@ ownership.
 
 **Done when:** Package, publication, and required extension state can produce and
 restore one consistent checkpoint.
+
+**Note on "required" state:** A participant declares whether its state is required.
+Required state must be present, schema-compatible, and migratable before a restore
+or an open is allowed. A version 2 manifest describes the persisted participant tree
+exactly, so a required participant that never persisted state is absent from the
+archive and its restore is rejected. The only built-in participant, the vulnerability
+snapshot, is deliberately optional because it is rebuildable from the embedded
+baseline or a refresh; marking it required would reject a valid backup taken before
+any snapshot was persisted. Required semantics are exercised by tests rather than by
+a built-in required participant.
 
 **Rollback:** Preserve current storage backup format and owner until the new
 checkpoint path is proven.

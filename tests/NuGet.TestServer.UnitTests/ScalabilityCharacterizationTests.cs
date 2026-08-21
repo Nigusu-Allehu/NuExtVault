@@ -111,15 +111,16 @@ public sealed class ScalabilityCharacterizationTests
             capabilityAudit = audit,
             extensionState = new
             {
-                lockStripes = ExtensionStateStore.LockStripeCount,
-                currentBuffering = "Payload JSON, base64 payload, and envelope JSON are materialized per record.",
-                blockersForStep12A = new[]
+                lockStripes = TransactionalStateStore.LockStripeCount,
+                recordFormat =
+                    "Framed header plus raw payload; no base64 or envelope copy per record.",
+                step12AMechanisms = new[]
                 {
                     "Per-owner and per-record quotas",
-                    "Optimistic concurrency tokens",
-                    "Schema migrations",
-                    "Streaming record I/O",
-                    "Checkpoint and crash-safe restore participation"
+                    "Restart-monotonic concurrency tokens",
+                    "Ordered schema migrations",
+                    "Frozen leased checkpoints",
+                    "Journalled crash-safe restore"
                 }
             },
             catalogResolution = catalog
