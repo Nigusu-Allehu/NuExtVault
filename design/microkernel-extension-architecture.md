@@ -1300,6 +1300,38 @@ These gates target per-process, single-node operation and many parallel embedded
 hosts. Multi-node coordination, distributed storage, and remote sidecars are not v1
 goals.
 
+Step 11D ratified the first budgets from the Release characterization in
+`design/baselines/microkernel-step-11d-windows.json`. The run used .NET 10.0.11 on
+Windows x64, 1,000 warmups, 30 samples, and 1,000 metadata operations per sample.
+Shared-runner relative percentages were unstable for single-digit-microsecond work,
+so the 5% hypothesis remains an informational comparison rather than a CI assertion.
+The stable regression budgets are:
+
+- metadata dispatch p95 at most 20 microseconds and at most 512 additional allocated
+  bytes versus direct owner invocation;
+- embedded composition startup p95 at most 50 milliseconds and 1.25 MiB allocated;
+- 100 parallel compositions within 2 seconds and at most 512 KiB retained managed
+  memory per host;
+- deterministic catalog resolution p95 at most 2/8/30 milliseconds and allocations
+  at most 100 KiB/500 KiB/2 MiB for 8/50/200 routes;
+- readiness p95 at most 5 milliseconds with 1,000 inventory files, independent of
+  inventory cardinality; and
+- full hot-read capability auditing at at most 0.5 microseconds and 128 allocated
+  bytes per call. No sampling is enabled, so no security event is silently dropped.
+  The bounded 4,096-entry ring retains explicit dropped-event accounting.
+
+Capability calls admit 64 active and 64 queued calls by default, wait no longer than
+250 milliseconds, preserve cancellation, and map saturation to typed `503 Service
+Unavailable` with `Retry-After: 1`. Stream handles enforce their declared bytes for
+stream, memory, and file payloads and release capability leases on EOF, disposal,
+failure, or cancellation.
+
+The temporary extension-state implementation now uses 64 lock stripes rather than an
+unbounded lock per key. It still materializes payload JSON, base64, and envelope JSON
+per record. Per-owner/per-record quotas, concurrency tokens, migrations, streaming
+record I/O, checkpoint participation, and crash-safe restore remain explicit Step 12A
+blockers.
+
 ### Kernel tests
 
 - No extension can bypass identity, limits, or capability enforcement.

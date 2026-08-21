@@ -1,11 +1,125 @@
 using System.Reflection;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Kernel.Routing;
+using NuGet.TestServer.Operations;
+using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.UnitTests;
 
 public sealed class OperationContractTests
 {
+    [Fact]
+    public async Task Unavailable_results_render_retry_after()
+    {
+        var context = new DefaultHttpContext();
+        await using var body = new MemoryStream();
+        context.Response.Body = body;
+        using var host = TestServerApplication.Build(ServerProfiles.Embedded);
+        context.RequestServices = host.Services;
+        var execution = new OperationExecutionContext(
+            "host",
+            UnrestrictedOperationAuthorization.Instance)
+        {
+            RetryAfterSeconds = 1
+        };
+        var result = OperationResults.Render(
+            OperationResult.Problem(
+                OperationResultStatus.Unavailable,
+                "Capability concurrency is saturated."),
+            execution,
+            host.Services.GetRequiredService<KernelUrlProjector>(),
+            () => new PublicUrlOrigin("http", "localhost", string.Empty));
+
+        await result.ExecuteAsync(context);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.Equal("1", context.Response.Headers.RetryAfter);
+    }
+
+    [Fact]
+    public async Task Content_results_render_memory_file_and_bounded_stream_handles()
+    {
+        using var host = TestServerApplication.Build(ServerProfiles.Embedded);
+        using var directory = new TemporaryDirectory();
+        var file = Path.Combine(directory.Path, "content.bin");
+        await File.WriteAllBytesAsync(file, [4, 5, 6]);
+
+        Assert.Equal(
+            new byte[] { 1, 2, 3 },
+            await RenderContentAsync(
+                host,
+                execution => execution.Content.RegisterBytes(
+                    new byte[] { 1, 2, 3 },
+                    "application/octet-stream")));
+        Assert.Equal(
+            new byte[] { 4, 5, 6 },
+            await RenderContentAsync(
+                host,
+                execution => execution.Content.RegisterFile(file, "application/octet-stream")));
+
+        await Assert.ThrowsAsync<CapabilityStreamLimitExceededException>(
+            () => RenderContentAsync(
+                host,
+                execution => execution.Content.RegisterStream(
+                    new MemoryStream([7, 8, 9]),
+                    "application/octet-stream",
+                    length: 2)));
+    }
+
+    [Fact]
+    public async Task Dispatcher_classifies_capability_saturation_as_typed_unavailable()
+    {
+        var operationId = new OperationId("test.saturated");
+        var registry = new OperationRegistry(
+        [
+            new OperationRegistration(
+                operationId,
+                "test.owner",
+                typeof(EmptyRequest),
+                typeof(EmptyResponse),
+                (_, _, _) => ValueTask.FromException<object>(
+                    new CapabilityQuotaExceededException("packages.content.read")))
+        ],
+        diagnostics: string.Empty);
+        var dispatcher = new OperationDispatcher(
+            registry,
+            new ServerDiagnostics(new InMemoryPackageStore()));
+
+        var response = await dispatcher.DispatchAsync<EmptyRequest, EmptyResponse>(
+            operationId,
+            new EmptyRequest(),
+            new OperationExecutionContext("host"),
+            CancellationToken.None);
+
+        Assert.Equal(OperationErrorKind.Unavailable, response.Error!.Kind);
+        Assert.Equal(1, response.Error.RetryAfterSeconds);
+    }
+
+    private static async Task<byte[]> RenderContentAsync(
+        TestServerApplication host,
+        Func<OperationExecutionContext, StreamHandle> register)
+    {
+        var context = new DefaultHttpContext { RequestServices = host.Services };
+        await using var body = new MemoryStream();
+        context.Response.Body = body;
+        var execution = new OperationExecutionContext(
+            Guid.NewGuid().ToString("N"),
+            UnrestrictedOperationAuthorization.Instance);
+        var result = OperationResults.Render(
+            OperationResult.Ok(register(execution)),
+            execution,
+            host.Services.GetRequiredService<KernelUrlProjector>(),
+            () => new PublicUrlOrigin("http", "localhost", string.Empty));
+
+        await result.ExecuteAsync(context);
+        return body.ToArray();
+    }
     private static readonly string[] StableOperationIds =
     [
         "NuGet.FlatContainer.GetHash",

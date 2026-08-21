@@ -1,0 +1,85 @@
+{
+  "step": "11D",
+  "timestampUtc": "2026-08-21T18:31:12.0553446+00:00",
+  "runtime": ".NET 10.0.11",
+  "os": "Microsoft Windows 10.0.26200",
+  "architecture": "X64",
+  "configuration": "Release",
+  "methodology": {
+    "warmupIterations": 1000,
+    "sampleCount": 30,
+    "operationsPerSample": 1000,
+    "latency": "Stopwatch elapsed time divided by completed operations; p95 over samples.",
+    "allocations": "GC.GetTotalAllocatedBytes delta divided by completed operations.",
+    "baseline": "Direct store characterizes the complete abstraction path. Direct owner invocation is the closest equivalent baseline for dispatcher/registry overhead; both owner and gateway paths include capability, visibility, and audit."
+  },
+  "metadataRead": {
+    "storeDirect": {
+      "meanMicroseconds": 1.8992,
+      "p50Microseconds": 1.1465,
+      "p95Microseconds": 4.9872,
+      "allocatedBytesPerOperation": 455.8429
+    },
+    "ownerDirect": {
+      "meanMicroseconds": 5.2047,
+      "p50Microseconds": 4.7924,
+      "p95Microseconds": 7.8973,
+      "allocatedBytesPerOperation": 2406.1912
+    },
+    "gateway": {
+      "meanMicroseconds": 7.2190,
+      "p50Microseconds": 6.7020,
+      "p95Microseconds": 10.0600,
+      "allocatedBytesPerOperation": 2724.8072
+    },
+    "p95OverheadPercent": 27.3853,
+    "allocationOverheadBytes": 318.6160
+  },
+  "embeddedCompositionStartup": {
+    "meanMicroseconds": 10983.1350,
+    "p50Microseconds": 7641.6000,
+    "p95Microseconds": 22443.7000,
+    "allocatedBytesPerOperation": 982538
+  },
+  "parallelEmbeddedHosts": {
+    "hostCount": 100,
+    "totalMilliseconds": 438.9939,
+    "allocatedBytesPerHost": 975001.52,
+    "retainedManagedBytesPerHost": 314235.28
+  },
+  "readinessWithOneThousandInventoryFiles": {
+    "meanMicroseconds": 729.9200,
+    "p50Microseconds": 608.3000,
+    "p95Microseconds": 834.2000,
+    "allocatedBytesPerOperation": 672
+  },
+  "capabilityAudit": {
+    "meanMicroseconds": 0.203825,
+    "allocatedBytesPerOperation": 90.63168
+  },
+  "extensionState": {
+    "lockStripes": 64,
+    "currentBuffering": "Payload JSON, base64 payload, and envelope JSON are materialized per record.",
+    "blockersForStep12A": [
+      "Per-owner and per-record quotas",
+      "Optimistic concurrency tokens",
+      "Schema migrations",
+      "Streaming record I/O",
+      "Checkpoint and crash-safe restore participation"
+    ]
+  },
+  "catalogResolution": {
+    "8": {
+      "p95Microseconds": 324.7,
+      "allocatedBytesPerOperation": 66010.6667
+    },
+    "50": {
+      "p95Microseconds": 4448.5,
+      "allocatedBytesPerOperation": 371758.6667
+    },
+    "200": {
+      "p95Microseconds": 9796.0,
+      "allocatedBytesPerOperation": 1468653.6
+    }
+  }
+}

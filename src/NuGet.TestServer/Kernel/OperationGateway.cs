@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Routing;
 
 namespace NuGet.TestServer.Kernel;
@@ -92,6 +93,7 @@ internal sealed class OperationGateway(
                 request,
                 execution,
                 cancellationToken);
+            execution.RetryAfterSeconds = response.Error?.RetryAfterSeconds;
             return OperationResults.Resolve(response, execution);
         }
     }
@@ -142,7 +144,7 @@ internal static class OperationResults
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(execution);
         var statusCode = OperationErrorPolicy.GetStatusCode(result.Status);
-        return result.Body switch
+        var rendered = result.Body switch
         {
             null => result.Location is null
                 ? Results.StatusCode(statusCode)
@@ -160,6 +162,9 @@ internal static class OperationResults
                 : CreatedResult(result, document.Document),
             _ => throw new InvalidOperationException("Unsupported operation response body.")
         };
+        return execution.RetryAfterSeconds is { } retryAfterSeconds
+            ? new RetryAfterResult(rendered, retryAfterSeconds)
+            : rendered;
     }
 
     private static IResult CreatedResult(OperationResult result, object? value) =>
@@ -177,18 +182,54 @@ internal static class OperationResults
         if (content.Stream is not null)
         {
             return Results.File(
-                content.Stream,
+                CapabilityStreams.Bound(
+                    content.Stream,
+                    content.Length,
+                    body.Handle.MaximumLength),
                 content.ContentType,
                 enableRangeProcessing: content.SupportsRanges);
         }
 
         if (content.Bytes is not null)
         {
+            if (content.Bytes.Value.Length > body.Handle.MaximumLength)
+            {
+                throw new CapabilityStreamLimitExceededException(
+                    content.Bytes.Value.Length,
+                    body.Handle.MaximumLength);
+            }
+
             return Results.Bytes(content.Bytes.Value, content.ContentType);
+        }
+
+        if (content.FilePath is not null)
+        {
+            var length = new FileInfo(content.FilePath).Length;
+            if (length > body.Handle.MaximumLength)
+            {
+                throw new CapabilityStreamLimitExceededException(
+                    length,
+                    body.Handle.MaximumLength);
+            }
+
+            return Results.File(
+                content.FilePath,
+                content.ContentType,
+                enableRangeProcessing: content.SupportsRanges);
         }
 
         throw new InvalidOperationException(
             $"Content handle '{body.Handle.Id}' has no readable payload.");
+    }
+
+    private sealed class RetryAfterResult(IResult inner, int retryAfterSeconds) : IResult
+    {
+        public Task ExecuteAsync(HttpContext httpContext)
+        {
+            httpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            return inner.ExecuteAsync(httpContext);
+        }
     }
 }
 

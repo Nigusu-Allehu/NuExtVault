@@ -97,7 +97,7 @@ public sealed class CapabilityBrokerTests
     }
 
     [Fact]
-    public async Task Capability_concurrency_quotas_fail_closed()
+    public async Task Capability_concurrency_quotas_wait_within_a_deadline_then_fail_closed()
     {
         var audit = new CapabilityAuditLog();
         var gate = new CapabilityCallGate(
@@ -105,7 +105,11 @@ public sealed class CapabilityBrokerTests
             "owner",
             "test.capability",
             audit,
-            new CapabilityLimits(MaximumConcurrentCalls: 1, MaximumStreamBytes: 4));
+            new CapabilityLimits(
+                MaximumConcurrentCalls: 1,
+                MaximumStreamBytes: 4,
+                MaximumQueuedCalls: 1,
+                QueueTimeout: TimeSpan.FromSeconds(5)));
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var first = gate.InvokeAsync(
@@ -119,12 +123,117 @@ public sealed class CapabilityBrokerTests
             CancellationToken.None).AsTask();
         await entered.Task;
 
-        await Assert.ThrowsAsync<CapabilityQuotaExceededException>(
-            () => gate.InvokeAsync("second", _ => ValueTask.FromResult(true), CancellationToken.None)
-                .AsTask());
+        var waiting = gate.InvokeAsync(
+            "waiting",
+            _ => ValueTask.FromResult(true),
+            CancellationToken.None).AsTask();
+        var exception = await Assert.ThrowsAsync<CapabilityQuotaExceededException>(
+            () => gate.InvokeAsync(
+               "queue-full",
+               _ => ValueTask.FromResult(true),
+               CancellationToken.None).AsTask());
+        Assert.Equal(1, exception.RetryAfterSeconds);
 
         release.SetResult();
         await first;
+        Assert.True(await waiting);
+    }
+
+    [Fact]
+    public async Task Capability_concurrency_wait_preserves_cancellation_and_releases_queue_space()
+    {
+        var audit = new CapabilityAuditLog();
+        var gate = new CapabilityCallGate(
+            "host",
+            "owner",
+            "test.capability",
+            audit,
+            new CapabilityLimits(
+               MaximumConcurrentCalls: 1,
+               MaximumQueuedCalls: 1,
+               QueueTimeout: TimeSpan.FromSeconds(5)));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = gate.InvokeAsync(
+            "hold",
+            async token =>
+            {
+               entered.SetResult();
+               await release.Task.WaitAsync(token);
+               return true;
+            },
+            CancellationToken.None).AsTask();
+        await entered.Task;
+
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = gate.InvokeAsync(
+            "cancelled",
+            _ => ValueTask.FromResult(true),
+            cancellation.Token).AsTask();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+
+        var replacement = gate.InvokeAsync(
+            "replacement",
+            _ => ValueTask.FromResult(true),
+            CancellationToken.None).AsTask();
+        release.SetResult();
+
+        await first;
+        Assert.True(await replacement);
+        Assert.Single(
+            audit.Entries,
+            entry => entry.Action == "cancelled" &&
+                     entry.Outcome == CapabilityCallOutcome.Cancelled);
+    }
+
+    [Fact]
+    public async Task Capability_concurrency_is_bounded_under_512_call_saturation()
+    {
+        var gate = new CapabilityCallGate(
+            "host",
+            "owner",
+            "test.capability",
+            new CapabilityAuditLog(),
+            new CapabilityLimits(
+                MaximumConcurrentCalls: 8,
+                MaximumQueuedCalls: 32,
+                QueueTimeout: TimeSpan.FromMilliseconds(50)));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = 0;
+        var calls = Enumerable.Range(0, 512).Select(async _ =>
+        {
+            try
+            {
+                return await gate.InvokeAsync(
+                    "read",
+                    async token =>
+                    {
+                        Interlocked.Increment(ref entered);
+                        await release.Task.WaitAsync(token);
+                        return CapabilityCallOutcome.Succeeded;
+                    },
+                    CancellationToken.None);
+            }
+            catch (CapabilityQuotaExceededException exception)
+            {
+                Assert.Equal(1, exception.RetryAfterSeconds);
+                return CapabilityCallOutcome.QuotaExceeded;
+            }
+        }).ToArray();
+
+        await Task.Delay(100);
+        release.SetResult();
+        var outcomes = await Task.WhenAll(calls);
+
+        Assert.InRange(entered, 8, 40);
+        Assert.Equal(512, outcomes.Length);
+        Assert.All(
+            outcomes,
+            outcome => Assert.Contains(
+                outcome,
+                new[] { CapabilityCallOutcome.Succeeded, CapabilityCallOutcome.QuotaExceeded }));
+        Assert.Contains(CapabilityCallOutcome.QuotaExceeded, outcomes);
     }
 
     [Fact]
@@ -174,6 +283,113 @@ public sealed class CapabilityBrokerTests
         Assert.ThrowsAny<OperationCanceledException>(
             () => gate.LeaseStream("open", source, 1, cancellation.Token));
         Assert.True(source.WasDisposed);
+    }
+
+    [Fact]
+    public void Capability_stream_sync_cancellation_releases_the_lease()
+    {
+        var gate = new CapabilityCallGate(
+            "host",
+            "owner",
+            "stream",
+            new CapabilityAuditLog(),
+            new CapabilityLimits(MaximumConcurrentCalls: 1));
+        using var cancellation = new CancellationTokenSource();
+        using var cancelled = gate.LeaseStream(
+            "cancel",
+            new MemoryStream([1]),
+            declaredLength: 1,
+            cancellation.Token);
+        cancellation.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(
+            () => cancelled.Read(new byte[1], 0, 1));
+        using var after = gate.LeaseStream(
+            "after",
+            new MemoryStream([1]),
+            declaredLength: 1,
+            CancellationToken.None);
+    }
+
+    [Fact]
+    public void Capability_stream_disposal_failure_releases_the_lease()
+    {
+        var gate = new CapabilityCallGate(
+            "host",
+            "owner",
+            "stream",
+            new CapabilityAuditLog(),
+            new CapabilityLimits(MaximumConcurrentCalls: 1));
+        var failed = gate.LeaseStream(
+            "dispose",
+            new ThrowingDisposeStream(),
+            declaredLength: 1,
+            CancellationToken.None);
+
+        Assert.Throws<IOException>(failed.Dispose);
+        using var after = gate.LeaseStream(
+            "after",
+            new MemoryStream([1]),
+            declaredLength: 1,
+            CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Capability_stream_leases_release_on_eof_disposal_failure_and_cancellation()
+    {
+        var gate = new CapabilityCallGate(
+            "host",
+            "owner",
+            "stream",
+            new CapabilityAuditLog(),
+            new CapabilityLimits(MaximumConcurrentCalls: 1, MaximumStreamBytes: 4));
+
+        await using (var eof = gate.LeaseStream(
+                         "eof",
+                         new MemoryStream([1]),
+                         declaredLength: 1,
+                         CancellationToken.None))
+        {
+            Assert.Equal(1, await eof.ReadAsync(new byte[1]));
+            Assert.Equal(0, await eof.ReadAsync(new byte[1]));
+        }
+
+        await using (gate.LeaseStream(
+                         "dispose",
+                         new MemoryStream([1]),
+                         declaredLength: 1,
+                         CancellationToken.None))
+        {
+        }
+
+        await using (var failed = gate.LeaseStream(
+                         "failure",
+                         new ThrowingReadStream(),
+                         declaredLength: 1,
+                         CancellationToken.None))
+        {
+            await Assert.ThrowsAsync<IOException>(
+                () => failed.ReadAsync(new byte[1]).AsTask());
+        }
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            await using var cancelled = gate.LeaseStream(
+                "cancel",
+                new MemoryStream([1]),
+                declaredLength: 1,
+                cancellation.Token);
+            await cancellation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => cancelled.ReadAsync(new byte[1]).AsTask());
+        }
+
+        await using var after = gate.LeaseStream(
+            "after",
+            new MemoryStream([1]),
+            declaredLength: 1,
+            CancellationToken.None);
+        Assert.Equal(1, await after.ReadAsync(new byte[1]));
     }
 
     [Fact]
@@ -261,6 +477,23 @@ public sealed class CapabilityBrokerTests
         await File.AppendAllTextAsync(stateFile, "corrupt");
         await Assert.ThrowsAsync<ExtensionStateException>(
             () => first.ReadAsync<StateValue>("snapshot", CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task Extension_state_lock_cardinality_is_bounded()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new ExtensionStateStore(directory.Path);
+
+        await Task.WhenAll(Enumerable.Range(0, 1000).Select(
+            index => store.WriteAsync(
+                    "owner",
+                    $"key-{index}",
+                    new StateValue(index.ToString()),
+                    CancellationToken.None)
+                .AsTask()));
+
+        Assert.InRange(store.LockCount, 1, ExtensionStateStore.LockStripeCount);
     }
 
     [Fact]
@@ -491,6 +724,19 @@ public sealed class CapabilityBrokerTests
     }
 
     private sealed record StateValue(string Value);
+
+    private sealed class ThrowingReadStream : MemoryStream
+    {
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("read failed"));
+    }
+
+    private sealed class ThrowingDisposeStream : MemoryStream
+    {
+        protected override void Dispose(bool disposing) => throw new IOException("dispose failed");
+    }
 
     private sealed class StubExtensionHealthSource(ExtensionHealthSnapshot health)
         : IExtensionHealthSource

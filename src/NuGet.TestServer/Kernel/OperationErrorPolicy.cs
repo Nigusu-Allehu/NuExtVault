@@ -57,8 +57,8 @@ internal static class OperationErrorPolicy
     public static OperationError LimitExceeded(string message) =>
         OperationErrors.LimitExceeded(message);
 
-    public static OperationError Unavailable(string message) =>
-        OperationErrors.Unavailable(message);
+    public static OperationError Unavailable(string message, int? retryAfterSeconds = null) =>
+        OperationErrors.Unavailable(message, retryAfterSeconds);
 
     public static OperationError Internal(string message) => OperationErrors.Internal(message);
 }

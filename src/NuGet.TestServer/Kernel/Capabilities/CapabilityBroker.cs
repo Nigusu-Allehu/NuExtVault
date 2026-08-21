@@ -106,8 +106,12 @@ internal static class CapabilityOperationAttribution
 
 internal sealed record CapabilityLimits(
     int MaximumConcurrentCalls = 64,
-    long MaximumStreamBytes = 256L * 1024 * 1024)
+    long MaximumStreamBytes = 256L * 1024 * 1024,
+    int MaximumQueuedCalls = 64,
+    TimeSpan? QueueTimeout = null)
 {
+    public TimeSpan EffectiveQueueTimeout => QueueTimeout ?? TimeSpan.FromMilliseconds(250);
+
     public CapabilityLimits Validate()
     {
         if (MaximumConcurrentCalls <= 0)
@@ -124,6 +128,20 @@ internal sealed record CapabilityLimits(
                 "Capability stream limits must be positive.");
         }
 
+        if (MaximumQueuedCalls < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaximumQueuedCalls),
+                "Capability queue capacity cannot be negative.");
+        }
+
+        if (EffectiveQueueTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(QueueTimeout),
+                "Capability queue timeout must be positive.");
+        }
+
         return this;
     }
 }
@@ -137,8 +155,13 @@ internal sealed class CapabilityDeniedException(string ownerId, string capabilit
     public string CapabilityName { get; } = capabilityName;
 }
 
-internal sealed class CapabilityQuotaExceededException(string capabilityName)
-    : InvalidOperationException($"Capability '{capabilityName}' exceeded its concurrency quota.");
+internal sealed class CapabilityQuotaExceededException(
+    string capabilityName,
+    int retryAfterSeconds = 1)
+    : InvalidOperationException($"Capability '{capabilityName}' exceeded its concurrency quota.")
+{
+    public int RetryAfterSeconds { get; } = retryAfterSeconds;
+}
 
 internal sealed class CapabilityStreamLimitExceededException(
     long declaredLength,
@@ -171,7 +194,7 @@ internal static class CapabilityStreams
 
         return new BoundedCapabilityReadStream(
             source,
-            maximumLength,
+            declaredLength,
             cancellationToken,
             completed);
     }
@@ -200,9 +223,9 @@ internal sealed class BoundedCapabilityReadStream(
 
     public override int Read(byte[] buffer, int offset, int count)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return Track(inner.Read(buffer, offset, count));
         }
         catch (OperationCanceledException)
@@ -249,8 +272,16 @@ internal sealed class BoundedCapabilityReadStream(
     {
         if (disposing)
         {
-            inner.Dispose();
-            Complete(CapabilityCallOutcome.Succeeded);
+            try
+            {
+                inner.Dispose();
+                Complete(CapabilityCallOutcome.Succeeded);
+            }
+            catch
+            {
+                Complete(CapabilityCallOutcome.Failed);
+                throw;
+            }
         }
 
         base.Dispose(disposing);
@@ -258,9 +289,20 @@ internal sealed class BoundedCapabilityReadStream(
 
     public override async ValueTask DisposeAsync()
     {
-        await inner.DisposeAsync();
-        Complete(CapabilityCallOutcome.Succeeded);
-        GC.SuppressFinalize(this);
+        try
+        {
+            await inner.DisposeAsync();
+            Complete(CapabilityCallOutcome.Succeeded);
+        }
+        catch
+        {
+            Complete(CapabilityCallOutcome.Failed);
+            throw;
+        }
+        finally
+        {
+            GC.SuppressFinalize(this);
+        }
     }
 
     private int Track(int count)
@@ -296,7 +338,8 @@ internal sealed class CapabilityCallGate
     private readonly string _capabilityName;
     private readonly CapabilityAuditLog _audit;
     private readonly CapabilityLimits _limits;
-    private int _activeCalls;
+    private readonly SemaphoreSlim _concurrency;
+    private int _queuedCalls;
 
     public CapabilityCallGate(
         string hostInstanceId,
@@ -310,6 +353,7 @@ internal sealed class CapabilityCallGate
         _capabilityName = capabilityName;
         _audit = audit;
         _limits = limits.Validate();
+        _concurrency = new SemaphoreSlim(_limits.MaximumConcurrentCalls);
     }
 
     public async ValueTask<T> InvokeAsync<T>(
@@ -327,15 +371,8 @@ internal sealed class CapabilityCallGate
                 CapabilityCallOutcome.Cancelled);
             token.ThrowIfCancellationRequested();
         }
-        if (Interlocked.Increment(ref _activeCalls) > _limits.MaximumConcurrentCalls)
+        if (!await EnterAsync(action, token))
         {
-            Interlocked.Decrement(ref _activeCalls);
-            _audit.Record(
-                _hostInstanceId,
-                _ownerId,
-                _capabilityName,
-                action,
-                CapabilityCallOutcome.QuotaExceeded);
             throw new CapabilityQuotaExceededException(_capabilityName);
         }
 
@@ -372,7 +409,7 @@ internal sealed class CapabilityCallGate
         }
         finally
         {
-            Interlocked.Decrement(ref _activeCalls);
+            _concurrency.Release();
         }
     }
 
@@ -394,16 +431,10 @@ internal sealed class CapabilityCallGate
             token.ThrowIfCancellationRequested();
         }
 
-        if (Interlocked.Increment(ref _activeCalls) > _limits.MaximumConcurrentCalls)
+        if (!_concurrency.Wait(0))
         {
-            Interlocked.Decrement(ref _activeCalls);
             source.Dispose();
-            _audit.Record(
-                _hostInstanceId,
-                _ownerId,
-                _capabilityName,
-                action,
-                CapabilityCallOutcome.QuotaExceeded);
+            RecordQuotaExceeded(action);
             throw new CapabilityQuotaExceededException(_capabilityName);
         }
 
@@ -422,16 +453,64 @@ internal sealed class CapabilityCallGate
                         _capabilityName,
                         action,
                         outcome);
-                    Interlocked.Decrement(ref _activeCalls);
+                    _concurrency.Release();
                 });
         }
         catch
         {
-            Interlocked.Decrement(ref _activeCalls);
+            _concurrency.Release();
             source.Dispose();
             throw;
         }
     }
+
+    private async ValueTask<bool> EnterAsync(string action, CancellationToken token)
+    {
+        if (_concurrency.Wait(0))
+        {
+            return true;
+        }
+
+        if (Interlocked.Increment(ref _queuedCalls) > _limits.MaximumQueuedCalls)
+        {
+            Interlocked.Decrement(ref _queuedCalls);
+            RecordQuotaExceeded(action);
+            return false;
+        }
+
+        try
+        {
+            if (await _concurrency.WaitAsync(_limits.EffectiveQueueTimeout, token))
+            {
+                return true;
+            }
+
+            RecordQuotaExceeded(action);
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            _audit.Record(
+                _hostInstanceId,
+                _ownerId,
+                _capabilityName,
+                action,
+                CapabilityCallOutcome.Cancelled);
+            throw;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _queuedCalls);
+        }
+    }
+
+    private void RecordQuotaExceeded(string action) =>
+        _audit.Record(
+            _hostInstanceId,
+            _ownerId,
+            _capabilityName,
+            action,
+            CapabilityCallOutcome.QuotaExceeded);
 }
 
 internal interface IPackageReadCapability

@@ -142,6 +142,34 @@ memory, enforce limits for every handle type, and release leases on EOF, disposa
 and cancellation. Hot read-path auditing should be sampled or aggregated unless full
 auditing proves bounded overhead; privileged mutations remain fully audited.
 
+Step 11D measured and fixed the applicable defects. On .NET 10.0.11/Windows x64
+Release, the metadata dispatcher measured 10.06 microseconds p95 and 319 additional
+bytes versus direct owner invocation; embedded composition measured 22.44 milliseconds
+p95 and 0.94 MiB; 100 parallel compositions completed in 439 milliseconds with
+307 KiB retained managed memory per host; 8/50/200-route catalogs measured
+0.325/4.449/9.796 milliseconds p95; readiness with 1,000 inventory files measured
+0.834 milliseconds p95; and full capability audit measured 0.204 microseconds and
+91 bytes per call. The raw methodology and results are in
+`design/baselines/microkernel-step-11d-windows.json`.
+
+The original saturation path incremented an active-call counter and threw an unhandled
+quota exception, which could become HTTP 500. Calls now use a bounded 64-entry queue,
+wait at most 250 milliseconds, preserve cancellation, and return typed HTTP 503 with
+`Retry-After: 1` on queue-full or deadline expiry. Stream, memory, and file handles
+enforce declared bytes; leases release on EOF, disposal, exception, and abort. Health
+readiness remains a bounded probe while explicit storage diagnostics retain full
+inventory work. Full hot-read audit remains enabled because it met its budget; its
+4,096-entry retention ring reports dropped-event counts.
+
+The extension-state lock table is now fixed at 64 stripes. State still buffers payload,
+base64, and envelope representations and lacks quotas, optimistic concurrency,
+migrations, streaming I/O, checkpoint integration, and crash-safe restore. Those are
+Step 12A blockers, not Step 11D claims.
+
+With 11A through 11D complete, Lane A may begin at 12A, Lane B at Step 13, and Lane C
+at Step 16. The product remains single-node/per-process with many isolated embedded
+hosts; these results do not claim distributed or multi-node scalability.
+
 ## Revised sequencing
 
 After Steps 11A through 11D:

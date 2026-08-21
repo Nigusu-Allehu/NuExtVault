@@ -313,6 +313,44 @@ public sealed class ExtensionCatalogTests
             first.Diagnostics);
     }
 
+    [Theory]
+    [InlineData(8)]
+    [InlineData(50)]
+    [InlineData(200)]
+    public void Catalog_resolution_remains_deterministic_at_scale(int count)
+    {
+        var manifests = Enumerable.Range(0, count)
+            .Select(index =>
+            {
+                var operation = $"scale.operation.{index:D3}";
+                return Manifest(
+                    $"scale.extension.{index:D3}",
+                    operations: [operation],
+                    endpoints:
+                    [
+                        TestEndpointDescriptors.Endpoint(
+                            $"scale.route.{index:D3}",
+                            "GET",
+                            $"/scale/{index:D3}",
+                            operation)
+                    ]);
+            })
+            .ToArray();
+        var profile = Profile(manifests.Select(manifest => manifest.Id).Reverse().ToArray());
+
+        var ascending = Catalog(manifests).ResolveWith(profile);
+        var descending = Catalog(manifests.Reverse().ToArray()).ResolveWith(profile);
+
+        Assert.Equal(count, ascending.Extensions.Length);
+        Assert.Equal(count, ascending.Routes.Length);
+        Assert.Equal(
+            ascending.Extensions.Select(manifest => manifest.Id),
+            descending.Extensions.Select(manifest => manifest.Id));
+        Assert.Equal(ascending.Operations.ToArray(), descending.Operations.ToArray());
+        Assert.Equal(ascending.Routes.ToArray(), descending.Routes.ToArray());
+        Assert.Equal(ascending.Diagnostics, descending.Diagnostics);
+    }
+
     private static ExtensionCatalog Catalog(params ExtensionManifest[] manifests) => new(manifests);
 
     private static readonly EndpointDescriptor SearchEndpoint =

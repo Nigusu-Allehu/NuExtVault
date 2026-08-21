@@ -77,6 +77,13 @@ internal sealed class OperationDispatcher(
                 OperationErrorPolicy.LimitExceeded(exception.Message),
                 started);
         }
+        catch (CapabilityQuotaExceededException exception)
+        {
+            return Fail<TResponse>(
+                operationId,
+                OperationErrorPolicy.Unavailable(exception.Message, exception.RetryAfterSeconds),
+                started);
+        }
         catch (InvalidPackageException exception)
         {
             return Fail<TResponse>(

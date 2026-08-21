@@ -13,8 +13,11 @@ internal sealed partial class ExtensionStateStore
     private readonly ImmutableDictionary<
         string,
         ImmutableDictionary<string, LegacyStateFileSetRegistration>> _legacyFileSets;
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks =
-        new(StringComparer.Ordinal);
+    internal const int LockStripeCount = 64;
+    private readonly SemaphoreSlim[] _locks =
+        Enumerable.Range(0, LockStripeCount).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
+    internal int LockCount => _locks.Length;
 
     public ExtensionStateStore(
         string? root,
@@ -154,7 +157,7 @@ internal sealed partial class ExtensionStateStore
         long maximumBytes = long.MaxValue)
     {
         var path = GetPath(ownerId, key);
-        var gate = _locks.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+        var gate = GetLock(path);
         await gate.WaitAsync(token);
         try
         {
@@ -224,7 +227,7 @@ internal sealed partial class ExtensionStateStore
     {
         token.ThrowIfCancellationRequested();
         var path = GetPath(ownerId, key);
-        var gate = _locks.GetOrAdd(path, _ => new SemaphoreSlim(1, 1));
+        var gate = GetLock(path);
         await gate.WaitAsync(token);
         try
         {
@@ -309,6 +312,12 @@ internal sealed partial class ExtensionStateStore
         var keyName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))
             .ToLowerInvariant();
         return Path.Combine(_root, ownerNamespace, $"{keyName}.json");
+    }
+
+    private SemaphoreSlim GetLock(string path)
+    {
+        var hash = StringComparer.Ordinal.GetHashCode(path);
+        return _locks[(int)((uint)hash % (uint)_locks.Length)];
     }
 
     private static bool IsSafeRelativeName(string name) =>

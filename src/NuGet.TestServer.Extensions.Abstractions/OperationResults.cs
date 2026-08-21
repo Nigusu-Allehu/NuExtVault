@@ -102,8 +102,8 @@ internal static class OperationErrors
     public static OperationError LimitExceeded(string message) =>
         new(OperationErrorCodes.LimitExceeded, message, null);
 
-    public static OperationError Unavailable(string message) =>
-        new(OperationErrorCodes.Unavailable, message, null);
+    public static OperationError Unavailable(string message, int? retryAfterSeconds = null) =>
+        new(OperationErrorCodes.Unavailable, message, retryAfterSeconds);
 
     public static OperationError Internal(string message) =>
         new(OperationErrorCodes.Internal, message, null);
