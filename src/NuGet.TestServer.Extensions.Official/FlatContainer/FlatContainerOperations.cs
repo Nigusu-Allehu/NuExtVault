@@ -1,4 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Extensions.FlatContainer;
 

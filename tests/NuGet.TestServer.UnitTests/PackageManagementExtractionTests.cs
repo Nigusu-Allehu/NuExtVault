@@ -1,7 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -54,7 +54,7 @@ public sealed class PackageManagementExtractionTests
             OfficialExtensionModules.Manifests,
             candidate => candidate.Id == ExtensionId);
 
-        Assert.Equal(Operations, manifest.Operations.Order(StringComparer.Ordinal));
+        Assert.Equal(Operations, manifest.OwnedOperations.Order(StringComparer.Ordinal));
         Assert.Equal(
             ["publication.delete", "publication.push", "publication.push-symbols", "publication.unlist"],
             manifest.Endpoints.Select(endpoint => endpoint.Name).Order(StringComparer.Ordinal));

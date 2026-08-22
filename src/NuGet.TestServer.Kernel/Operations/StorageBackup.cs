@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using NuGet.TestServer.Kernel.Capabilities;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Operations;
 

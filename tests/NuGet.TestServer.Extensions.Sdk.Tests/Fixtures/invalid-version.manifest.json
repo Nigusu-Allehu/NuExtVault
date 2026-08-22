@@ -1,0 +1,1 @@
+{"$schema":"https://schemas.nutestserver.dev/extensions/manifest/v1","schemaVersion":1,"id":"Contoso.Flavors","version":"1.2","publisher":"Contoso","sdk":{"minimum":"1.0.0","maximumExclusive":"2.0.0"},"contracts":{"manifest":1,"operation":1,"contribution":1,"route":1,"capability":1,"structural":1},"operations":[],"contributions":[],"routes":[],"capabilities":[]}

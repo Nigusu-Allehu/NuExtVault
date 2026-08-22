@@ -8,7 +8,7 @@
     <Description>
       Test-only, separately compiled conformance module. It contributes the
       /flavors/index.json endpoint, its operation, its service-index resource, and its
-      requested capability through the extension abstractions only. It must never
+      requested capability through the public extension SDK only. It must never
       reference NuGet.TestServer or an official extension implementation.
     </Description>
   </PropertyGroup>
@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
   </ItemGroup>
 
 </Project>

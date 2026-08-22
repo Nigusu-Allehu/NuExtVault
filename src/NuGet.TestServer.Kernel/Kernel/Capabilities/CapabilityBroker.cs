@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using NuGet.Packaging;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Operations;
@@ -789,6 +789,25 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
 
     public ImmutableHashSet<string> GrantedCapabilities => _grants;
 
+    public T GetRequired<T>(CapabilityRequest request) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return GetRequired<T>(request.Identity.Value);
+    }
+
+    public bool TryGet<T>(CapabilityRequest request, out T? capability) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Requirement != CapabilityRequirement.Optional)
+        {
+            throw new ArgumentException(
+                "TryGet may be used only for optional capabilities.",
+                nameof(request));
+        }
+
+        return TryGet(request.Identity.Value, out capability);
+    }
+
     public T GetRequired<T>(string capabilityName) where T : class
     {
         if (!_grants.Contains(capabilityName) ||
@@ -1035,7 +1054,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.ExtensionState),
-            var type when type == typeof(IOutboundHttpCapability) =>
+            var type when type == typeof(IKernelOutboundHttpCapability) =>
                 new OutboundHttpCapability(
                     _hostInstanceId,
                     _ownerId,
@@ -1130,7 +1149,7 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.ExtensionStateWrite),
             [typeof(IBackupParticipationCapability)] = Set(
                 BuiltInCapabilityNames.BackupContribute),
-            [typeof(IOutboundHttpCapability)] = Set(BuiltInCapabilityNames.OutboundHttp),
+            [typeof(IKernelOutboundHttpCapability)] = Set(BuiltInCapabilityNames.OutboundHttp),
             [typeof(ISecretReferenceCapability)] = Set(
                 BuiltInCapabilityNames.SecretsResolveReference),
             [typeof(IHostClockCapability)] = Set(BuiltInCapabilityNames.HostClockRead)
@@ -2573,12 +2592,12 @@ internal sealed class OutboundHttpCapability(
     CapabilityLimits limits,
     KernelOutboundHttpClient client)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
-        IOutboundHttpCapability
+        IKernelOutboundHttpCapability
 {
     private const string AllowedHost = "api.nuget.org";
 
-    public ValueTask<OutboundHttpResponse> SendAsync(
-        OutboundHttpRequest request,
+    public ValueTask<KernelOutboundHttpResponse> SendAsync(
+        KernelOutboundHttpRequest request,
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OutboundHttp)
             .InvokeAsync(
@@ -2620,7 +2639,7 @@ internal sealed class OutboundHttpCapability(
                             response.Content,
                             request.MaximumResponseBytes,
                             ct);
-                        return new OutboundHttpResponse(
+                        return new KernelOutboundHttpResponse(
                             (int)response.StatusCode,
                             response.Headers
                                 .Concat(response.Content.Headers)

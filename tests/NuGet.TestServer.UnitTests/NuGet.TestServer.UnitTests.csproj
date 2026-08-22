@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
     <ProjectReference Include="..\..\src\NuGet.TestServer\NuGet.TestServer.csproj" />
     <ProjectReference Include="..\NuGet.TestServer.RouteFixture\NuGet.TestServer.RouteFixture.csproj" />
   </ItemGroup>

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -27,7 +27,7 @@ public sealed class OperationsExtensionTests
             OfficialExtensionModules.All,
             candidate => candidate.Contribution.Manifest.Id == BuiltInExtensionIds.Operations);
 
-        Assert.Equal(OperationIds, module.Contribution.Manifest.Operations.Order().ToArray());
+        Assert.Equal(OperationIds, module.Contribution.Manifest.OwnedOperations.Order().ToArray());
         Assert.Equal(
             ["health.live", "health.live-legacy", "health.ready", "health.storage"],
             module.Contribution.Manifest.Endpoints

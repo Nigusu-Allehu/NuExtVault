@@ -1,4 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.Versioning;
 
 namespace NuGet.TestServer.Extensions.Control;

@@ -1,0 +1,9 @@
+contract=NuGet.TestServer.Extensions.Sdk/v1
+identity=manifest:1
+identity=operation:1
+identity=contribution:1
+identity=route:1
+identity=capability:1
+identity=structural:1
+replacement=disabled
+target-framework=net10.0

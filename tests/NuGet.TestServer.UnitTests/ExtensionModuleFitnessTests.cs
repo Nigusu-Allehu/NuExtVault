@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.RegularExpressions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -71,7 +71,7 @@ public sealed class ExtensionModuleFitnessTests
     }
 
     [Fact]
-    public void The_conformance_module_references_only_the_extension_abstractions()
+    public void The_conformance_module_references_only_the_extension_sdk()
     {
         var project = File.ReadAllText(Path.Combine(
             RepositoryRoot,
@@ -85,7 +85,7 @@ public sealed class ExtensionModuleFitnessTests
             .ToArray();
 
         Assert.Equal(
-            ["NuGet.TestServer.Extensions.Abstractions.csproj"],
+            ["NuGet.TestServer.Extensions.Sdk.csproj"],
             references);
         Assert.DoesNotContain("PackageReference", project, StringComparison.Ordinal);
 
@@ -95,7 +95,7 @@ public sealed class ExtensionModuleFitnessTests
                 "NuGet.TestServer.RouteFixture"))
             .Where(file => Regex.IsMatch(
                 File.ReadAllText(file),
-                @"using\s+NuGet\.TestServer\.(?!Extensions\.Abstractions)"))
+                @"using\s+NuGet\.TestServer\.(?!Extensions\.Sdk)"))
             .Select(file => Path.GetRelativePath(RepositoryRoot, file))
             .ToArray();
 
@@ -134,7 +134,7 @@ public sealed class ExtensionModuleFitnessTests
                          @"using\s+(NuGet\.TestServer\.[A-Za-z0-9_\.]+)\s*;"))
             {
                 var imported = match.Groups[1].Value;
-                if (imported == "NuGet.TestServer.Extensions.Abstractions" ||
+                if (imported == "NuGet.TestServer.Extensions.Sdk" ||
                     imported.StartsWith("NuGet.TestServer.Extensions.", StringComparison.Ordinal))
                 {
                     continue;
@@ -260,8 +260,8 @@ internal static class ExtensionFacingCapabilities
         "IBackupCheckpointCapability",
         "IExtensionStateCapability",
         "IKernelInstrumentationControlCapability",
+        "IKernelOutboundHttpCapability",
         "IOperationsQueryCapability",
-        "IOutboundHttpCapability",
         "IPackageContentReadCapability",
         "IPackageControlCapability",
         "IPackageDeleteCapability",
@@ -340,7 +340,7 @@ internal static class ExtensionFacingCapabilities
         // After the Step 18 split the boundary is the contract assembly itself: an
         // extension-facing capability may only name contract types and framework types.
         var namespaceName = candidate.Namespace ?? string.Empty;
-        return namespaceName == "NuGet.TestServer.Extensions.Abstractions" ||
+        return namespaceName == "NuGet.TestServer.Extensions.Sdk" ||
                namespaceName.StartsWith("System", StringComparison.Ordinal);
     }
 
@@ -372,7 +372,7 @@ internal static class ExtensionFacingCapabilities
             }
         }
 
-        if (type.Namespace == "NuGet.TestServer.Extensions.Abstractions" &&
+        if (type.Namespace == "NuGet.TestServer.Extensions.Sdk" &&
             ReviewedCapabilityDocuments.Contains(type.Name))
         {
             foreach (var property in type.GetProperties(
@@ -396,8 +396,8 @@ internal static class ExtensionFacingCapabilities
         "ExtensionStateEntry`1",
         "ExtensionStateFile",
         "ExtensionStateFileSet",
-        "OutboundHttpRequest",
-        "OutboundHttpResponse",
+        "KernelOutboundHttpRequest",
+        "KernelOutboundHttpResponse",
         "VulnerabilityCatalogDocument",
         "VulnerabilityCatalogPageDocument"
     ];

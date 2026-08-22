@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.SupplyChain;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;

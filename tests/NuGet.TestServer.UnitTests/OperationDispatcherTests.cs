@@ -1,7 +1,7 @@
 using System.Diagnostics.Metrics;
 using System.Text;
 using Microsoft.Data.Sqlite;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Operations;

@@ -1,12 +1,12 @@
 using System.Collections.Immutable;
 using System.Text.Json;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.RouteFixture;
 
 /// <summary>
 /// Step 11C conformance module. This assembly is compiled separately from the kernel
-/// and references only <c>NuGet.TestServer.Extensions.Abstractions</c>. It contributes
+/// and references only <c>NuGet.TestServer.Extensions.Sdk</c>. It contributes
 /// its identity, one typed operation, one route, one service-index resource, and one
 /// requested capability. It never sees <c>WebApplication</c>,
 /// <c>IEndpointRouteBuilder</c>, the root service provider, an <c>HttpContext</c>, the
@@ -66,7 +66,7 @@ internal sealed class FlavorsModule : IExtensionModule
                     1000,
                     ServiceResourceReadiness.Ready)
             ],
-            [new CapabilityRequest(KernelCapabilityNames.HostClockRead, IsRequired: true)]),
+            [new CapabilityRequest(KernelCapabilityNames.HostClockRead, true)]),
         [
             new OperationBinding(
                 new OperationContract(

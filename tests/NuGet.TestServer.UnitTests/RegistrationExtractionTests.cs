@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Extensions.Official;
@@ -44,7 +44,7 @@ public sealed class RegistrationExtractionTests
             OfficialExtensionModules.Manifests,
             candidate => candidate.Id == ExtensionId);
 
-        Assert.Equal(Operations, manifest.Operations.Order(StringComparer.Ordinal));
+        Assert.Equal(Operations, manifest.OwnedOperations.Order(StringComparer.Ordinal));
         Assert.Equal(
             ["registration.index", "registration.leaf", "registration.page"],
             manifest.Endpoints.Select(endpoint => endpoint.Name).Order(StringComparer.Ordinal));
@@ -69,7 +69,7 @@ public sealed class RegistrationExtractionTests
             BuiltInExtensionCatalog.Manifests,
             candidate => candidate.Id == BuiltInExtensionIds.Protocol);
         Assert.DoesNotContain(
-            protocol.Operations,
+            protocol.OwnedOperations,
             operation => operation.StartsWith("NuGet.Registration.", StringComparison.Ordinal));
         Assert.DoesNotContain(
             protocol.Endpoints,

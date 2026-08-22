@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Official;
 using NuGet.TestServer.Extensions.ServiceIndex;

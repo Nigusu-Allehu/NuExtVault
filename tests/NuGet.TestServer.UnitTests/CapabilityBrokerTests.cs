@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Extensions.Control;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Search;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
@@ -418,11 +418,11 @@ public sealed class CapabilityBrokerTests
         using var host = TestServerApplication.Build(ServerProfiles.Standard);
         var outbound = host.Services.GetRequiredService<CapabilityBroker>()
             .ForOwner(BuiltInExtensionIds.Vulnerabilities)
-            .GetRequired<IOutboundHttpCapability>(BuiltInCapabilityNames.OutboundHttp);
+            .GetRequired<IKernelOutboundHttpCapability>(BuiltInCapabilityNames.OutboundHttp);
 
         await Assert.ThrowsAsync<CapabilityDeniedException>(
             () => outbound.SendAsync(
-                new OutboundHttpRequest(
+                new KernelOutboundHttpRequest(
                     new Uri("https://example.com/"),
                     "GET",
                     ImmutableDictionary<string, string>.Empty,

@@ -1,0 +1,225 @@
+type NuGet.TestServer.Extensions.Sdk.AttestationFailure
+type NuGet.TestServer.Extensions.Sdk.AttestationVerificationResult
+  NuGet.TestServer.Extensions.Sdk.AttestationFailure Failure { get; }
+  System.Boolean IsValid { get; }
+type NuGet.TestServer.Extensions.Sdk.BoundedDocument
+  System.Int32 ContentLength { get; }
+  System.Int64 MaximumLength { get; }
+  System.ReadOnlyMemory<System.Byte> Content { get; }
+  System.String ContentType { get; }
+type NuGet.TestServer.Extensions.Sdk.CanonicalContractBytes
+  NuGet.TestServer.Extensions.Sdk.ManifestDigest ManifestDigest(NuGet.TestServer.Extensions.Sdk.ExtensionManifest manifest)
+  System.ReadOnlyMemory<System.Byte> Manifest(NuGet.TestServer.Extensions.Sdk.ExtensionManifest manifest)
+  System.ReadOnlyMemory<System.Byte> StructuralContract(System.Reflection.Assembly assembly)
+type NuGet.TestServer.Extensions.Sdk.CapabilityContractVersion
+  System.Int32 Value { get; }
+type NuGet.TestServer.Extensions.Sdk.CapabilityDeniedException
+  System.String CapabilityName { get; }
+  System.String ExtensionId { get; }
+type NuGet.TestServer.Extensions.Sdk.CapabilityGrantSet
+  NuGet.TestServer.Extensions.Sdk.CapabilityGrantSet Create(System.String extensionId,System.Collections.Generic.IEnumerable<NuGet.TestServer.Extensions.Sdk.CapabilityIdentity> grants)
+  System.Boolean TryGet<TCapability>(NuGet.TestServer.Extensions.Sdk.CapabilityRequest request,TCapability& capability)
+  TCapability GetRequired<TCapability>(NuGet.TestServer.Extensions.Sdk.CapabilityRequest request)
+type NuGet.TestServer.Extensions.Sdk.CapabilityIdentity
+  System.String Value { get; }
+type NuGet.TestServer.Extensions.Sdk.CapabilityRequest
+  NuGet.TestServer.Extensions.Sdk.CapabilityIdentity Identity { get; }
+  NuGet.TestServer.Extensions.Sdk.CapabilityRequirement Requirement { get; }
+type NuGet.TestServer.Extensions.Sdk.CapabilityRequirement
+type NuGet.TestServer.Extensions.Sdk.ConformanceAlgorithms
+  System.String Es256
+type NuGet.TestServer.Extensions.Sdk.ConformanceAttestation
+  NuGet.TestServer.Extensions.Sdk.ConformanceAttestationEnvelope Sign(NuGet.TestServer.Extensions.Sdk.ConformanceAttestationPayload payload,System.ReadOnlyMemory<System.Byte> privateKey,System.String keyId,System.DateTimeOffset issuedAt,System.DateTimeOffset expiresAt,System.String algorithm)
+  System.ReadOnlyMemory<System.Byte> CanonicalPayloadBytes(NuGet.TestServer.Extensions.Sdk.ConformanceAttestationPayload payload)
+type NuGet.TestServer.Extensions.Sdk.ConformanceAttestationEnvelope
+  System.DateTimeOffset ExpiresAt { get; }
+  System.DateTimeOffset IssuedAt { get; }
+  System.ReadOnlyMemory<System.Byte> Payload { get; }
+  System.ReadOnlyMemory<System.Byte> Signature { get; }
+  System.String Algorithm { get; }
+  System.String KeyId { get; }
+type NuGet.TestServer.Extensions.Sdk.ConformanceAttestationPayload
+  NuGet.TestServer.Extensions.Sdk.CapabilityContractVersion CapabilityVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.ContributionContractVersion ContributionVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion ManifestVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationContractVersion OperationVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteContractVersion RouteVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion SdkVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.StructuralContractVersion StructuralVersion { get; }
+  System.Int32 PayloadVersion { get; }
+  System.String ManifestSha256 { get; }
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+  System.String Publisher { get; }
+  System.String StructuralSha256 { get; }
+  System.String Suite { get; }
+type NuGet.TestServer.Extensions.Sdk.ConformanceAttestationVerifier
+  NuGet.TestServer.Extensions.Sdk.AttestationVerificationResult Verify(NuGet.TestServer.Extensions.Sdk.ConformanceAttestationEnvelope envelope,NuGet.TestServer.Extensions.Sdk.ConformanceExpectation expectation,System.Collections.Generic.IEnumerable<NuGet.TestServer.Extensions.Sdk.ConformanceTrustRoot> trustRoots,System.DateTimeOffset now)
+type NuGet.TestServer.Extensions.Sdk.ConformanceExpectation
+  NuGet.TestServer.Extensions.Sdk.CapabilityContractVersion CapabilityVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.ContributionContractVersion ContributionVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion ManifestVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationContractVersion OperationVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteContractVersion RouteVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion SdkVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.StructuralContractVersion StructuralVersion { get; }
+  System.String ManifestSha256 { get; }
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+  System.String Publisher { get; }
+  System.String StructuralSha256 { get; }
+  System.String Suite { get; }
+type NuGet.TestServer.Extensions.Sdk.ConformanceTrustRoot
+  System.ReadOnlyMemory<System.Byte> SubjectPublicKeyInfo { get; }
+  System.String Algorithm { get; }
+  System.String KeyId { get; }
+  System.String Publisher { get; }
+type NuGet.TestServer.Extensions.Sdk.ConformanceResult
+  System.Boolean IsValid { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.ManifestValidationError> Errors { get; }
+type NuGet.TestServer.Extensions.Sdk.ContractVersionSet
+  NuGet.TestServer.Extensions.Sdk.CapabilityContractVersion Capability { get; }
+  NuGet.TestServer.Extensions.Sdk.ContributionContractVersion Contribution { get; }
+  NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion Manifest { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationContractVersion Operation { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteContractVersion Route { get; }
+  NuGet.TestServer.Extensions.Sdk.StructuralContractVersion Structural { get; }
+type NuGet.TestServer.Extensions.Sdk.ContributionDeclaration
+  NuGet.TestServer.Extensions.Sdk.ContributionContractVersion Version { get; }
+  NuGet.TestServer.Extensions.Sdk.ContributionIdentity Identity { get; }
+  System.String Kind { get; }
+type NuGet.TestServer.Extensions.Sdk.ContributionContractVersion
+  System.Int32 Value { get; }
+type NuGet.TestServer.Extensions.Sdk.ContributionIdentity
+  System.String Value { get; }
+type NuGet.TestServer.Extensions.Sdk.EndpointAccessKind
+type NuGet.TestServer.Extensions.Sdk.ExtensionConformance
+  NuGet.TestServer.Extensions.Sdk.ConformanceResult ValidateAssembly(System.Reflection.Assembly assembly)
+  NuGet.TestServer.Extensions.Sdk.ConformanceResult ValidateAssembly(System.Reflection.Assembly assembly,NuGet.TestServer.Extensions.Sdk.SdkContractVersion sdkVersion)
+  NuGet.TestServer.Extensions.Sdk.ConformanceResult ValidateOwnership(System.String extensionId,NuGet.TestServer.Extensions.Sdk.OperationDeclaration declaration)
+type NuGet.TestServer.Extensions.Sdk.ExtensionIdentity
+  System.String Id { get; }
+  System.String Publisher { get; }
+  System.String Version { get; }
+type NuGet.TestServer.Extensions.Sdk.ExtensionManifest
+  NuGet.TestServer.Extensions.Sdk.ContractVersionSet Contracts { get; }
+  NuGet.TestServer.Extensions.Sdk.ExtensionIdentity Identity { get; }
+  NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion SchemaVersion { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkCompatibilityRange Sdk { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.CapabilityRequest> Capabilities { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.ContributionDeclaration> Contributions { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.OperationDeclaration> Operations { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.RouteDeclaration> Routes { get; }
+type NuGet.TestServer.Extensions.Sdk.ExtensionManifestJson
+  NuGet.TestServer.Extensions.Sdk.ExtensionManifest Parse(System.ReadOnlyMemory<System.Byte> utf8Json)
+  NuGet.TestServer.Extensions.Sdk.ManifestDigest ComputeDigest(NuGet.TestServer.Extensions.Sdk.ExtensionManifest manifest)
+  NuGet.TestServer.Extensions.Sdk.ManifestDigest ComputeDigest(System.ReadOnlyMemory<System.Byte> canonicalManifest)
+  NuGet.TestServer.Extensions.Sdk.ManifestValidationResult Validate(System.ReadOnlyMemory<System.Byte> utf8Json)
+  System.ReadOnlyMemory<System.Byte> Canonicalize(NuGet.TestServer.Extensions.Sdk.ExtensionManifest manifest)
+type NuGet.TestServer.Extensions.Sdk.ExtensionModuleContribution
+  NuGet.TestServer.Extensions.Sdk.ExtensionManifest Manifest { get; }
+  NuGet.TestServer.Extensions.Sdk.ExtensionModuleContribution FromManifest(NuGet.TestServer.Extensions.Sdk.ExtensionManifest manifest)
+type NuGet.TestServer.Extensions.Sdk.ExtensionSdkCompatibility
+  System.Boolean SameMajorRequired
+  System.Int32 MinimumPriorMinorReleases
+  System.TimeSpan MinimumSupportDuration
+type NuGet.TestServer.Extensions.Sdk.ExtensionSdkVersions
+  NuGet.TestServer.Extensions.Sdk.CapabilityContractVersion CapabilityV1 { get; }
+  NuGet.TestServer.Extensions.Sdk.ContributionContractVersion ContributionV1 { get; }
+  NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion ManifestV1 { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationContractVersion OperationV1 { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteContractVersion RouteV1 { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion Current { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractIdentity Identity { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion OldestSupported { get; }
+  NuGet.TestServer.Extensions.Sdk.StructuralContractVersion StructuralV1 { get; }
+  System.Boolean IsSupported(NuGet.TestServer.Extensions.Sdk.SdkContractVersion version)
+  System.String ConformanceSuiteV1
+type NuGet.TestServer.Extensions.Sdk.IExtensionCapabilities
+  System.Boolean TryGet<TCapability>(NuGet.TestServer.Extensions.Sdk.CapabilityRequest request,TCapability& capability)
+  TCapability GetRequired<TCapability>(NuGet.TestServer.Extensions.Sdk.CapabilityRequest request)
+type NuGet.TestServer.Extensions.Sdk.IExtensionModule
+  NuGet.TestServer.Extensions.Sdk.ExtensionModuleContribution Contribution { get; }
+  System.Void RegisterOperations(NuGet.TestServer.Extensions.Sdk.IOperationOwnerRegistry operations,NuGet.TestServer.Extensions.Sdk.IExtensionCapabilities capabilities,NuGet.TestServer.Extensions.Sdk.IDocumentContributionSource contributions)
+  System.Void RegisterRoutes(NuGet.TestServer.Extensions.Sdk.IRouteBinderRegistry routes)
+type NuGet.TestServer.Extensions.Sdk.IHostClockCapability
+  System.Threading.Tasks.ValueTask<System.DateTimeOffset> GetUtcNowAsync(System.Threading.CancellationToken cancellationToken)
+type NuGet.TestServer.Extensions.Sdk.IOutboundHttpCapability
+  System.Threading.Tasks.ValueTask<NuGet.TestServer.Extensions.Sdk.BoundedDocument> SendAsync(NuGet.TestServer.Extensions.Sdk.OutboundHttpRequest request,System.Threading.CancellationToken cancellationToken)
+type NuGet.TestServer.Extensions.Sdk.IOperationOwnerRegistry
+  NuGet.TestServer.Extensions.Sdk.OperationDeclaration RegisterNew<TRequest,TResponse>(System.String extensionId,NuGet.TestServer.Extensions.Sdk.OperationIdentity identity,System.Func<TRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<NuGet.TestServer.Extensions.Sdk.OperationResponse<TResponse>>> handler)
+type NuGet.TestServer.Extensions.Sdk.IDocumentContributionSource
+type NuGet.TestServer.Extensions.Sdk.IRouteBinderRegistry
+  System.Void Bind<TRequest>(NuGet.TestServer.Extensions.Sdk.RouteIdentity route,System.Func<NuGet.TestServer.Extensions.Sdk.RouteBindingRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<TRequest>> binder)
+type NuGet.TestServer.Extensions.Sdk.ManifestDigest
+  System.String Hex { get; }
+type NuGet.TestServer.Extensions.Sdk.ManifestSchemaVersion
+  System.Int32 Value { get; }
+type NuGet.TestServer.Extensions.Sdk.ManifestValidationError
+  System.String Code { get; }
+  System.String Message { get; }
+  System.String Path { get; }
+type NuGet.TestServer.Extensions.Sdk.ManifestValidationResult
+  NuGet.TestServer.Extensions.Sdk.ExtensionManifest Manifest { get; }
+  System.Boolean IsValid { get; }
+  System.Collections.Immutable.ImmutableArray<NuGet.TestServer.Extensions.Sdk.ManifestValidationError> Errors { get; }
+type NuGet.TestServer.Extensions.Sdk.OperationContractVersion
+  System.Int32 Value { get; }
+type NuGet.TestServer.Extensions.Sdk.OperationDeclaration
+  NuGet.TestServer.Extensions.Sdk.OperationContractVersion Version { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationIdentity Identity { get; }
+  NuGet.TestServer.Extensions.Sdk.OperationOwnership Ownership { get; }
+  System.Boolean AllowReplacement { get; }
+  System.String RequestContract { get; }
+  System.String ResponseContract { get; }
+type NuGet.TestServer.Extensions.Sdk.OperationIdentity
+  System.String Value { get; }
+type NuGet.TestServer.Extensions.Sdk.OperationContributor
+  NuGet.TestServer.Extensions.Sdk.OperationDeclaration Define<TRequest,TResponse>(NuGet.TestServer.Extensions.Sdk.OperationIdentity identity,NuGet.TestServer.Extensions.Sdk.OperationContractVersion version,System.Func<TRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<NuGet.TestServer.Extensions.Sdk.OperationResponse<TResponse>>> handler)
+type NuGet.TestServer.Extensions.Sdk.OperationOwnership
+type NuGet.TestServer.Extensions.Sdk.OperationResponse<TResponse>
+  NuGet.TestServer.Extensions.Sdk.OperationResponse<TResponse> Success(TResponse value)
+type NuGet.TestServer.Extensions.Sdk.OutboundHttpRequest
+type NuGet.TestServer.Extensions.Sdk.ReplacementPolicy
+type NuGet.TestServer.Extensions.Sdk.OperationReplacementPolicies
+  NuGet.TestServer.Extensions.Sdk.ReplacementPolicy Default { get; }
+  NuGet.TestServer.Extensions.Sdk.ReplacementPolicy IdentityMutations { get; }
+  NuGet.TestServer.Extensions.Sdk.ReplacementPolicy OwnershipMutations { get; }
+  NuGet.TestServer.Extensions.Sdk.ReplacementPolicy For(System.String operationId)
+type NuGet.TestServer.Extensions.Sdk.RouteBindingRequest
+  NuGet.TestServer.Extensions.Sdk.BoundedDocument ReadBody()
+  System.String GetQuery(System.String name)
+  System.String GetRoute(System.String name)
+type NuGet.TestServer.Extensions.Sdk.RouteDeclaration
+  NuGet.TestServer.Extensions.Sdk.OperationIdentity Operation { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteContractVersion Version { get; }
+  NuGet.TestServer.Extensions.Sdk.RouteIdentity Identity { get; }
+  System.Collections.Immutable.ImmutableArray<System.String> Methods { get; }
+  System.Int64 MaximumRequestBytes { get; }
+  System.Int64 MaximumResponseBytes { get; }
+  System.String Path { get; }
+type NuGet.TestServer.Extensions.Sdk.RouteContractVersion
+  System.Int32 Value { get; }
+type NuGet.TestServer.Extensions.Sdk.RouteIdentity
+  System.String Value { get; }
+type NuGet.TestServer.Extensions.Sdk.SdkCompatibilityRange
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion MaximumExclusive { get; }
+  NuGet.TestServer.Extensions.Sdk.SdkContractVersion Minimum { get; }
+type NuGet.TestServer.Extensions.Sdk.SdkContractVersion
+  System.Int32 Major { get; }
+  System.Int32 Minor { get; }
+  System.Int32 Patch { get; }
+type NuGet.TestServer.Extensions.Sdk.SdkContractIdentity
+  System.String Value { get; }
+type NuGet.TestServer.Extensions.Sdk.StreamHandle
+  System.Int64 MaximumLength { get; }
+  System.String ContentType { get; }
+  System.String Id { get; }
+type NuGet.TestServer.Extensions.Sdk.StructuralContractFingerprint
+  NuGet.TestServer.Extensions.Sdk.StructuralContractIdentity Create(System.Reflection.Assembly assembly)
+type NuGet.TestServer.Extensions.Sdk.StructuralContractIdentity
+  NuGet.TestServer.Extensions.Sdk.StructuralContractVersion Version { get; }
+  System.ReadOnlyMemory<System.Byte> CanonicalBytes { get; }
+  System.String Sha256 { get; }
+type NuGet.TestServer.Extensions.Sdk.StructuralContractVersion
+  System.Int32 Value { get; }

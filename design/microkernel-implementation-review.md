@@ -2,14 +2,15 @@
 
 ## Scope and status
 
-This review evaluates the selected microkernel architecture against implementation
-evidence through merged PR #62 (Migration Steps 1 through 11) and a two-agent
-architecture debate. It records decisions for the next migration phase; it does not
-claim that proposed SDK, loading, lifecycle, event, sidecar, or distributed behavior
-exists.
+This review records the original architecture debate and implementation evidence
+through Microkernel Step 19. The public SDK contracts, TestKit, strict manifest,
+canonical identities, and attestation primitives are now implemented and locally
+packable. External publication, runtime discovery/loading/activation, lifecycle,
+events, sidecars, and distributed behavior are not claimed.
 
-The implemented system is a useful closed built-in modular system. It is not yet a
-genuinely independently loadable extension platform.
+The implemented system is a complete official microkernel with a stabilized local
+SDK. It is not yet a genuinely independently loadable extension platform; that is
+Step 20.
 
 ## What Steps 1 through 11 proved
 
@@ -52,7 +53,8 @@ Extension state does not yet define the transaction, migration, quota, concurren
 lock-cardinality, checkpoint, and crash-safe restore semantics required for backup.
 Durable at-least-once events and a full `Degraded` lifecycle are designs, not
 implemented behavior. Filesystem discovery, assembly load contexts, dynamic unload,
-sidecars, and SDK publication remain out of scope and unimplemented.
+sidecars, and external SDK publication remain out of scope and unimplemented; Step
+19 supports local SDK packing only.
 
 ## Debate
 
@@ -68,8 +70,9 @@ contracts.
 
 ### Evolutionary advocate position
 
-The migration found these gaps before publishing an SDK, which is the intended
-benefit of internal extraction. Contracts remain internal and inexpensive to change.
+The migration found these gaps before stabilizing an SDK, which was the intended
+benefit of internal extraction. At the time of this debate the contracts remained
+internal and inexpensive to change; Step 19 later froze the approved public subset.
 Three-operating-system tests, compatibility characterization, per-step ownership,
 and rollback points retain value regardless of the final public packaging model.
 Focused correction PRs are safer and cheaper than discarding the implemented kernel
@@ -188,8 +191,9 @@ After Steps 11A through 11D:
   official extensions ship as `NuGet.TestServer.Extensions.Official`, the kernel and
   runtime as `NuGet.TestServer.Kernel`, and `NuGet.TestServer` is the only assembly
   that references both.
-- Step 19 publishes no SDK until route, URL, rendering, capability, contract identity,
-  support, signing, replacement, manifest, and target-framework decisions are made.
+- Step 19 is implemented and resolves route, URL, rendering, capability, contract
+  identity, support, signing, replacement, manifest, and target-framework decisions.
+  It creates locally packable SDK/TestKit packages but does not publish externally.
 - Step 20 adds trusted in-process loading.
 - Step 21 remains gated on a concrete consumer and transport-neutral parity.
 - Step 22 depends on Step 20 and on Step 21 only when isolation is required.
@@ -311,7 +315,7 @@ The official extensions are now a separately compiled assembly. The enforced acc
 gate is the compiled assembly graph, not a namespace convention:
 
 ```text
-NuGet.TestServer.Extensions.Abstractions      (contracts; System-only dependencies)
+NuGet.TestServer.Extensions.Sdk               (contracts; System-only dependencies)
         ^                              ^
 NuGet.TestServer.Kernel        NuGet.TestServer.Extensions.Official
         ^                              ^
@@ -351,6 +355,36 @@ metadata and registration vulnerability contracts are now discovered through the
 compiled boundary; no existing entry changed. Rollback recombines the assemblies
 without any contract, wire, or data migration.
 
+## Step 19 implementation update
+
+The former contracts assembly is now the public
+`NuGet.TestServer.Extensions.Sdk` package/assembly `1.0.0`, and
+`NuGet.TestServer.Extensions.TestKit` is a separate `1.0.0` package. Both target only
+`net10.0`, matching every runtime and test project in the repository. The SDK has no
+host, kernel, ASP.NET Core, storage, DI, security, NuGet.Protocol, rendering, or
+official-extension dependency.
+
+Manifest schema v1 is strict deterministic JSON with a typed TestKit builder.
+Manifest, SDK, operation, contribution, route, capability, and structural identities
+are independent. Canonical UTF-8 bytes, ordinal ordering, lowercase SHA-256 digests,
+golden snapshots, and ES256 attestations fail closed on identity, version, digest,
+publisher, key, algorithm, suite, or time mismatch. The host-supported SDK window is
+`1.0.0` through `1.2.0` inclusive in major 1; support/deprecation clocks begin only
+after first external publication.
+
+Public contributors can define only new stable operation IDs in their own namespace.
+Every built-in remains nonreplaceable, replacement is disabled in v1, and
+authoritative mutations are permanently excluded. Required and optional capability
+requests are explicit; public capabilities remain asynchronous, cancellable,
+serializable, bounded, and action-scoped with no implementation escape.
+
+Official modules and the separately compiled `/flavors/index.json` fixture conform
+against the frozen SDK. Local pack tests verify the SDK schema asset, TestKit, and
+fixture package without bundling host implementation assemblies. Step 19 adds no
+external publication, discovery, loading, activation, sidecar, or optional-startup
+degradation behavior. Step 20 is next. See
+[`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
+
 ## Open questions and deadlines
 
 ### Before Step 12A
@@ -372,21 +406,12 @@ without any contract, wire, or data migration.
 
 ### Before Step 19
 
-- Is route/binding public in v1 or contributor-only?
-- Answered in Step 11C: `OperationResult` replaces `OperationHttpResult` as one
-  immutable, versioned, transport-neutral rendering contract. Remaining question: does
-  the versioned contract need negotiation across SDK versions?
-- What SDK version window is supported?
-- Partially answered in Step 11C: structural contract identity is a canonical text plus
-  a SHA-256 fingerprint with golden snapshots for operations, routes, resources, and
-  capability candidates. Remaining question: which of those surfaces become public.
-- What signing and publisher identity policy applies?
-- What replacement scope is supportable, and does search alone justify replacement
-  machinery?
-- Are manifests JSON, code, or both?
-- Which target frameworks are supported?
-- Should v1 deliberately ship as in-process first?
-- What are optional-extension startup failure semantics?
+- Resolved by Step 19 and recorded in
+  [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md): public typed route/new
+  operation contribution, transport-neutral negotiated contracts, SDK
+  `1.0.0`-`1.2.0`, canonical structural identities, ES256 publisher trust, disabled
+  replacement, strict JSON plus typed builder, `net10.0`, local in-process-first
+  contracts, and no v1 optional-startup degradation promise.
 
 ### Before sidecars
 

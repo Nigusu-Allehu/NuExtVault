@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.FlatContainer;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;

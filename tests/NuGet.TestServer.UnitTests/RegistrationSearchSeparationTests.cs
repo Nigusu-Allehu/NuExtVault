@@ -1,4 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 
@@ -46,7 +46,7 @@ public sealed class RegistrationSearchSeparationTests
         var abstractions = Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer.Extensions.Abstractions");
+            "NuGet.TestServer.Extensions.Sdk");
         var registration = Path.Combine(
             RepositoryRoot,
             "src",

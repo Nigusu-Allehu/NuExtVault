@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 using NuGet.Packaging;
 using NuGet.Packaging.Signing;
 using NuGet.Versioning;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Kernel;
 
 namespace NuGet.TestServer.Packages;

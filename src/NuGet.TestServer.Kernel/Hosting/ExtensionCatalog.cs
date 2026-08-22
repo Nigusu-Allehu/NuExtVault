@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using NuGet.Versioning;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Routing;
@@ -328,7 +328,7 @@ internal sealed class ExtensionCatalog
         var owners = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var manifest in manifests.OrderBy(value => value.Id, ExtensionIdComparer.Instance))
         {
-            foreach (var operation in manifest.Operations.Order(StringComparer.Ordinal))
+            foreach (var operation in manifest.OwnedOperations.Order(StringComparer.Ordinal))
             {
                 if (owners.TryGetValue(operation, out var existingOwner))
                 {

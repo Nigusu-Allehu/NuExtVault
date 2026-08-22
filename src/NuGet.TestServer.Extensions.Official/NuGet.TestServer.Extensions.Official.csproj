@@ -8,7 +8,7 @@
     <RootNamespace>NuGet.TestServer.Extensions</RootNamespace>
     <Description>
       The official NuGet.TestServer extensions. They are compiled separately from the
-      kernel and may reference only the extension abstractions and transport-neutral
+      kernel and may reference only the extension SDK and transport-neutral
       packages, so the kernel has no compile-time knowledge of them.
     </Description>
   </PropertyGroup>
@@ -18,7 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
   </ItemGroup>
 
   <ItemGroup>

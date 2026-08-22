@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using System.Net;
 using System.Text.Json;
 using NuGet.TestServer.Authentication;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.RouteFixture;
