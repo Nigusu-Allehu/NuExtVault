@@ -43,6 +43,20 @@ internal abstract class EndpointRequest
 
     public abstract string? GetQuery(string name);
 
+    /// <summary>
+    /// Reads one request header by name. Descriptor binders see only the headers their
+    /// route declares; the kernel filters the request before the binder runs.
+    /// </summary>
+    public abstract string? GetHeader(string name);
+
+    /// <summary>
+    /// Reads the whole request body under an explicit byte limit. The kernel refuses to
+    /// buffer more than the limit, so a bounded route can never buffer stream content.
+    /// </summary>
+    public abstract ValueTask<BoundedDocument> ReadBoundedBodyAsync(
+        long maximumBytes,
+        CancellationToken cancellationToken);
+
     public abstract int? GetQueryInt32(string name);
 
     public abstract bool? GetQueryBoolean(string name);

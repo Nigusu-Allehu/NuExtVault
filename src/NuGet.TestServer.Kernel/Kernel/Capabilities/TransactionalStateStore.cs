@@ -163,15 +163,77 @@ internal sealed class TransactionalStateStore : IDisposable
         byte[] value,
         long? expectedETag,
         CancellationToken token,
-        long maximumBytes = long.MaxValue)
+        long maximumBytes = long.MaxValue,
+        bool requireAbsent = false)
     {
         ArgumentNullException.ThrowIfNull(value);
         var results = await CompareAndSwapAsync(
             ownerId,
-            [new StateEdit(key, expectedETag, value)],
+            [new StateEdit(key, expectedETag, value, requireAbsent)],
             token,
             maximumBytes);
         return results[0];
+    }
+
+    internal async ValueTask<(T Result, StateRecord? Written)> ExecuteConditionalWriteAsync<T>(
+        string ownerId,
+        string key,
+        byte[] value,
+        long? expectedETag,
+        Func<CancellationToken, ValueTask<T>> action,
+        Func<T, bool> shouldWrite,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(shouldWrite);
+        var participant = ResolveParticipant(ownerId);
+        ValidateKey(key);
+        ValidateRecordSize(value.LongLength, long.MaxValue);
+        EnsureWritable();
+
+        using var _ = await LockOwnerAsync(ownerId, token);
+        var owner = _owners.TryGetValue(ownerId, out var existing) ? existing : OwnerRecords.Empty;
+        owner.Records.TryGetValue(key, out var current);
+        if (expectedETag is { } expected && (current is null || current.ETag != expected))
+        {
+            throw new StateConcurrencyException(key, expected, current?.ETag);
+        }
+
+        var edit = new StateEdit(key, expectedETag, value);
+        EnsureOwnerAdmitted(ownerId);
+        EnsureOwnerQuota(
+            ownerId,
+            owner.With(key, new StateEntry(0, value.LongLength, string.Empty, null)));
+
+        var result = await action(token);
+        if (!shouldWrite(result))
+        {
+            return (result, null);
+        }
+
+        var written = await ApplyBatchAsync(ownerId, participant, [edit], owner, token);
+        return (result, written[0]);
+    }
+
+    /// <summary>
+    /// Lists an owner's keys under a prefix in ordinal order, bounded by
+    /// <paramref name="take"/>. Only key names are materialized, never payloads.
+    /// </summary>
+    public IReadOnlyList<string> ListKeys(string ownerId, string keyPrefix, int take)
+    {
+        ResolveParticipant(ownerId);
+        if (take <= 0)
+        {
+            return [];
+        }
+
+        return !_owners.TryGetValue(ownerId, out var owner)
+            ? []
+            : [.. owner.Records.Keys
+                .Where(key => key.StartsWith(keyPrefix ?? string.Empty, StringComparison.Ordinal))
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .Take(Math.Min(take, _quotas.MaximumRecordsPerOwner))];
     }
 
     /// <summary>
@@ -211,6 +273,11 @@ internal sealed class TransactionalStateStore : IDisposable
         foreach (var edit in edits)
         {
             owner.Records.TryGetValue(edit.Key, out var current);
+            if (edit.RequireAbsent && current is not null)
+            {
+                throw new StateConcurrencyException(edit.Key, null, current.ETag);
+            }
+
             if (edit.ExpectedETag is { } expected)
             {
                 if (current is null || current.ETag != expected)

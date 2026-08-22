@@ -40,7 +40,28 @@ public static class ExtensionManifestJson
         "operations",
         "contributions",
         "routes",
-        "capabilities");
+        "capabilities",
+        "state");
+
+    /// <summary>
+    /// Headers a route may never declare. Credential, transport, and proxy headers stay
+    /// kernel-owned so a binder can never observe or re-interpret them.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ReservedHeaderNames =
+        ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            "Authorization",
+            "Cookie",
+            "Proxy-Authorization",
+            "Host",
+            "X-NuGet-ApiKey");
+
+    /// <summary>Every proxy-forwarding header family is reserved.</summary>
+    private const string ReservedHeaderPrefix = "X-Forwarded-";
+
+    private static bool IsReservedHeader(string header) =>
+        ReservedHeaderNames.Contains(header) ||
+        header.StartsWith(ReservedHeaderPrefix, StringComparison.OrdinalIgnoreCase);
 
     public static ManifestValidationResult Validate(ReadOnlyMemory<byte> utf8Json)
     {
@@ -137,9 +158,10 @@ public static class ExtensionManifestJson
             var sdk = ParseSdk(root, errors);
             var contracts = ParseContracts(root, errors);
             var operations = ParseOperations(root, id, errors);
-            var contributions = ParseContributions(root, id, errors);
             var routes = ParseRoutes(root, operations, errors);
+            var contributions = ParseContributions(root, id, routes, errors);
             var capabilities = ParseCapabilities(root, errors);
+            var state = ParseState(root, errors);
 
             if (errors.Count > 0)
             {
@@ -154,7 +176,8 @@ public static class ExtensionManifestJson
                 operations,
                 contributions,
                 routes,
-                capabilities);
+                capabilities,
+                state);
             return new ManifestValidationResult(manifest, []);
         }
     }
@@ -221,6 +244,10 @@ public static class ExtensionManifestJson
                 writer.WriteStartObject();
                 writer.WriteString("id", contribution.Identity.Value);
                 writer.WriteString("kind", contribution.Kind);
+                if (contribution.Route is { } contributionRoute)
+                {
+                    writer.WriteString("routeId", contributionRoute.Value);
+                }
                 writer.WriteNumber("version", contribution.Version.Value);
                 writer.WriteEndObject();
             }
@@ -253,7 +280,28 @@ public static class ExtensionManifestJson
             {
                 writer.WriteStartObject();
                 writer.WriteString("access", route.Access);
+                if (route.DeclaredBody is { } declaredBody)
+                {
+                    writer.WriteString(
+                        "body",
+                        declaredBody switch
+                        {
+                            RouteBodyBinding.None => "none",
+                            RouteBodyBinding.Stream => "stream",
+                            _ => "bounded"
+                        });
+                }
                 writer.WriteString("head", route.Head);
+                if (!route.Headers.IsDefaultOrEmpty)
+                {
+                    writer.WritePropertyName("headers");
+                    writer.WriteStartArray();
+                    foreach (var header in route.Headers.Order(StringComparer.Ordinal))
+                    {
+                        writer.WriteStringValue(header);
+                    }
+                    writer.WriteEndArray();
+                }
                 writer.WriteString("id", route.Identity.Value);
                 writer.WriteNumber("maximumRequestBytes", route.MaximumRequestBytes);
                 writer.WriteNumber("maximumResponseBytes", route.MaximumResponseBytes);
@@ -277,6 +325,15 @@ public static class ExtensionManifestJson
             writer.WriteString("maximumExclusive", manifest.Sdk.MaximumExclusive.ToString());
             writer.WriteString("minimum", manifest.Sdk.Minimum.ToString());
             writer.WriteEndObject();
+            if (manifest.State is { } declaredState)
+            {
+                writer.WritePropertyName("state");
+                writer.WriteStartObject();
+                writer.WriteBoolean("required", declaredState.Required);
+                writer.WriteString("schemaName", declaredState.SchemaName);
+                writer.WriteNumber("schemaVersion", declaredState.SchemaVersion);
+                writer.WriteEndObject();
+            }
             writer.WriteString("version", manifest.Identity.Version);
             writer.WriteEndObject();
         }
@@ -481,6 +538,7 @@ public static class ExtensionManifestJson
     private static ImmutableArray<ContributionDeclaration> ParseContributions(
         JsonElement root,
         string extensionId,
+        ImmutableArray<RouteDeclaration> routes,
         List<ManifestValidationError> errors)
     {
         if (!Array(root, "contributions", "$.contributions", errors, out var values))
@@ -500,9 +558,9 @@ public static class ExtensionManifestJson
                 continue;
             }
 
-            string[] members = ["id", "kind", "version"];
+            string[] members = ["id", "kind", "version", "routeId"];
             UnknownMembers(value, Set(members), path, errors);
-            Require(value, members, path, errors);
+            Require(value, ["id", "kind", "version"], path, errors);
             var id = String(value, "id", $"{path}.id", errors);
             if (!identities.Add(id))
             {
@@ -529,12 +587,32 @@ public static class ExtensionManifestJson
                     "Manifest v1 supports contribution contract version 1."));
             }
 
+            string? routeId = null;
+            if (value.TryGetProperty("routeId", out var routeIdValue))
+            {
+                routeId = String(value, "routeId", $"{path}.routeId", errors);
+                if (routeIdValue.ValueKind == JsonValueKind.String &&
+                    !routes.Any(route => string.Equals(
+                        route.Identity.Value,
+                        routeId,
+                        StringComparison.Ordinal)))
+                {
+                    errors.Add(Error(
+                        $"{path}.routeId",
+                        "contribution.route.missing",
+                        "A contribution route reference must name a route this extension declares."));
+                }
+            }
+
             result.Add(new ContributionDeclaration(
                 new ContributionIdentity(string.IsNullOrWhiteSpace(id)
                     ? "invalid.contribution"
                     : id),
                 String(value, "kind", $"{path}.kind", errors),
-                new ContributionContractVersion(version)));
+                new ContributionContractVersion(version))
+            {
+                Route = string.IsNullOrWhiteSpace(routeId) ? null : new RouteIdentity(routeId)
+            });
         }
 
         return [.. result.OrderBy(value => value.Identity.Value, StringComparer.Ordinal)];
@@ -575,10 +653,26 @@ public static class ExtensionManifestJson
                 "head",
                 "maximumRequestBytes",
                 "maximumResponseBytes",
-                "timeoutMilliseconds"
+                "timeoutMilliseconds",
+                "body",
+                "headers"
             ];
             UnknownMembers(value, Set(members), path, errors);
-            Require(value, members, path, errors);
+            Require(
+                value,
+                [
+                    "id",
+                    "operationId",
+                    "methods",
+                    "path",
+                    "access",
+                    "head",
+                    "maximumRequestBytes",
+                    "maximumResponseBytes",
+                    "timeoutMilliseconds"
+                ],
+                path,
+                errors);
             var id = String(value, "id", $"{path}.id", errors);
             var operationId = String(value, "operationId", $"{path}.operationId", errors);
             if (!identities.Add(id))
@@ -652,6 +746,50 @@ public static class ExtensionManifestJson
                     "Route access and HEAD policies must use supported v1 values."));
             }
 
+            RouteBodyBinding? body = null;
+            if (value.TryGetProperty("body", out _))
+            {
+                var declared = String(value, "body", $"{path}.body", errors);
+                body = declared switch
+                {
+                    "none" => RouteBodyBinding.None,
+                    "bounded" => RouteBodyBinding.Bounded,
+                    "stream" => RouteBodyBinding.Stream,
+                    _ => null
+                };
+                if (body is null)
+                {
+                    errors.Add(Error(
+                        $"{path}.body",
+                        "route.body.invalid",
+                        "Route body bindings must be 'none', 'bounded', or 'stream'."));
+                }
+                else if (body != RouteBodyBinding.None && maximumRequestBytes <= 0)
+                {
+                    errors.Add(Error(
+                        $"{path}.body",
+                        "route.body.unbounded",
+                        "A route that binds a body must declare a positive maximumRequestBytes."));
+                }
+            }
+
+            var headers = value.TryGetProperty("headers", out _)
+                ? Strings(value, "headers", $"{path}.headers", errors)
+                : [];
+            if (headers.Any(header =>
+                    string.IsNullOrWhiteSpace(header) ||
+                    header.Length > 64 ||
+                    !header.All(character =>
+                        char.IsAsciiLetterOrDigit(character) || character == '-')) ||
+                headers.Distinct(StringComparer.OrdinalIgnoreCase).Count() != headers.Length ||
+                headers.Any(IsReservedHeader))
+            {
+                errors.Add(Error(
+                    $"{path}.headers",
+                    "route.headers.invalid",
+                    "Declared headers must be unique, token-shaped, and never reserved."));
+            }
+
             result.Add(new RouteDeclaration(
                 new RouteIdentity(string.IsNullOrWhiteSpace(id) ? "invalid.route" : id),
                 new OperationIdentity(string.IsNullOrWhiteSpace(operationId)
@@ -664,10 +802,54 @@ public static class ExtensionManifestJson
                 maximumResponseBytes,
                 access,
                 head,
-                timeoutMilliseconds));
+                timeoutMilliseconds,
+                body,
+                [.. headers.Order(StringComparer.Ordinal)]));
         }
 
         return [.. result.OrderBy(value => value.Identity.Value, StringComparer.Ordinal)];
+    }
+
+    private static ExtensionStateDeclaration? ParseState(
+        JsonElement root,
+        List<ManifestValidationError> errors)
+    {
+        if (!root.TryGetProperty("state", out _))
+        {
+            return null;
+        }
+
+        if (!Object(root, "state", "$.state", errors, out var state))
+        {
+            return null;
+        }
+
+        string[] members = ["schemaName", "schemaVersion", "required"];
+        UnknownMembers(state, Set(members), "$.state", errors);
+        Require(state, members, "$.state", errors);
+        var schemaName = String(state, "schemaName", "$.state.schemaName", errors);
+        var schemaVersion = Integer(state, "schemaVersion", "$.state.schemaVersion", errors);
+        var required = Boolean(state, "required", "$.state.required", errors);
+        if (string.IsNullOrWhiteSpace(schemaName) ||
+            schemaName.Length > 64 ||
+            !schemaName.All(character =>
+                char.IsAsciiLetterOrDigit(character) || character is '-' or '.'))
+        {
+            errors.Add(Error(
+                "$.state.schemaName",
+                "state.schema.invalid",
+                "State schema names must be short, token-shaped identifiers."));
+        }
+
+        if (schemaVersion < 1)
+        {
+            errors.Add(Error(
+                "$.state.schemaVersion",
+                "state.schema.version-invalid",
+                "State schema versions start at 1."));
+        }
+
+        return new ExtensionStateDeclaration(schemaName, schemaVersion, required);
     }
 
     private static ImmutableArray<CapabilityRequest> ParseCapabilities(

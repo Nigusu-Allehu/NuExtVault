@@ -149,7 +149,11 @@ internal sealed record StateRecord(
     string SchemaName,
     int SchemaVersion);
 
-internal sealed record StateEdit(string Key, long? ExpectedETag, byte[] Value);
+internal sealed record StateEdit(
+    string Key,
+    long? ExpectedETag,
+    byte[] Value,
+    bool RequireAbsent = false);
 
 internal sealed record StateCheckpointRecord(string Key, byte[] Value, long ETag);
 

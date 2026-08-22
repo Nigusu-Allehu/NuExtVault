@@ -67,6 +67,29 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         ImmutableArray<ContributionDeclaration> contributions,
         ImmutableArray<RouteDeclaration> routes,
         ImmutableArray<CapabilityRequest> capabilities)
+        : this(
+            schemaVersion,
+            identity,
+            sdk,
+            contracts,
+            operations,
+            contributions,
+            routes,
+            capabilities,
+            null)
+    {
+    }
+
+    public ExtensionManifest(
+        ManifestSchemaVersion schemaVersion,
+        ExtensionIdentity identity,
+        SdkCompatibilityRange sdk,
+        ContractVersionSet contracts,
+        ImmutableArray<OperationDeclaration> operations,
+        ImmutableArray<ContributionDeclaration> contributions,
+        ImmutableArray<RouteDeclaration> routes,
+        ImmutableArray<CapabilityRequest> capabilities,
+        ExtensionStateDeclaration? state)
     {
         SchemaVersion = schemaVersion;
         Identity = identity ?? throw new ArgumentNullException(nameof(identity));
@@ -76,6 +99,7 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         Contributions = Initialized(contributions, nameof(contributions));
         Routes = Initialized(routes, nameof(routes));
         Capabilities = Initialized(capabilities, nameof(capabilities));
+        State = state;
 
         Id = identity.Id;
         Version = ExtensionVersionParser.Parse(identity.Version);
@@ -172,6 +196,12 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
 
     public ImmutableArray<CapabilityRequest> Capabilities { get; }
 
+    /// <summary>
+    /// The authoritative extension state this extension owns, or <c>null</c> when it
+    /// keeps no kernel-managed state.
+    /// </summary>
+    public ExtensionStateDeclaration? State { get; init; }
+
     internal string Id { get; }
 
     internal ExtensionVersion Version { get; }
@@ -203,7 +233,8 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         Operations.SequenceEqual(other.Operations) &&
         Contributions.SequenceEqual(other.Contributions) &&
         Routes.SequenceEqual(other.Routes, RouteDeclarationComparer.Instance) &&
-        Capabilities.SequenceEqual(other.Capabilities);
+        Capabilities.SequenceEqual(other.Capabilities) &&
+        State == other.State;
 
     public override int GetHashCode() => HashCode.Combine(SchemaVersion, Identity, Sdk, Contracts);
 
@@ -231,7 +262,9 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
             left.MaximumResponseBytes == right.MaximumResponseBytes &&
             left.Access == right.Access &&
             left.Head == right.Head &&
-            left.TimeoutMilliseconds == right.TimeoutMilliseconds;
+            left.TimeoutMilliseconds == right.TimeoutMilliseconds &&
+            left.DeclaredBody == right.DeclaredBody &&
+            left.Headers.SequenceEqual(right.Headers, StringComparer.Ordinal);
 
         public int GetHashCode(RouteDeclaration value) => value.Identity.GetHashCode();
     }

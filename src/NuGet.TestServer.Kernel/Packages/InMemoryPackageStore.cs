@@ -120,6 +120,16 @@ public sealed class InMemoryPackageStore : IPackageStore, IPackageCandidateStore
             _symbols.GetValueOrDefault(Key(id, Normalize(version)))?.ToArray());
     }
 
+    public ValueTask<byte[]?> FindStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(
+            _symbols.GetValueOrDefault(Key(id, Normalize(version)))?.ToArray());
+    }
+
     public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -154,6 +164,15 @@ public sealed class InMemoryPackageStore : IPackageStore, IPackageCandidateStore
         {
             _persistenceGate.Release();
         }
+    }
+
+    public ValueTask<bool> DeleteStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_symbols.TryRemove(Key(id, Normalize(version)), out _));
     }
 
     public ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(

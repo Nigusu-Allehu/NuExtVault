@@ -19,7 +19,17 @@ public interface IPackageStore : IAsyncDisposable
         string version,
         CancellationToken token = default);
 
+    ValueTask<byte[]?> FindStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default);
+
     ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default);
+
+    ValueTask<bool> DeleteStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default);
 
     ValueTask<IReadOnlyList<TestPackage>> FindByIdAsync(
         string id,

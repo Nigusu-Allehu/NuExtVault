@@ -1074,27 +1074,30 @@ nonreplaceable kernel capabilities retain authoritative mutations.
 ## Package Staging example
 
 `NuTest.PackageStaging` proves that substantial features can live outside the
-kernel.
+kernel. It is implemented in `src/NuGet.TestServer.Extensions.PackageStaging`, packs
+independently as `NuTest.PackageStaging`, references only the public SDK, and is
+absent from every default profile until an administrator installs it.
 
 It contributes:
 
-- `PackageStaging/1.0.0` service-index resource.
-- Create/list/read/delete staging-group operations.
-- Staged package and symbol upload operations.
-- Ownership and quota policy.
-- Background expiration reconciliation.
-- Publication-request operation.
+- A `NuTest.PackageStaging.ServiceIndex/1` service-index resource that references its
+  list-groups route by id; the kernel projects the absolute URL.
+- Create/list/read staging-group operations.
+- Staged package and symbol upload operations bound to streaming request bodies.
+- Group quota, TTL, reject, and expire policy.
+- A promotion operation that requests publication through the kernel.
+
+Every route declares `admin` access, so the gateway authenticates and authorizes
+before any staging code runs.
 
 It requests:
 
 ```text
-packages.identity.read
+host.clock.read
 packages.content.write-staged
 publication.request
-publication.status.read
 extension-state.read
 extension-state.write
-events.publish
 ```
 
 It does not:
@@ -1104,27 +1107,30 @@ It does not:
 - Bypass supply-chain validation.
 - Read storage-root paths.
 - Obtain security credentials.
+- Observe package or symbol bytes: content moves as kernel-issued stream handles and
+  opaque staged handles, and the kernel performs all identity and integrity parsing.
+- Apply its own compare-and-swap after publication: the kernel commits the declared
+  state transition inside its recovery journal.
 
 Staging and supply-chain states remain orthogonal. Publication is requested through
 the kernel and succeeds only when all core and configured policy requirements pass.
+Staged content stays invisible to every public NuGet resource until promotion, and a
+promoted package is visible immediately afterwards.
 
 ## Transactional extension state, backup, and restore
 
-The kernel will coordinate extension state and backup; the complete protocol is not
-implemented. Before health, backup, and restore ownership moves, the kernel must
-provide:
-
-- Namespaced schema versions and explicit migrations.
-- Optimistic concurrency tokens or ETags.
-- Per-record and per-owner quotas with bounded buffering and streaming.
-- Bounded lock cardinality.
-- A backup participant/checkpoint protocol integrated with package and publication
-  transactions.
-- Crash-safe staged restore with one kernel commit point.
+Step 12A implements namespaced schemas and migrations, optimistic concurrency,
+per-record and per-owner quotas, bounded buffering, bounded lock cardinality, leased
+checkpoints, and crash-safe restore. Step 22 extends that generic path to
+manifest-declared external participants. Required Package Staging state uses this
+store; staged bytes and the publication recovery journal join the same backup archive.
+Restore validates the configured external participant set and fails when a required
+package is absent or incompatible. Expired staged leases are reclaimed at startup,
+periodically while running, and before quota admission.
 
 Required backup state must use the kernel-provided transactional extension store.
-External extension stores and derived projections may participate only as
-rebuildable state and are not part of the atomic backup guarantee.
+External stores remain rebuildable projections and are not part of the atomic backup
+guarantee.
 
 Each stateful extension may contribute a typed backup participant:
 
@@ -1194,7 +1200,7 @@ Rules:
 - Manifests declare compatible ranges.
 - Additive optional contract fields require a minor release and defined defaults.
 - Breaking semantic changes require a new major contract version.
-- The host supports SDK `1.0.0` through `1.2.0` inclusive today and requires the
+- The host supports SDK `1.0.0` through `1.3.0` inclusive today and requires the
   same major.
 - Sidecars negotiate before activation.
 - Unknown required fields fail validation.
@@ -1467,7 +1473,7 @@ features.
 
 Resolved in Step 19: the public package/assembly names, `net10.0`-only target,
 strict canonical JSON manifest and packaged schema, independent contract identities,
-SDK `1.0.0` through `1.2.0` host range, post-publication support floor, ES256
+SDK `1.0.0` through `1.3.0` host range, post-publication support floor, ES256
 publisher trust and attestation, and disabled v1 replacement policy. See
 [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
 

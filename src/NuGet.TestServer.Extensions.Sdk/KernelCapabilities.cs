@@ -22,6 +22,21 @@ internal static class KernelCapabilityNames
     /// </summary>
     public const string SupplyChainSignatureInspect = "supply-chain.signature.inspect";
     public const string SupplyChainPackageScan = "supply-chain.package.scan";
+
+    /// <summary>
+    /// Stages bounded package or symbol content through the kernel and returns a
+    /// kernel-issued handle. The kernel owns the bytes, the lease, and the quota;
+    /// extensions hold only the opaque handle.
+    /// </summary>
+    public const string PackageContentWriteStaged = "packages.content.write-staged";
+
+    /// <summary>
+    /// Requests publication of staged content through the kernel's quarantine,
+    /// signature, scanner, and policy pipeline. The kernel couples staged-handle
+    /// transition, extension-state compare-and-swap, the package transaction, audit,
+    /// and idempotency behind one recovery journal.
+    /// </summary>
+    public const string PublicationRequest = "publication.request";
 }
 
 /// <summary>

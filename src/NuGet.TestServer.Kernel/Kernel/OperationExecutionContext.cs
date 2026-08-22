@@ -107,11 +107,12 @@ internal sealed class OperationContentStore(string executionId)
         Stream stream,
         string contentType,
         long length,
-        bool supportsRanges = false)
+        bool supportsRanges = false,
+        long? maximumLength = null)
     {
         ArgumentNullException.ThrowIfNull(stream);
         return Add(new OperationContent(
-            CreateHandle(contentType, length),
+            CreateHandle(contentType, maximumLength ?? Math.Max(1, length)),
             contentType,
             length,
             supportsRanges,
@@ -122,7 +123,7 @@ internal sealed class OperationContentStore(string executionId)
 
     public StreamHandle RegisterBytes(ReadOnlyMemory<byte> content, string contentType) =>
         Add(new OperationContent(
-            CreateHandle(contentType, content.Length),
+            CreateHandle(contentType, Math.Max(1, content.Length)),
             contentType,
             content.Length,
             false,
