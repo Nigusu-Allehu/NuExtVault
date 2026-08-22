@@ -3,6 +3,7 @@ using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
+using NuGet.TestServer.Extensions.Official;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -116,14 +117,12 @@ public sealed class RegistrationExtractionTests
         var extensionRoot = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Registration");
         var moduleList = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "OfficialExtensionModules.cs");
         var pattern = new Regex(
             Regex.Escape(ExtensionId) + "|RegistrationModule|RegistrationOperations",

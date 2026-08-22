@@ -4,6 +4,7 @@ using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Extensions.Official;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -38,12 +39,12 @@ public sealed class OperationsExtensionTests
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
             "NuGet.TestServer",
-            "Kernel",
+            "Hosting",
             "BuiltInOperationOwners.cs"));
         var catalog = File.ReadAllText(Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
+            "NuGet.TestServer.Kernel",
             "Hosting",
             "ExtensionCatalog.cs"));
 

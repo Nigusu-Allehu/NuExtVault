@@ -1061,13 +1061,25 @@ repository-signature resource would misrepresent package trust.
 
 ```text
 src/
-  NuGet.TestServer/       Server, protocol endpoints, store, and in-process API
-  NuGet.TestServer.Cli/   Command-line .NET tool
+  NuGet.TestServer.Extensions.Abstractions/  Internal contracts shared by both sides
+  NuGet.TestServer.Kernel/                   Kernel and runtime: hosting, routing,
+                                             security, capabilities, storage, state
+  NuGet.TestServer.Extensions.Official/      Official feature extensions
+  NuGet.TestServer/                          Composition root and in-process API
+  NuGet.TestServer.Cli/                      Command-line .NET tool
 
 tests/
   NuGet.TestServer.UnitTests/
   NuGet.TestServer.FunctionalTests/
+  NuGet.TestServer.RouteFixture/             Separately compiled conformance module
 ```
+
+The assembly dependency graph is one-way. The contracts assembly depends on nothing
+else, the kernel and the official extensions each depend only on the contracts, and
+`NuGet.TestServer` is the only assembly that references both. It selects the official
+extension bundle per host; the kernel has no compile-time knowledge of it. Programmatic
+consumers keep referencing `src\NuGet.TestServer\NuGet.TestServer.csproj`, and the CLI
+tool package ships all four assemblies.
 
 ## Contributing workflow
 

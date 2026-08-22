@@ -7,6 +7,8 @@ using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Vulnerabilities;
+using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 
 namespace NuGet.TestServer.FunctionalTests;
 

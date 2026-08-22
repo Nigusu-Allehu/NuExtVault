@@ -2,86 +2,12 @@ using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Official;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
-using NuGet.TestServer.Vulnerabilities;
 using NuGet.TestServer.Extensions.SupplyChain;
 
 namespace NuGet.TestServer.Hosting;
-
-internal static class BuiltInExtensionIds
-{
-    public const string Protocol = "builtin.protocol";
-    public const string ServiceIndex = "builtin.service-index";
-    public const string Vulnerabilities = "builtin.vulnerabilities";
-    public const string TestControl = "builtin.test-control";
-    public const string DurableStorage = "builtin.durable-storage";
-    public const string Operations = "builtin.operations";
-    public const string SupplyChain = "builtin.supply-chain";
-    public const string SupplyChainPolicy = SupplyChainExtension.ExtensionId;
-}
-
-internal static class BuiltInCapabilityNames
-{
-    public const string PackagesIdentityRead = "packages.identity.read";
-    public const string PackagesMetadataRead = "packages.metadata.read";
-    public const string PackagesMetadataWrite = "packages.metadata.write";
-    public const string PackagesContentRead = "packages.content.read";
-    public const string PackagesSymbolsRead = "packages.symbols.read";
-    public const string PackagesSearchQuery = KernelCapabilityNames.PackageSearchQuery;
-    public const string PackagesContentWrite = "packages.content.write-staged";
-    public const string PackagesPublish = "packages.publish";
-    public const string PackagesUnlist = "packages.unlist";
-    public const string PackagesRelist = "packages.relist";
-    public const string PackagesDelete = "packages.delete";
-    public const string ModerationRead = "moderation.read";
-    public const string ModerationDecide = "moderation.decide";
-    public const string VulnerabilityStateRead = "extension-state.vulnerabilities.read";
-    public const string ExtensionStateRead = "extension-state.read";
-    public const string ExtensionStateWrite = "extension-state.write";
-    public const string EventsPublish = "events.publish";
-    public const string BackupContribute = "backup.contribute";
-    public const string BackupInvoke = "operations.backup.invoke";
-    public const string RestoreInvoke = "operations.restore.invoke";
-    public const string OperationsQuery = "operations.query";
-    public const string ControlFaultsInject = "control.faults.inject";
-    public const string ControlRequestsRead = "control.requests.read";
-    public const string ControlPackagesManage = "control.packages.manage";
-    public const string ControlInstrumentationManage = "control.instrumentation.manage";
-    public const string DurableStorage = "storage.durable";
-    public const string OutboundHttp = "network.outbound-http";
-    public const string SecretsResolveReference = "secrets.resolve-reference";
-    public const string SidecarExecution = "extensions.sidecar-execution";
-
-    /// <summary>
-    /// The narrow, read-only host clock any separately compiled module may request.
-    /// The canonical name lives in the extension abstractions.
-    /// </summary>
-    public const string HostClockRead = KernelCapabilityNames.HostClockRead;
-    public const string SupplyChainSignatureInspect =
-        KernelCapabilityNames.SupplyChainSignatureInspect;
-    public const string SupplyChainPackageScan = KernelCapabilityNames.SupplyChainPackageScan;
-}
-
-internal sealed record CapabilityGrant(string Name);
-
-internal enum ServerProfileKind
-{
-    Embedded,
-    Standard,
-    Production
-}
-
-internal sealed record ServerProfile(
-    string Name,
-    ServerProfileKind Kind,
-    ImmutableArray<ExtensionSelection> Extensions,
-    ImmutableArray<CapabilityGrant> Grants,
-    ImmutableArray<ProfilePolicyRequirement> PolicyRequirements = default);
-
-internal sealed record ProfilePolicyRequirement(
-    string PolicyPoint,
-    ImmutableArray<string> RequiredAuthoritativeParticipants,
-    int MinimumAuthoritativeParticipants);
 
 internal static class ServerProfiles
 {
@@ -466,33 +392,6 @@ internal sealed record ServerComposition(
         {
             throw new ServerHostingConfigurationException(
                 $"Production profile requires {description}.");
-        }
-    }
-}
-
-internal sealed class TemporaryStorageLease : IDisposable
-{
-    private int _disposed;
-
-    private TemporaryStorageLease(string path) => Path = path;
-
-    public string Path { get; }
-
-    public static TemporaryStorageLease Create()
-    {
-        var path = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            "NuGet.TestServer",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return new TemporaryStorageLease(path);
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0 && Directory.Exists(Path))
-        {
-            Directory.Delete(Path, recursive: true);
         }
     }
 }

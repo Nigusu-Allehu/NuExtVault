@@ -6,6 +6,7 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
+using NuGet.TestServer.Extensions.Official;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -131,14 +132,12 @@ public sealed class PackageManagementExtractionTests
         var extensionRoot = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "PackageManagement");
         var moduleList = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "OfficialExtensionModules.cs");
         var pattern = new Regex(
             Regex.Escape(ExtensionId) +

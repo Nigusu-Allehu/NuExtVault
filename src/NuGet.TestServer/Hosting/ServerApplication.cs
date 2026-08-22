@@ -181,7 +181,7 @@ public static class ServerApplication
                 provider.GetRequiredService<ServerDiagnostics>(),
                 composition.Hosting,
                 composition.StorageDirectory,
-                officialExtensions.VulnerabilitySnapshots,
+                officialExtensions.VulnerabilityCatalog,
                 provider.GetRequiredService<TransactionalStateStore>(),
                 officialExtensions,
                 provider.GetRequiredService<KernelOutboundHttpClient>(),

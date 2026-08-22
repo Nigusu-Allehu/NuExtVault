@@ -12,14 +12,12 @@ public sealed class RegistrationSearchSeparationTests
         var registrationRoot = Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Registration");
         var searchRoot = Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Search");
         Assert.True(Directory.Exists(registrationRoot));
         Assert.True(Directory.Exists(searchRoot));
@@ -36,7 +34,7 @@ public sealed class RegistrationSearchSeparationTests
         Assert.False(File.Exists(Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer",
+            "NuGet.TestServer.Kernel",
             "Kernel",
             "Owners",
             "RegistrationSearchOperations.cs")));
@@ -52,14 +50,12 @@ public sealed class RegistrationSearchSeparationTests
         var registration = Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Registration");
         var searchRoot = Path.Combine(
             RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Search");
         var searchEndpoints = Path.Combine(searchRoot, "SearchEndpoints.cs");
         var neutralContracts = File.ReadAllText(
@@ -70,9 +66,8 @@ public sealed class RegistrationSearchSeparationTests
             Path.Combine(
                 RepositoryRoot,
                 "src",
-                "NuGet.TestServer",
-                "Hosting",
-                "Endpoints",
+                "NuGet.TestServer.Extensions.Official",
+                "ServiceIndex",
                 "ProtocolEndpoints.cs"));
 
         Assert.True(File.Exists(Path.Combine(abstractions, "RegistrationContracts.cs")));
