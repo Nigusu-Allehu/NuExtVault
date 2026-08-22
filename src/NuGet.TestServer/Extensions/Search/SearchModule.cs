@@ -32,10 +32,12 @@ internal sealed class SearchModule : IExtensionModule
 
     public void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities)
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(capabilities);
+        ArgumentNullException.ThrowIfNull(documentContributions);
         new SearchOperations(
             capabilities.GetRequired<ISearchIndexQueryCapability>(
                 KernelCapabilityNames.PackageSearchQuery)).Register(registry);
