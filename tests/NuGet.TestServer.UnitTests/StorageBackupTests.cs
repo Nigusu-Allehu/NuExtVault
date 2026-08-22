@@ -7,7 +7,7 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.UnitTests;
 

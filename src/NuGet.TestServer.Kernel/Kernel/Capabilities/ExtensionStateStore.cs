@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Kernel.Capabilities;
 
@@ -482,4 +482,3 @@ internal sealed record LegacyStateFileSetRegistration(
         return this;
     }
 }
-

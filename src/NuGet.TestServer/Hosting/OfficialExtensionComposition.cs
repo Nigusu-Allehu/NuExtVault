@@ -1,4 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.ServiceIndex;
 using NuGet.TestServer.Extensions.Vulnerabilities;
@@ -79,7 +79,7 @@ internal sealed class OfficialExtensionComposition : IExtensionHealthSource
                 Vulnerabilities.Configure(
                     capabilities.GetRequired<IExtensionStateCapability>(
                         BuiltInCapabilityNames.ExtensionStateRead),
-                    capabilities.GetRequired<IOutboundHttpCapability>(
+                    capabilities.GetRequired<IKernelOutboundHttpCapability>(
                         BuiltInCapabilityNames.OutboundHttp),
                     warning => logger.LogWarning("{Warning}", warning));
             }

@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Kernel.Capabilities;
 
 namespace NuGet.TestServer.Kernel.Owners.PackageMetadata;

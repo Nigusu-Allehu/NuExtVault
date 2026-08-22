@@ -2,7 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -439,15 +439,15 @@ public sealed class OperationContractTests
     }
 
     [Fact]
-    public void Contracts_are_internal_and_marked_pre_compatibility()
+    public void Contract_assembly_is_marked_as_the_public_v1_sdk()
     {
         var assembly = typeof(OperationContracts).Assembly;
         var status = assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()
             .Single(attribute => attribute.Key == "CompatibilityStatus");
 
-        Assert.Equal("InternalPreCompatibility", status.Value);
-        Assert.DoesNotContain(
+        Assert.Equal("PublicSdkV1", status.Value);
+        Assert.Contains(
             assembly.GetTypes(),
             type => type.IsPublic || type.IsNestedPublic);
     }
@@ -485,7 +485,7 @@ public sealed class OperationContractTests
                 EnumerateContractTypes(property.PropertyType),
                 type => forbiddenTypeNames.Contains(type.FullName ?? string.Empty));
             Assert.DoesNotMatch(
-                "(?i)(path|directory|secret|password|apikey)$",
+                "(?i)(directory|secret|password|apikey|storagepath|filepath)$",
                 property.Name);
         }
     }

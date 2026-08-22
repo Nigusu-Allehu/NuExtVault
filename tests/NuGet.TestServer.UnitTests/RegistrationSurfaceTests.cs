@@ -1,4 +1,4 @@
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Registration;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;

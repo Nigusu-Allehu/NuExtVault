@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Routing;
@@ -281,7 +281,7 @@ public sealed class EndpointDescriptorTests
         var catalog = Catalog(
             Manifest("extension.a", Endpoint("a.route", "GET", "/packages/{id}")) with
             {
-                Operations = []
+                OwnedOperations = []
             });
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
@@ -299,9 +299,9 @@ public sealed class EndpointDescriptorTests
         var catalog = Catalog(
             Manifest("extension.a", Endpoint("a.route", "GET", "/packages/{id}", OperationB)) with
             {
-                Operations = []
+                OwnedOperations = []
             },
-            Manifest("extension.owner") with { Operations = [OperationB] });
+            Manifest("extension.owner") with { OwnedOperations = [OperationB] });
 
         var exception = Assert.Throws<ServerHostingConfigurationException>(
             () => Resolve(catalog, "extension.a", "extension.owner"));

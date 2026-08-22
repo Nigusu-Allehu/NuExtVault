@@ -1,5 +1,5 @@
 using System.Collections.Immutable;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Extensions.SupplyChain;
 
@@ -29,10 +29,10 @@ internal sealed class SupplyChainExtension : IExtensionModule
             [
                 new CapabilityRequest(
                     KernelCapabilityNames.SupplyChainSignatureInspect,
-                    IsRequired: true),
+                    true),
                 new CapabilityRequest(
                     KernelCapabilityNames.SupplyChainPackageScan,
-                    IsRequired: true)
+                    true)
             ]),
         [])
     {

@@ -2,7 +2,7 @@ using System.Diagnostics;
 using NuGet.TestServer.Faults;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Requests;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Kernel;
 

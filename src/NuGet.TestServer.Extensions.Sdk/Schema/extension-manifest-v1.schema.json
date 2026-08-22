@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.nutestserver.dev/extensions/manifest/v1",
+  "title": "NuGet.TestServer extension manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "id",
+    "version",
+    "publisher",
+    "sdk",
+    "contracts",
+    "operations",
+    "contributions",
+    "routes",
+    "capabilities"
+  ],
+  "properties": {
+    "$schema": { "const": "https://schemas.nutestserver.dev/extensions/manifest/v1" },
+    "schemaVersion": { "const": 1 },
+    "id": { "$ref": "#/$defs/stableIdentity" },
+    "version": { "$ref": "#/$defs/version" },
+    "publisher": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "sdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "minimum", "maximumExclusive" ],
+      "properties": {
+        "minimum": { "$ref": "#/$defs/version" },
+        "maximumExclusive": { "$ref": "#/$defs/version" }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "manifest", "operation", "contribution", "route", "capability", "structural" ],
+      "properties": {
+        "manifest": { "const": 1 },
+        "operation": { "const": 1 },
+        "contribution": { "const": 1 },
+        "route": { "const": 1 },
+        "capability": { "const": 1 },
+        "structural": { "const": 1 }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "id", "version", "requestContract", "responseContract", "ownership", "allowReplacement" ],
+        "properties": {
+          "id": { "$ref": "#/$defs/stableIdentity" },
+          "version": { "const": 1 },
+          "requestContract": { "$ref": "#/$defs/stableIdentity" },
+          "responseContract": { "$ref": "#/$defs/stableIdentity" },
+          "ownership": { "const": "new" },
+          "allowReplacement": { "const": false }
+        }
+      }
+    },
+    "contributions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "id", "kind", "version" ],
+        "properties": {
+          "id": { "$ref": "#/$defs/stableIdentity" },
+          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "version": { "const": 1 }
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "id", "operationId", "methods", "path", "access", "head", "maximumRequestBytes", "maximumResponseBytes", "timeoutMilliseconds" ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "operationId": { "$ref": "#/$defs/stableIdentity" },
+          "methods": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": { "enum": [ "DELETE", "GET", "HEAD", "POST", "PUT" ] }
+          },
+          "path": { "type": "string", "pattern": "^/(?:[^?#]*)$", "maxLength": 1024 },
+          "access": { "enum": [ "anonymous", "read", "write", "publish", "unlist", "delete", "admin", "control" ] },
+          "head": { "enum": [ "none", "mirrors-get" ] },
+          "maximumRequestBytes": { "type": "integer", "minimum": 0 },
+          "maximumResponseBytes": { "type": "integer", "minimum": 1 },
+          "timeoutMilliseconds": { "type": "integer", "minimum": 1, "maximum": 3600000 }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [ "name", "requirement" ],
+        "properties": {
+          "name": { "$ref": "#/$defs/stableIdentity" },
+          "requirement": { "enum": [ "required", "optional" ] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "stableIdentity": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9][A-Za-z0-9-]*)+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    }
+  }
+}

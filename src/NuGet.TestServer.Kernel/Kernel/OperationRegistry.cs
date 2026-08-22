@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using System.Text;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 
 namespace NuGet.TestServer.Kernel;
@@ -66,6 +66,21 @@ internal sealed class OperationRegistryBuilder : IOperationOwnerRegistry
     IOperationOwnerRegistry IOperationOwnerRegistry.Register<TRequest, TResponse>(
         string extensionId,
         IOperationOwner<TRequest, TResponse> owner) => Register(extensionId, owner);
+
+    public OperationDeclaration RegisterNew<TRequest, TResponse>(
+        string extensionId,
+        OperationIdentity identity,
+        Func<TRequest, CancellationToken, ValueTask<OperationResponse<TResponse>>> handler)
+    {
+        Register(extensionId, OperationOwner.Create(identity.Value, handler));
+        return new OperationDeclaration(
+            identity,
+            ExtensionSdkVersions.OperationV1,
+            $"{typeof(TRequest).FullName}.v1",
+            $"{typeof(TResponse).FullName}.v1",
+            OperationOwnership.New,
+            AllowReplacement: false);
+    }
 
     public OperationRegistry Build(
         ResolvedExtensionGraph graph,

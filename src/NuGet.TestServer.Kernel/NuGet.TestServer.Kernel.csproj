@@ -9,7 +9,7 @@
     <Description>
       The NuGet.TestServer kernel and runtime. It owns hosting, routing, security,
       capabilities, package identity, storage, and state. It may reference the extension
-      abstractions but never an extension implementation.
+      SDK but never an extension implementation.
     </Description>
   </PropertyGroup>
 
@@ -39,7 +39,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
   </ItemGroup>
 
   <ItemGroup>

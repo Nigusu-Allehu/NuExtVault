@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Official;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;

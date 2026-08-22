@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
@@ -83,7 +83,7 @@ public sealed class EndpointCompositionFitnessTests
     {
         var roots = new[]
         {
-            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Abstractions"),
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Sdk"),
             Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Kernel", "Kernel", "Owners"),
             Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Official")
         };

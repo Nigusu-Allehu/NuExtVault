@@ -3,7 +3,7 @@ using System.Collections.Immutable;
 using Microsoft.AspNetCore.Http.Features;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;

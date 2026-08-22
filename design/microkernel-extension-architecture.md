@@ -2,17 +2,17 @@
 
 ## Status
 
-Selected architecture design, revised from implementation evidence through merged
-PR #62. Migration Steps 1 through 11 are implemented and have passed Windows,
-Ubuntu, and macOS CI. Steps 11A through 11D are blocking prerequisites before the
-paused Step 12 can resume.
+Selected architecture design, revised through Microkernel Step 19. Steps 1 through
+18 established the kernel, typed startup-frozen routing, URL projection,
+transport-neutral rendering, bounded capabilities and state, official feature
+ownership, and the separate official extension assembly. Step 19 stabilizes the
+public SDK contracts, deterministic manifest, canonical structural identity,
+conformance attestation, TestKit, and local packages.
 
-The current implementation is a closed built-in modular system. It has per-instance
-profiles, a validated built-in catalog, one-owner operation dispatch, deny-by-default
-capabilities, kernel instrumentation, resource projection, and extracted
-vulnerability and control owners. It is not yet an independently loadable extension
-platform: endpoint binding remains static, several contracts carry host-derived URLs,
-and some owners use kernel-specific rendering state.
+The current implementation is a complete official microkernel with a locally
+packable public SDK. It is not yet an independently loadable extension platform:
+external discovery, package validation, loading, and activation begin in Step 20.
+Step 19 changes no runtime discovery behavior.
 
 This design supersedes the core-first proposal as the intended long-term
 architecture. Most NuTestServer features, including the default NuGet V3
@@ -45,10 +45,11 @@ Everything else is composed as an extension:
 - Package staging.
 - Future organization-specific resources.
 
-The intended default CLI installs and activates an official extension bundle, so the
-normal user experience remains a complete NuGet server. A minimal profile activates
-only the kernel and explicitly selected extensions. External discovery, dynamic
-loading, sidecars, and the public SDK remain proposed.
+The default CLI activates the compiled official extension bundle, so the normal user
+experience remains a complete NuGet server. A minimal profile activates only the
+kernel and explicitly selected built-ins. The public SDK is stabilized for local
+packing but is not externally published; external discovery/loading remains Step 20,
+and sidecars remain consumer-gated.
 
 Official and third-party extensions use the same manifests, contribution points,
 capability broker, lifecycle, ordering, and tests. Official extensions do not get
@@ -549,7 +550,7 @@ src/
     State/
     Diagnostics/
 
-  NuGet.TestServer.Extensions.Abstractions/
+  NuGet.TestServer.Extensions.Sdk/
     Manifest/
     Contributions/
     Operations/
@@ -557,10 +558,10 @@ src/
     Lifecycle/
     Contracts/
 
-  NuGet.TestServer.Extensions.Protocol/
-    Rpc/
-    Handshake/
-    Contracts/
+  NuGet.TestServer.Extensions.TestKit/
+    Builders/
+    Fakes/
+    Conformance/
 
   NuGet.TestServer.Extensions.Official/
     ServiceIndex/
@@ -581,60 +582,31 @@ extensions/
   PackageStaging/
 ```
 
-Official extensions may later become individual packages. They can begin in one
-assembly while preserving package and namespace boundaries.
+Official extensions currently remain one `NuGet.TestServer.Extensions.Official`
+assembly. The supported contract assembly/package is
+`NuGet.TestServer.Extensions.Sdk`; authoring and conformance helpers are isolated in
+`NuGet.TestServer.Extensions.TestKit`. Both locally pack as version `1.0.0` and target
+only `net10.0`. See
+[`public-extension-sdk-v1.md`](public-extension-sdk-v1.md) for the authoritative v1
+policy.
 
 ## Manifest
 
-Every extension has a declarative manifest. The catalog reads it without executing
-extension code.
-
-```json
-{
-  "schemaVersion": 1,
-  "id": "Contoso.PackageLabels",
-  "version": "1.2.0",
-  "publisher": "Contoso",
-  "execution": {
-    "mode": "sidecar",
-    "entrypoint": "Contoso.PackageLabels.exe",
-    "protocol": "nutest-extension-rpc",
-    "protocolRange": "[1.0,2.0)"
-  },
-  "hostCompatibility": "[1.0,2.0)",
-  "sdkCompatibility": "[1.0,2.0)",
-  "activation": [
-    "onStartup"
-  ],
-  "requires": [
-    {
-      "extension": "NuGet.Registration",
-      "version": "[1.0,2.0)"
-    }
-  ],
-  "capabilities": [
-    "packages.metadata.read",
-    "extension-state.read",
-    "extension-state.write"
-  ],
-  "contributes": {
-    "documentContributors": [
-      {
-        "operation": "NuGet.Registration.BuildLeaf",
-        "contract": "registration-leaf-v1",
-        "priority": 100
-      }
-    ]
-  }
-}
-```
+Every extension has a strict declarative UTF-8 JSON manifest. Schema v1 declares
+identity, version, display publisher, SDK range, independent contract versions,
+operations, contributions, routes, and required/optional capabilities. The canonical
+example and schema are frozen in the SDK tests and package. Execution mode,
+activation, and external dependency declarations are not Step 19 manifest members;
+Step 20 must design and validate any loading metadata before executing extension
+code.
 
 Manifest rules:
 
 1. Extension IDs are globally unique and case-insensitive.
 2. Versions use semantic versioning.
-3. Compatibility ranges are mandatory.
-4. Every dependency has a version range.
+3. SDK compatibility ranges are mandatory.
+4. When external dependencies are introduced, every dependency has an explicit
+   version range; missing, incompatible, and cyclic graphs fail deterministically.
 5. Capabilities are requested explicitly.
 6. Contribution contracts and versions are explicit.
 7. Unknown required fields fail validation.
@@ -643,7 +615,7 @@ Manifest rules:
 10. Code does not run until the complete graph validates.
 11. `NuGet.*` and `NuTest.*` identifiers and reserved route prefixes are available
     only to signed first-party packages.
-12. Production extension identity is the tuple of publisher signing identity and
+12. Production extension identity is the tuple of verified publisher signing key and
     extension ID; the display `publisher` string is not proof of identity.
 13. Startup validation rejects both operation and concrete route-path conflicts.
 
@@ -775,33 +747,12 @@ Use an exposed policy point with documented aggregation and failure semantics.
 
 ### Replace the operation owner
 
-Replacement is explicit configuration:
-
-```json
-{
-  "replace": {
-    "operation": "NuGet.Search.Query",
-    "expectedOwner": "NuGet.Search",
-    "owner": "Contoso.CustomSearch"
-  }
-}
-```
-
-Replacement rules:
-
-1. The operation contract must declare itself replaceable.
-2. Exactly one replacement owner is selected.
-3. The replacement implements the same compatible contract.
-4. Kernel security, limits, serialization, and diagnostics remain in force.
-5. Required compatibility contract tests run during package validation or CI and
-   produce a signed conformance attestation; startup verifies that attestation
-   against the selected contract version.
-6. Replacement is visible in startup diagnostics and the resolved profile.
-7. Missing or conflicting replacements fail startup.
-8. Replacement cannot occur dynamically in the first release.
-9. Replacement defaults to disabled.
-10. Operations that mutate kernel publication, moderation, ownership, identity, or
-    recovery state are not replaceable in v1.
+V1 replacement is disabled. Public contributors can define only newly introduced,
+stable operation IDs in their own extension namespace, and all existing built-in
+operations are nonreplaceable. The SDK exposes no replacement registration API.
+Authoritative identity, publication, moderation, ownership, recovery, and
+package-management mutations are permanently nonreplaceable in v1. A later major
+policy may reconsider only explicitly selected non-authoritative operations.
 
 ## Capability model
 
@@ -995,7 +946,8 @@ restricted identities, or operating-system sandboxing.
 
 ## Activation and lifecycle
 
-The intended v1 lifecycle is restart-required and limited to:
+The intended loading lifecycle, beginning no earlier than Step 20, is
+restart-required and limited to:
 
 ```text
 Validated -> Started -> Ready -> Stopped
@@ -1007,8 +959,7 @@ When trusted loading is added, installation, update, enable, disable, and unload
 require restart. A full
 `Degraded`/recovery lifecycle is not implemented and must not be promised until an
 optional extension supplies a concrete need and failure semantics. Required
-request-path extension failure prevents readiness. Optional-extension startup
-failure semantics remain an explicit pre-SDK decision.
+request-path extension failure prevents readiness. V1 does not promise optional-extension startup degradation or resource omission.
 
 Future activation may include:
 
@@ -1044,7 +995,7 @@ Each contribution declares whether it is required and its failure behavior.
 ### Startup
 
 - Required extension failure prevents readiness.
-- Optional extension failure omits its resources and marks the server degraded.
+- Optional extension startup degradation is not promised in v1.
 - Invalid ownership, routes, contracts, or capabilities fail before listening.
 - Missing authoritative participants for a fail-closed policy prevent readiness.
 - Production requires supply-chain and operational integrity participants.
@@ -1222,20 +1173,26 @@ Rules:
 
 ## Compatibility and versioning
 
-There are four independent version surfaces:
+There are seven independent in-process version surfaces:
 
 1. Manifest schema.
 2. SDK API.
-3. Sidecar RPC protocol.
-4. Operation and contribution contracts.
+3. Operation contract.
+4. Contribution contract.
+5. Route contract.
+6. Capability contract.
+7. Structural contract.
+
+A future sidecar RPC protocol is an additional independent surface.
 
 Rules:
 
 - All use semantic versioning or explicit integer schema versions.
 - Manifests declare compatible ranges.
-- Additive contract fields are optional with defined defaults.
+- Additive optional contract fields require a minor release and defined defaults.
 - Breaking semantic changes require a new major contract version.
-- The host supports a documented bounded set of major versions.
+- The host supports SDK `1.0.0` through `1.2.0` inclusive today and requires the
+  same major.
 - Sidecars negotiate before activation.
 - Unknown required fields fail validation.
 - Deprecated contracts produce startup diagnostics before removal.
@@ -1243,35 +1200,12 @@ Rules:
 
 ## Developer experience
 
-The SDK should provide:
-
-- `dotnet new nutestserver-extension`
-- Manifest schema and editor completion.
-- Typed operation-contract packages.
-- In-memory extension test host.
-- Capability fakes.
-- Contract-test suites.
-- Sidecar protocol test harness.
-- Package validator.
-- Local profile runner.
-
-Example:
-
-```text
-dotnet new nutestserver-extension --name Contoso.PackageLabels
-dotnet test
-nutestserver extension validate ./Contoso.PackageLabels
-nutestserver start --profile standard \
-  --extension ./Contoso.PackageLabels
-```
-
-Startup diagnostics should display:
-
-```text
-Extension                     Version  Mode     State  Capabilities
-NuGet.Search                  1.0.0    inproc   Ready  packages.search.query
-Contoso.PackageLabels         1.2.0    sidecar  Ready  extension-state.*, packages.metadata.read
-```
+Step 19 provides a strict packaged manifest schema, public typed contracts,
+`NuGet.TestServer.Extensions.TestKit` builders/fakes/conformance helpers, and a
+separately compiled reference fixture. It does not provide a `dotnet new` template,
+package validator CLI, extension-loading CLI, sidecar harness, or local profile
+runner. Local packing and migration instructions are in
+[`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
 
 ## Testing strategy
 
@@ -1449,11 +1383,12 @@ Step 18 performs the physical official assembly split.
 
 ### Public platform and optional isolation
 
-Step 19 stabilizes and publishes no SDK until the route, URL, rendering, capability,
-contract identity, support, signing, replacement, manifest, and target-framework
-decisions are complete. Step 20 adds trusted in-process loading. Step 21 adds sidecars
-only for a concrete consumer and after transport-neutral parity. Step 22 Package
-Staging depends on Step 20 and on Step 21 only when isolation is required.
+Step 19 completed the route, URL, rendering, capability, contract identity, support,
+signing, replacement, manifest, and target-framework decisions and produces local
+SDK/TestKit packages only. Step 20 adds the first trusted in-process discovery,
+loading, and activation. Step 21 adds sidecars only for a concrete consumer and
+after transport-neutral parity. Step 22 Package Staging depends on Step 20 and on
+Step 21 only when isolation is required.
 
 ## Acceptance criteria
 
@@ -1508,7 +1443,7 @@ The architecture is successful when:
 | Kernel size | Larger | Smaller |
 | Official/third-party symmetry | Partial | Strong |
 | Ability to omit defaults | Limited | Profile-driven |
-| Ability to replace operations | Exceptional | First-class but controlled |
+| Ability to replace operations | Exceptional | Disabled in v1; future major policy |
 | Contract/version burden | Moderate | High |
 | Long-term extensibility | Good | Stronger |
 
@@ -1519,17 +1454,19 @@ features.
 
 ## Open decisions
 
-- Whether official extensions begin in one assembly or separate packages.
 - Which package fields are irreducible kernel-owned state.
 - Which additional non-authoritative operations become replaceable after v1.
-- The first supported SDK target frameworks.
-- Manifest packaging and signing format.
 - Sidecar RPC technology.
 - Remote-sidecar support or local-only scope.
 - Extension installation and upgrade workflow.
 - Profile configuration format.
-- Supported SDK and contract lifetime.
 - Whether a marketplace or only administrator-installed packages are supported.
+
+Resolved in Step 19: the public package/assembly names, `net10.0`-only target,
+strict canonical JSON manifest and packaged schema, independent contract identities,
+SDK `1.0.0` through `1.2.0` host range, post-publication support floor, ES256
+publisher trust and attestation, and disabled v1 replacement policy. See
+[`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
 
 These decisions should be resolved through separate proposals. None should weaken
 the kernel's control of identity, capabilities, resource limits, storage integrity,

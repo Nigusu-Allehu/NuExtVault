@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -86,7 +86,7 @@ public sealed class FlatContainerExtractionTests
             manifest.Endpoints.Select(endpoint => endpoint.Name).Order(StringComparer.Ordinal));
         Assert.Equal(
             FlatContainerOperations,
-            manifest.Operations.Order(StringComparer.Ordinal));
+            manifest.OwnedOperations.Order(StringComparer.Ordinal));
 
         var versions = Assert.Single(
             manifest.Endpoints,

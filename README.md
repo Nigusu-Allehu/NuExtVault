@@ -32,6 +32,24 @@ The test suite includes:
 - Vulnerability schema, cache-integrity, registration, and real restore-audit tests.
 - Functional tests that start and probe the packaged CLI.
 
+### Pack the public extension SDK locally
+
+Microkernel Step 19 stabilizes the `NuGet.TestServer.Extensions.Sdk` and
+`NuGet.TestServer.Extensions.TestKit` package/assembly contracts at `1.0.0`. Both
+target `net10.0`; the SDK package includes the strict v1 manifest schema.
+
+```powershell
+dotnet pack src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
+dotnet pack src\NuGet.TestServer.Extensions.TestKit\NuGet.TestServer.Extensions.TestKit.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
+```
+
+These are local packages only: they are not published externally, and the server
+does not yet discover, load, or activate them. Trusted in-process loading starts in
+Step 20; sidecars remain deferred. Projects using the former
+`NuGet.TestServer.Extensions.Abstractions` reference should migrate to the SDK and
+strict manifest described in
+[`design/public-extension-sdk-v1.md`](design/public-extension-sdk-v1.md).
+
 ## Start the server
 
 Run the CLI directly from the repository:
@@ -1061,7 +1079,8 @@ repository-signature resource would misrepresent package trust.
 
 ```text
 src/
-  NuGet.TestServer.Extensions.Abstractions/  Internal contracts shared by both sides
+  NuGet.TestServer.Extensions.Sdk/           Public extension contracts and schema
+  NuGet.TestServer.Extensions.TestKit/       Builders, fakes, conformance helpers
   NuGet.TestServer.Kernel/                   Kernel and runtime: hosting, routing,
                                              security, capabilities, storage, state
   NuGet.TestServer.Extensions.Official/      Official feature extensions
@@ -1069,12 +1088,14 @@ src/
   NuGet.TestServer.Cli/                      Command-line .NET tool
 
 tests/
+  NuGet.TestServer.Extensions.Sdk.Tests/
+  NuGet.TestServer.SdkFixture/               Separately compiled public SDK fixture
   NuGet.TestServer.UnitTests/
   NuGet.TestServer.FunctionalTests/
   NuGet.TestServer.RouteFixture/             Separately compiled conformance module
 ```
 
-The assembly dependency graph is one-way. The contracts assembly depends on nothing
+The assembly dependency graph is one-way. The SDK contracts assembly depends on nothing
 else, the kernel and the official extensions each depend only on the contracts, and
 `NuGet.TestServer` is the only assembly that references both. It selects the official
 extension bundle per host; the kernel has no compile-time knowledge of it. Programmatic

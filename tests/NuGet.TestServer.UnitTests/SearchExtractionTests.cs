@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
@@ -64,7 +64,7 @@ public sealed class SearchExtractionTests
             candidate => candidate.Id == SearchExtensionId);
         var endpoint = Assert.Single(manifest.Endpoints);
 
-        Assert.Equal([OperationIds.SearchQuery], manifest.Operations.ToArray());
+        Assert.Equal([OperationIds.SearchQuery], manifest.OwnedOperations.ToArray());
         Assert.Equal("search.query", endpoint.Name);
         Assert.Equal("/query", endpoint.PathTemplate);
         Assert.Equal(["GET", "HEAD"], endpoint.Methods.ToArray());

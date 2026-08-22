@@ -1,6 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Kernel.Capabilities;
 

@@ -9,20 +9,21 @@ Implementation status: Steps 1 through 11 are implemented through merged PR #62 
 pass Windows, Ubuntu, and macOS CI. Step 11A generates every active route from
 validated, startup-frozen endpoint descriptors and is merged through PR #65. Step 11B
 projects absolute URLs in the kernel from typed route references and is merged through
-PR #67. Step 11C moves the transport-neutral extension contracts into
-`NuGet.TestServer.Extensions.Abstractions`, proves closed-world composition with a
+PR #67. Step 11C moved the transport-neutral extension contracts into the assembly
+then named `NuGet.TestServer.Extensions.Abstractions` (renamed by Step 19 to
+`NuGet.TestServer.Extensions.Sdk`), proved closed-world composition with a
 separately compiled conformance module, and enforces the architecture fitness gates; it
 is merged through PR #69. Step 11D establishes the measured scalability and
 backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
 PR #73, Lane B Step 13 is merged through PR #74, and Lane A Step 12A is merged through
 PR #75, and Lane A Step 12B is merged through PR #78. The Lane B Step 13A prerequisite
 mechanically separates registration and search and is merged through PR #77. Lane B
-Step 15 is merged through PR #79. Step 14 extracts registration in this change.
-contracts, endpoint descriptors, query adapters, document builders/renderers, owners,
-and focused tests while retaining `builtin.protocol` ownership. The two feature
-surfaces depend only on neutral package-metadata primitives and no longer reference
-each other's implementation namespaces. Step 12A replaces the temporary extension-state
-store with
+Step 15 is merged through PR #79, Step 14 through PR #80, Step 17 through PR #81,
+and Step 18 through PR #82. Step 19 is implemented in this workspace: the former
+abstractions project is the public `NuGet.TestServer.Extensions.Sdk`, the separate
+TestKit and conformance fixture are locally packable, and strict manifests, version
+identities, structural fingerprints, and ES256 attestations are frozen by focused
+tests. Step 12A replaces the temporary extension-state store with
 one kernel-owned transactional store reached through the existing state capability:
 restart-monotonic concurrency tokens, namespaced schema identity with ordered
 migrations, atomic multi-key edits published through one write journal, key/record/
@@ -47,11 +48,12 @@ Step 12 is paused.
 Steps 11A through 11D are blocking prerequisites added without renumbering the
 existing tracker issues.
 
-The implementation is currently a closed built-in modular system for discovery and
-loading, but composition itself is no longer closed: a module compiled against the
-extension abstractions alone contributes a route, an operation, a resource, and a
-requested capability with no kernel source change. Filesystem discovery, assembly load
-contexts, and SDK publication remain out of scope.
+The implementation remains closed for runtime discovery and loading, but composition
+itself is no longer closed: a separately compiled module references only the public
+SDK and contributes a route, operation, resource, and requested capability without a
+kernel source change. SDK/TestKit packages are stabilized for local packing but are
+not published externally. Filesystem discovery, assembly load contexts, and
+activation begin in Step 20.
 
 Target architecture:
 [`design/microkernel-extension-architecture.md`](../design/microkernel-extension-architecture.md).
@@ -494,9 +496,9 @@ contracts use route references.
 
 ### Step 11C: Prove closed-world composition and enforce fitness gates
 
-**Status:** Implemented. `tests/NuGet.TestServer.RouteFixture` now references only
-`src/NuGet.TestServer.Extensions.Abstractions` and contributes `/flavors/index.json`
-through `IExtensionModule`.
+**Status:** Implemented. `tests/NuGet.TestServer.RouteFixture` references only the
+contracts project, now `src/NuGet.TestServer.Extensions.Sdk`, and contributes
+`/flavors/index.json` through `IExtensionModule`.
 
 **Goal:** Demonstrate composition independently of built-in registration before more
 large extraction or SDK work.
@@ -898,7 +900,9 @@ compatible.
 
 **Changes:**
 
-- Create `NuGet.TestServer.Extensions.Abstractions`.
+- Create the contracts assembly initially named
+  `NuGet.TestServer.Extensions.Abstractions` (renamed to
+  `NuGet.TestServer.Extensions.Sdk` in Step 19).
 - Create one initial `NuGet.TestServer.Extensions.Official` assembly.
 - Move contracts and official implementations without changing profile behavior.
 - Add project-reference and namespace boundary checks.
@@ -917,6 +921,17 @@ through abstractions.
 **Rollback:** Recombine assemblies without changing contracts.
 
 ### Step 19: Stabilize manifests and SDK contracts
+
+**Status:** Implemented in this workspace. `NuGet.TestServer.Extensions.Sdk` and
+`NuGet.TestServer.Extensions.TestKit` are independent, locally packable `1.0.0`
+packages targeting `net10.0`. The SDK contains the strict deterministic JSON schema
+and parser, typed independently versioned identities, public new-operation and route
+binding surfaces, bounded capability contracts, canonical UTF-8/SHA-256 identities,
+and ES256 conformance attestation verification. Official modules and the separately
+compiled fixture conform at the oldest (`1.0.0`) and current (`1.2.0`) supported SDK
+versions. No external publication, discovery, loading, activation, or sidecar is
+included. The authoritative decisions and migration guide are in
+[`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
 
 **Goal:** Decide what can be supported publicly.
 
@@ -947,7 +962,9 @@ through abstractions.
 supportable, every pre-publication decision is recorded, and the host can verify a
 signed attestation against the selected contract version.
 
-**Rollback:** Do not publish; contracts remain internal until approved.
+**Rollback:** Stop producing the local SDK/TestKit packages and restore the
+pre-Step-19 internal abstractions project name. No external package, runtime loading
+state, wire protocol, or durable data migration exists to undo.
 
 ### Step 20: Add trusted third-party in-process loading
 
@@ -1058,7 +1075,7 @@ truly disjoint:
   policy lane.
 
 Architecture fitness enforcement begins in Step 11C; the physical official assembly
-split remains Step 18. Step 19 stabilizes the public SDK, Step 20 loads trusted
+split is complete in Step 18. Step 19 stabilizes the local public SDK, Step 20 loads trusted
 in-process extensions, and Step 21 remains consumer-gated. Step 22 depends on Step 20
 and on Step 21 only if isolation is required.
 
@@ -1096,7 +1113,8 @@ After Step 18:
 After Step 20:
 
 - Third-party extensions can be loaded safely in-process.
-- SDK compatibility commitments begin.
+- Externally published SDK compatibility commitments begin; Step 19's local
+  stabilization alone does not start the support clock.
 - Sidecars remain optional and evidence-driven.
 
 ## Stop conditions
@@ -1142,17 +1160,20 @@ Resolve these questions before the named gate:
 
 ### Before Step 19
 
-- Is the route/binding surface public in v1 or contributor-only?
-- What replaces `OperationHttpResult`?
-- What SDK version window is supported?
-- How is structural contract identity hashed and snapshotted?
-- What package signing and publisher identity are required?
-- Which operations, if any, are replaceable? Does search alone justify replacement
-  machinery?
-- Are manifests JSON, code, or both?
-- Which target frameworks are supported?
-- Should v1 deliberately ship as an in-process extension platform first?
-- What happens when an optional extension fails during startup?
+- Answered in Step 19: typed route binding and new extension-namespaced operation
+  contribution are public; replacement is disabled and built-ins are nonreplaceable.
+- Answered in Steps 11C and 19: `OperationResult` is transport-neutral and structural
+  negotiation fails closed across independently versioned contracts.
+- Answered in Step 19: the host accepts SDK `1.0.0` through `1.2.0` inclusive within
+  major 1; the 12-month/two-minor support floor begins only after first publication.
+- Answered in Step 19: canonical UTF-8 bytes and lowercase SHA-256 identities are
+  frozen by goldens and shared by manifest, structural, and attestation definitions.
+- Answered in Step 19: publisher authority is an explicit trusted ES256 signing key
+  plus extension ID; display publisher text is not authority and missing trust fails.
+- Answered in Step 19: v1 uses strict JSON plus a typed TestKit builder, targets only
+  `net10.0`, packs locally without external publication, and has no sidecars.
+- Answered in Step 19: required request-path startup failure prevents readiness; v1
+  makes no optional-startup degradation promise.
 
 ### Before Step 21
 

@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
 using System.Net;
 using Microsoft.AspNetCore.Http;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel.Routing;
 using NuGet.TestServer.Packages;

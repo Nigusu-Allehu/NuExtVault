@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using NuGet.TestServer.Authentication;
-using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Sdk;
 
 namespace NuGet.TestServer.Kernel;
 

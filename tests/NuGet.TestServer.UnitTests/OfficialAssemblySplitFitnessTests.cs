@@ -14,7 +14,7 @@ namespace NuGet.TestServer.UnitTests;
 /// </summary>
 public sealed class OfficialAssemblySplitFitnessTests
 {
-    private const string AbstractionsAssembly = "NuGet.TestServer.Extensions.Abstractions";
+    private const string SdkAssembly = "NuGet.TestServer.Extensions.Sdk";
     private const string KernelAssembly = "NuGet.TestServer.Kernel";
     private const string OfficialAssembly = "NuGet.TestServer.Extensions.Official";
     private const string BootstrapAssembly = "NuGet.TestServer";
@@ -29,7 +29,7 @@ public sealed class OfficialAssemblySplitFitnessTests
         "netstandard",
         "mscorlib",
         "System",
-        AbstractionsAssembly,
+        SdkAssembly,
         "NuGet.Versioning"
     ];
 
@@ -105,7 +105,7 @@ public sealed class OfficialAssemblySplitFitnessTests
         Assert.DoesNotContain(OfficialAssembly, references);
         Assert.DoesNotContain(FixtureAssembly, references);
         Assert.DoesNotContain(BootstrapAssembly, references);
-        Assert.Contains(AbstractionsAssembly, references);
+        Assert.Contains(SdkAssembly, references);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class OfficialAssemblySplitFitnessTests
             .Select(type => type.Namespace ?? string.Empty)
             .Where(name =>
                 name.StartsWith("NuGet.TestServer.Extensions.", StringComparison.Ordinal) &&
-                name != "NuGet.TestServer.Extensions.Abstractions")
+                name != "NuGet.TestServer.Extensions.Sdk")
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -142,7 +142,7 @@ public sealed class OfficialAssemblySplitFitnessTests
         Assert.Contains(OfficialAssembly, bootstrapReferences);
 
         string[] productAssemblies =
-            [AbstractionsAssembly, KernelAssembly, OfficialAssembly, BootstrapAssembly];
+            [SdkAssembly, KernelAssembly, OfficialAssembly, BootstrapAssembly];
         var referencingBoth = productAssemblies
             .Select(Load)
             .Where(assembly =>
@@ -161,9 +161,9 @@ public sealed class OfficialAssemblySplitFitnessTests
     [Fact]
     public void Project_references_form_a_one_way_graph()
     {
-        Assert.Empty(ProjectReferences(AbstractionsAssembly));
-        Assert.Equal([AbstractionsAssembly], ProjectReferences(KernelAssembly));
-        Assert.Equal([AbstractionsAssembly], ProjectReferences(OfficialAssembly));
+        Assert.Empty(ProjectReferences(SdkAssembly));
+        Assert.Equal([SdkAssembly], ProjectReferences(KernelAssembly));
+        Assert.Equal([SdkAssembly], ProjectReferences(OfficialAssembly));
         Assert.Equal(
             [OfficialAssembly, KernelAssembly],
             ProjectReferences(BootstrapAssembly));
@@ -189,7 +189,7 @@ public sealed class OfficialAssemblySplitFitnessTests
                          @"using\s+(NuGet\.TestServer\.[A-Za-z0-9_\.]+)\s*;"))
             {
                 var imported = match.Groups[1].Value;
-                if (imported == "NuGet.TestServer.Extensions.Abstractions" ||
+                if (imported == "NuGet.TestServer.Extensions.Sdk" ||
                     imported.StartsWith("NuGet.TestServer.Extensions.", StringComparison.Ordinal))
                 {
                     continue;
@@ -282,7 +282,7 @@ public sealed class OfficialAssemblySplitFitnessTests
         var solution = File.ReadAllText(Path.Combine(RepositoryRoot, "NuGet.TestServer.slnx"));
         foreach (var project in new[]
                  {
-                     AbstractionsAssembly, KernelAssembly, OfficialAssembly, BootstrapAssembly
+                     SdkAssembly, KernelAssembly, OfficialAssembly, BootstrapAssembly
                  })
         {
             Assert.Contains($"src/{project}/{project}.csproj", solution, StringComparison.Ordinal);
@@ -306,7 +306,7 @@ public sealed class OfficialAssemblySplitFitnessTests
         var references = ReferencedAssemblyNames(assembly);
 
         Assert.NotEmpty(references);
-        Assert.Contains(AbstractionsAssembly, references);
+        Assert.Contains(SdkAssembly, references);
         Assert.DoesNotContain(BootstrapAssembly, references);
         var forbidden = references
             .Where(reference => ForbiddenExtensionReferencePrefixes.Any(prefix =>
