@@ -190,6 +190,10 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
 
     internal string SchemaUri { get; }
 
+    internal string? ValidatedManifestDigest { get; init; }
+
+    internal string? ValidatedStagedContentDigest { get; init; }
+
     public bool Equals(ExtensionManifest? other) =>
         other is not null &&
         SchemaVersion == other.SchemaVersion &&

@@ -3,18 +3,16 @@
 ## Status and scope
 
 This is the authoritative policy for the NuTestServer public extension SDK v1
-surface stabilized by Microkernel Step 19. The implementation and package projects
-exist in this repository, can be packed locally, and are exercised by official and
-separately compiled test extensions. They have not been published to NuGet.org or
-any other external feed.
+surface stabilized by Microkernel Step 19 and loaded by Step 20. The implementation
+and package projects exist in this repository, can be packed locally, and are
+exercised by official and separately packaged test extensions. They have not been
+published to NuGet.org or any other external feed.
 
-Step 19 stabilizes contracts, validation, canonical identities, conformance
-attestations, and local packaging only. It does not discover, load, or activate an
-external extension. Step 20 is the first step that may add administrator-installed
-package discovery, trusted in-process loading, validation, and activation. There is
-no extension-loading CLI today. Sidecars remain deferred until a concrete consumer
-requires process isolation or another implementation language. Package Staging and
-external publication are not part of Step 19.
+Step 20 adds administrator-installed package discovery, trusted in-process loading,
+validation, and activation through repeatable CLI package and trust roots. Discovery
+is disabled by default and performs no network access. Sidecars remain deferred
+until a concrete consumer requires process isolation or another implementation
+language. Package Staging and external publication remain out of scope.
 
 ## Packages, assemblies, and target framework
 
@@ -84,7 +82,8 @@ Capabilities are denied by default and requested explicitly as `required` or
   `CapabilityDeniedException`; it is never converted into success.
 - Optional omission is observable only through `TryGet` on a request declared
   optional. `TryGet` rejects required requests.
-- The kernel scopes capability handles to one host instance and extension identity.
+- The kernel scopes capability handles to one host instance, extension identity,
+  attested manifest digest, and immutable staged-content digest.
 - Public capability methods are action-scoped, asynchronous `ValueTask` operations
   with cancellation and serializable contracts.
 - Documents and stream handles declare positive bounds. Oversized or unbounded
@@ -111,7 +110,7 @@ within major version 1. An SDK below `1.0.0`, above `1.2.0`, or in another major
 unsupported. A manifest range must include a host-supported selection, and every
 declared contract version and structural identity must match that selection.
 Unknown required fields, unsupported ranges, missing identities, or any version or
-digest mismatch fail closed before activation. Step 20 must perform this complete
+digest mismatch fail closed before activation. Step 20 performs this complete
 negotiation before loading code.
 
 Once these packages are published for the first time, a supported contract receives
@@ -172,27 +171,23 @@ surface.
 Verification rejects payload or signature tampering, wrong package identity or
 version, publisher mismatch, wrong manifest or structural digest, every independent
 contract-version mismatch, wrong suite, wrong key or key ID, unsupported algorithm,
-not-yet-valid or expired envelopes, noncanonical payloads, and absent trust. Step 19
-provides signing and verification primitives and fixtures; Step 20 is responsible
-for invoking verification before activation.
+not-yet-valid or expired envelopes, noncanonical payloads, and absent trust. Step 19 provides signing and verification primitives and fixtures; Step 20 invokes
+verification against explicit configured trust roots before activation.
 
 ## Dependencies, startup, and failure behavior
 
 The current built-in catalog already orders dependencies deterministically and
 rejects missing dependencies, incompatible half-open version ranges, and cycles.
-The public manifest v1 stabilized in Step 19 does not yet expose an external
-dependency member, and Step 19 has no external runtime to enforce one. If Step 20
-introduces external dependency declarations, every dependency must have an explicit
-version range, graph validation and ordering must remain deterministic, and missing,
-incompatible, or cyclic graphs must fail before code loading. The strict v1 parser
-must not silently accept an undeclared dependency field.
+The public manifest v1 does not expose package dependencies. Step 20 keeps loading
+metadata in the separately versioned `extension-package.json`, where every dependency
+has an explicit half-open version range. Deterministic graph validation rejects
+missing, incompatible, duplicate, or cyclic packages before code loading.
 
 A required request-path extension startup failure prevents readiness. Invalid
 identity, ownership, route, contract, capability, trust, or attestation state fails
 before listening. V1 does not promise optional-extension startup degradation,
 resource omission, or a `Degraded` recovery lifecycle. Installation, update,
-enablement, disablement, and unload will initially require restart when Step 20
-implements them.
+enablement, disablement, and unload require restart.
 
 ## Local build, pack, and migration
 
@@ -204,8 +199,10 @@ dotnet pack src\NuGet.TestServer.Extensions.TestKit\NuGet.TestServer.Extensions.
 dotnet pack tests\NuGet.TestServer.SdkFixture\NuGet.TestServer.SdkFixture.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
 ```
 
-These commands create local packages; they do not publish them or make the server
-load them.
+These commands create local packages; they do not publish them. A deployable
+extension package additionally needs Step 20 loading metadata and a signed
+attestation, and is loaded only when the host is started with explicit extension and
+trust roots.
 
 Pre-Step-19 extension projects should:
 

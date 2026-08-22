@@ -3,14 +3,16 @@
 ## Scope and status
 
 This review records the original architecture debate and implementation evidence
-through Microkernel Step 19. The public SDK contracts, TestKit, strict manifest,
-canonical identities, and attestation primitives are now implemented and locally
-packable. External publication, runtime discovery/loading/activation, lifecycle,
-events, sidecars, and distributed behavior are not claimed.
+through Microkernel Step 20. The public SDK contracts, TestKit, strict manifest,
+canonical identities, attestation primitives, and trusted in-process package loader
+are implemented and locally packable. External publication, runtime hot reload,
+sidecars, durable events, security sandboxing, and distributed behavior are not
+claimed.
 
 The implemented system is a complete official microkernel with a stabilized local
-SDK. It is not yet a genuinely independently loadable extension platform; that is
-Step 20.
+SDK and explicit administrator-installed third-party loading. Packages are validated,
+staged, and activated through the same graph, router, registry, broker, diagnostics,
+and conformance path as official modules.
 
 ## What Steps 1 through 11 proved
 
@@ -379,11 +381,17 @@ requests are explicit; public capabilities remain asynchronous, cancellable,
 serializable, bounded, and action-scoped with no implementation escape.
 
 Official modules and the separately compiled `/flavors/index.json` fixture conform
-against the frozen SDK. Local pack tests verify the SDK schema asset, TestKit, and
-fixture package without bundling host implementation assemblies. Step 19 adds no
-external publication, discovery, loading, activation, sidecar, or optional-startup
-degradation behavior. Step 20 is next. See
+against the frozen SDK. Step 20 packages that fixture with strict loading metadata
+and a signed attestation, discovers it only from an explicit root, stages and
+validates it before activation, then serves its operation, route, resource, URL
+projection, and required clock capability through real Kestrel. Every configured
+external package is required; failure prevents startup. See
 [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
+
+Step 21 remains not applicable: no current NuTestServer consumer requires process
+isolation or another implementation language. Step 22 is eligible directly from
+Step 20 and must determine whether Package Staging creates evidence that changes that
+conclusion.
 
 ## Open questions and deadlines
 

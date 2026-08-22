@@ -203,7 +203,8 @@ internal sealed record ServerComposition(
     IPackagePolicyScanner? PackageScanner,
     TemporaryStorageLease? StorageLease,
     bool EnableVulnerabilityPersistence,
-    ImmutableArray<IExtensionModule> Modules)
+    ImmutableArray<IExtensionModule> Modules,
+    ExternalExtensionRuntime ExternalExtensions)
 {
     /// <summary>
     /// Identifies this host instance. Kernel content handles, registries, routes, and
@@ -232,48 +233,82 @@ internal sealed record ServerComposition(
         IPackagePolicyScanner? packageScanner = null,
         TemporaryStorageLease? storageLease = null,
         bool enableVulnerabilityPersistence = false,
-        ImmutableArray<IExtensionModule> modules = default)
+        ImmutableArray<IExtensionModule> modules = default,
+        ExternalExtensionConfiguration? externalExtensions = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
         authentication ??= AuthenticationConfiguration.Anonymous;
         vulnerabilities ??= new VulnerabilitySnapshotProvider(EmbeddedVulnerabilitySnapshot.Load());
         runtimeState ??= new RuntimeStateConfiguration();
         packageLimits = (packageLimits ?? PackageTransferLimits.Default).Validate();
-        modules = ExtensionModules.Validate(
-            [new SupplyChainExtension(), .. (modules.IsDefault ? [] : modules)]);
+        var externalRuntime = ExternalExtensionPackageLoader.Load(
+            externalExtensions ?? ExternalExtensionConfiguration.Disabled);
+        if (externalRuntime.Diagnostics.Results.Any(result => !result.Succeeded))
+        {
+            externalRuntime.Dispose();
+            var failure = externalRuntime.Diagnostics.Results.First(result => !result.Succeeded);
+            throw new ServerHostingConfigurationException(
+                $"{failure.FailureCode}: {failure.RedactedMessage}");
+        }
+        try
+        {
+            modules = ExtensionModules.Validate(
+                [
+                    new SupplyChainExtension(),
+                .. (modules.IsDefault ? [] : modules),
+                .. externalRuntime.Modules
+                ]);
+            if (!externalRuntime.Modules.IsEmpty)
+            {
+                profile = profile with
+                {
+                    Extensions =
+                    [
+                        .. profile.Extensions,
+                    .. externalRuntime.Modules.Select(module => module.Contribution.Selection)
+                    ]
+                };
+            }
 
-        var catalog = modules.IsEmpty
-            ? BuiltInExtensionCatalog.Instance
-            : BuiltInExtensionCatalog.CreateWith(modules);
-        var extensionGraph = catalog.Resolve(
-            profile,
-            authentication.Profile == AuthenticationProfile.Production,
-            ExtensionModules.CreateContractIndex(modules));
-        ValidateProfile(profile, storageDirectory, authentication, supplyChain, modules);
-        var mode = profile.Kind == ServerProfileKind.Production
-            ? ServerMode.Production
-            : ServerMode.Test;
-        var hosting = ServerHostingOptions.Create(
-            mode,
-            url ?? "http://127.0.0.1:0",
-            authentication,
-            trustedProxies);
+            var catalog = modules.IsEmpty
+                ? BuiltInExtensionCatalog.Instance
+                : BuiltInExtensionCatalog.CreateWith(modules);
+            var extensionGraph = catalog.Resolve(
+                profile,
+                authentication.Profile == AuthenticationProfile.Production,
+                ExtensionModules.CreateContractIndex(modules));
+            ValidateProfile(profile, storageDirectory, authentication, supplyChain, modules);
+            var mode = profile.Kind == ServerProfileKind.Production
+                ? ServerMode.Production
+                : ServerMode.Test;
+            var hosting = ServerHostingOptions.Create(
+                mode,
+                url ?? "http://127.0.0.1:0",
+                authentication,
+                trustedProxies);
 
-        return new ServerComposition(
-            profile,
-            extensionGraph,
-            hosting,
-            storageDirectory,
-            authentication,
-            vulnerabilities,
-            runtimeState,
-            packageLimits,
-            maximumAuthenticationFailures,
-            supplyChain,
-            packageScanner,
-            storageLease,
-            enableVulnerabilityPersistence,
-            modules);
+            return new ServerComposition(
+                profile,
+                extensionGraph,
+                hosting,
+                storageDirectory,
+                authentication,
+                vulnerabilities,
+                runtimeState,
+                packageLimits,
+                maximumAuthenticationFailures,
+                supplyChain,
+                packageScanner,
+                storageLease,
+                enableVulnerabilityPersistence,
+                modules,
+                externalRuntime);
+        }
+        catch
+        {
+            externalRuntime.Dispose();
+            throw;
+        }
     }
 
     public static ServerComposition CreateProductionWithTemporaryStorage(
@@ -287,7 +322,8 @@ internal sealed record ServerComposition(
         SupplyChainOptions? supplyChain = null,
         IPackagePolicyScanner? packageScanner = null,
         bool enableVulnerabilityPersistence = false,
-        ImmutableArray<IExtensionModule> modules = default)
+        ImmutableArray<IExtensionModule> modules = default,
+        ExternalExtensionConfiguration? externalExtensions = null)
     {
         var lease = TemporaryStorageLease.Create();
         try
@@ -306,7 +342,8 @@ internal sealed record ServerComposition(
                 packageScanner,
                 lease,
                 enableVulnerabilityPersistence,
-                modules);
+                modules,
+                externalExtensions);
         }
         catch
         {

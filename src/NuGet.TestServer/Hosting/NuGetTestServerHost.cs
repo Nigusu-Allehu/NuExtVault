@@ -61,6 +61,8 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
     public RequestControlClient Requests { get; }
     public IReadOnlyList<SecurityAuditEvent> SecurityAudits =>
         _application.Services.GetRequiredService<ISecurityAuditSink>().GetAll();
+    internal ExternalExtensionDiagnostics ExternalExtensionDiagnostics =>
+        Composition.ExternalExtensions.Diagnostics;
     internal ServerComposition Composition { get; }
 
     public static async Task<NuGetTestServerHost> StartAsync(
@@ -346,6 +348,7 @@ public sealed class NuGetTestServerHost : IAsyncDisposable
         HttpClient.Dispose();
         await _application.StopAsync();
         await _application.DisposeAsync();
+        Composition.ExternalExtensions.Dispose();
     }
 }
 

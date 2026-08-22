@@ -82,6 +82,7 @@ public static class ServerApplication
         catch
         {
             composition.StorageLease?.Dispose();
+            composition.ExternalExtensions.Dispose();
             throw;
         }
     }
@@ -117,6 +118,7 @@ public static class ServerApplication
             builder.Services.AddSingleton<TemporaryStorageLease>(_ => composition.StorageLease);
         }
         builder.Services.AddSingleton(composition);
+        builder.Services.AddSingleton<IHostedService>(composition.ExternalExtensions);
         builder.Services.AddSingleton(composition.Profile);
         builder.Services.AddSingleton(composition.ExtensionGraph);
         builder.Services.AddSingleton(hosting);

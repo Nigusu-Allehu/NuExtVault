@@ -16,6 +16,10 @@ internal interface ICapabilityHandleIdentity
     string HostInstanceId { get; }
 
     string OwnerId { get; }
+
+    string ManifestDigest { get; }
+
+    string StagedContentDigest { get; }
 }
 
 internal enum CapabilityCallOutcome
@@ -737,8 +741,9 @@ internal sealed class CapabilityBroker
     public CapabilityOwnerContext ForOwner(string ownerId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
-        if (!_graph.Extensions.Any(extension =>
-                string.Equals(extension.Id, ownerId, StringComparison.OrdinalIgnoreCase)))
+        var extension = _graph.Extensions.SingleOrDefault(extension =>
+            string.Equals(extension.Id, ownerId, StringComparison.OrdinalIgnoreCase));
+        if (extension is null)
         {
             throw new CapabilityDeniedException(ownerId, "<owner-not-active>");
         }
@@ -748,6 +753,8 @@ internal sealed class CapabilityBroker
             static (id, state) => new CapabilityOwnerContext(
                 state.HostInstanceId,
                 id,
+                state.ManifestDigest,
+                state.StagedContentDigest,
                 state.Graph.Capabilities
                     .Where(capability =>
                         capability.IsGranted &&
@@ -757,7 +764,16 @@ internal sealed class CapabilityBroker
                 state.Audit,
                 state.Limits,
                 state.Services),
-            (HostInstanceId: _hostInstanceId, Graph: _graph, Audit: _audit, Limits: _limits, Services: _services));
+            (
+                HostInstanceId: _hostInstanceId,
+                ManifestDigest: extension.ValidatedManifestDigest ??
+                   ExtensionManifestJson.ComputeDigest(extension).Hex,
+                StagedContentDigest: extension.ValidatedStagedContentDigest ??
+                   ExtensionManifestJson.ComputeDigest(extension).Hex,
+                Graph: _graph,
+                Audit: _audit,
+                Limits: _limits,
+                Services: _services));
     }
 }
 
@@ -774,6 +790,8 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
     internal CapabilityOwnerContext(
         string hostInstanceId,
         string ownerId,
+        string manifestDigest,
+        string stagedContentDigest,
         ImmutableHashSet<string> grants,
         CapabilityAuditLog audit,
         CapabilityLimits limits,
@@ -781,6 +799,8 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
     {
         _hostInstanceId = hostInstanceId;
         _ownerId = ownerId;
+        ManifestDigest = manifestDigest;
+        StagedContentDigest = stagedContentDigest;
         _grants = grants;
         _audit = audit;
         _limits = limits;
@@ -788,6 +808,14 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
     }
 
     public ImmutableHashSet<string> GrantedCapabilities => _grants;
+
+    internal string HostInstanceId => _hostInstanceId;
+
+    internal string OwnerId => _ownerId;
+
+    internal string ManifestDigest { get; }
+
+    internal string StagedContentDigest { get; }
 
     public T GetRequired<T>(CapabilityRequest request) where T : class
     {
@@ -822,7 +850,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
             throw new CapabilityDeniedException(_ownerId, capabilityName);
         }
 
-        var handle = _handles.GetOrAdd(typeof(T), _ => CreateHandle<T>());
+        var handle = _handles.GetOrAdd(typeof(T), _ => Bind(CreateHandle<T>()));
         return (T)handle;
     }
 
@@ -845,8 +873,14 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
             return false;
         }
 
-        capability = (T)_handles.GetOrAdd(typeof(T), _ => CreateHandle<T>());
+        capability = (T)_handles.GetOrAdd(typeof(T), _ => Bind(CreateHandle<T>()));
         return true;
+    }
+
+    private T Bind<T>(T handle) where T : class
+    {
+        ((CapabilityHandle)(object)handle).Bind(ManifestDigest, StagedContentDigest);
+        return handle;
     }
 
     private T CreateHandle<T>() where T : class
@@ -1253,6 +1287,16 @@ internal abstract class CapabilityHandle : ICapabilityHandleIdentity
     public string HostInstanceId { get; }
 
     public string OwnerId { get; }
+
+    public string ManifestDigest { get; private set; } = string.Empty;
+
+    public string StagedContentDigest { get; private set; } = string.Empty;
+
+    internal void Bind(string manifestDigest, string stagedContentDigest)
+    {
+        ManifestDigest = manifestDigest;
+        StagedContentDigest = stagedContentDigest;
+    }
 
     protected long MaximumStreamBytes => _limits.MaximumStreamBytes;
 

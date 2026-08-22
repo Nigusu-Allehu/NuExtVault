@@ -4,6 +4,9 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Security.Cryptography;
+using System.Collections.Immutable;
+using System.Text.Json;
+using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions.Vulnerabilities;
@@ -15,7 +18,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0)
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [package limit options] [authentication options]");
+        "Usage: nuget-test-server <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [package limit options] [authentication options]");
     return 2;
 }
 
@@ -157,11 +160,14 @@ try
         storageDirectory: storageDirectory,
         authentication: authentication.Configuration,
         packageLimits: packageLimits,
-        trustedProxies: ParseTrustedProxies(arguments));
+        trustedProxies: ParseTrustedProxies(arguments),
+        extensionRoots: ReadRepeatedPathOption(arguments, "--extension-root"),
+        extensionTrustRoots: ReadTrustRoots(arguments));
     app = ServerApplication.Build(composition);
 }
 catch (Exception exception) when (
     exception is ServerHostingConfigurationException
+        or CliConfigurationException
         or PackageStorageInUseException
         or PackageStorageCorruptionException)
 {
@@ -242,6 +248,57 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
     }
 
     return null;
+}
+
+static ImmutableArray<string> ReadRepeatedPathOption(
+    IReadOnlyList<string> arguments,
+    string name)
+{
+    var values = ImmutableArray.CreateBuilder<string>();
+    for (var index = 1; index < arguments.Count; index++)
+    {
+        if (!string.Equals(arguments[index], name, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+        if (index + 1 >= arguments.Count ||
+            arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new CliConfigurationException($"{name} requires one directory path.");
+        }
+        values.Add(Path.GetFullPath(arguments[++index]));
+    }
+    return values.ToImmutable();
+}
+
+static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string> arguments)
+{
+    var roots = ImmutableArray.CreateBuilder<ConformanceTrustRoot>();
+    foreach (var path in ReadRepeatedPathOption(arguments, "--extension-trust-root"))
+    {
+        if (!File.Exists(path))
+        {
+            throw new CliConfigurationException(
+                $"Extension trust-root file '{Path.GetFileName(path)}' does not exist.");
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            var root = document.RootElement;
+            roots.Add(new ConformanceTrustRoot(
+                root.GetProperty("publisher").GetString()!,
+                root.GetProperty("keyId").GetString()!,
+                root.GetProperty("algorithm").GetString()!,
+                Convert.FromBase64String(root.GetProperty("subjectPublicKeyInfoBase64").GetString()!)));
+        }
+        catch (Exception exception) when (
+            exception is JsonException or FormatException or InvalidOperationException)
+        {
+            throw new CliConfigurationException(
+                $"Extension trust-root file '{Path.GetFileName(path)}' is invalid.");
+        }
+    }
+    return roots.ToImmutable();
 }
 
 static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)

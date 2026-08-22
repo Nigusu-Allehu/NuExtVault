@@ -2,17 +2,20 @@
 
 ## Status
 
-Selected architecture design, revised through Microkernel Step 19. Steps 1 through
+Selected architecture design, revised through Microkernel Step 20. Steps 1 through
 18 established the kernel, typed startup-frozen routing, URL projection,
 transport-neutral rendering, bounded capabilities and state, official feature
 ownership, and the separate official extension assembly. Step 19 stabilizes the
 public SDK contracts, deterministic manifest, canonical structural identity,
-conformance attestation, TestKit, and local packages.
+conformance attestation, TestKit, and local packages. Step 20 adds explicit,
+administrator-installed trusted in-process package discovery, validation, immutable
+staging, collectible loading, and activation through the same frozen graph.
 
-The current implementation is a complete official microkernel with a locally
-packable public SDK. It is not yet an independently loadable extension platform:
-external discovery, package validation, loading, and activation begin in Step 20.
-Step 19 changes no runtime discovery behavior.
+The current implementation is an independently loadable trusted in-process extension
+platform. External discovery remains disabled unless a host explicitly configures
+package and trust roots. Every configured package is required and failures prevent
+startup. No network feed, hot reload, sidecar, security sandbox, Package Staging, or
+multi-node behavior is claimed.
 
 This design supersedes the core-first proposal as the intended long-term
 architecture. Most NuTestServer features, including the default NuGet V3
@@ -48,8 +51,8 @@ Everything else is composed as an extension:
 The default CLI activates the compiled official extension bundle, so the normal user
 experience remains a complete NuGet server. A minimal profile activates only the
 kernel and explicitly selected built-ins. The public SDK is stabilized for local
-packing but is not externally published; external discovery/loading remains Step 20,
-and sidecars remain consumer-gated.
+packing but is not externally published; trusted external loading is opt-in, and
+sidecars remain consumer-gated.
 
 Official and third-party extensions use the same manifests, contribution points,
 capability broker, lifecycle, ordering, and tests. Official extensions do not get
