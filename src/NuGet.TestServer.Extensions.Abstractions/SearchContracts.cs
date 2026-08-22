@@ -33,3 +33,39 @@ internal sealed record SearchVersionDocument(
     string Version,
     long Downloads,
     RouteReference Id);
+
+internal sealed record IndexedPackageSearchRequest(
+    string Query,
+    bool IncludePrerelease,
+    int Skip,
+    int Take,
+    string? PackageType);
+
+internal sealed record IndexedPackageSearchPage(
+    int TotalHits,
+    ImmutableArray<IndexedPackageSearchItem> Items);
+
+internal sealed record IndexedPackageSearchItem(
+    IndexedPackageMetadata Package,
+    ImmutableArray<IndexedPackageMetadata> Versions);
+
+internal sealed record IndexedPackageMetadata(
+    string Id,
+    string NormalizedVersion,
+    string Description,
+    string Summary,
+    string Title,
+    string Authors,
+    string Tags,
+    string? ProjectUrl,
+    ImmutableArray<string> Owners,
+    long Downloads,
+    bool Verified,
+    ImmutableArray<PackageTypeDocument> PackageTypes);
+
+internal interface ISearchIndexQueryCapability
+{
+    ValueTask<IndexedPackageSearchPage> QueryAsync(
+        IndexedPackageSearchRequest request,
+        CancellationToken token);
+}

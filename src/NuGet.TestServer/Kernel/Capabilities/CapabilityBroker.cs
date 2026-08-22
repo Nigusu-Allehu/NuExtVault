@@ -538,14 +538,6 @@ internal interface IPackageReadCapability
         string id,
         string version,
         CancellationToken token);
-
-    ValueTask<CapabilityPackageSearchPage> SearchAsync(
-        string query,
-        bool includePrerelease,
-        int skip,
-        int take,
-        string? packageType,
-        CancellationToken token);
 }
 
 internal sealed record CapabilityPackageMetadata(
@@ -571,14 +563,6 @@ internal sealed record CapabilityPackageMetadata(
     IReadOnlyList<PackageDependencyGroup> DependencyGroups,
     DateTimeOffset Published,
     bool IsListed);
-
-internal sealed record CapabilityPackageSearchPage(
-    int TotalHits,
-    IReadOnlyList<CapabilityPackageSearchItem> Items);
-
-internal sealed record CapabilityPackageSearchItem(
-    CapabilityPackageMetadata Package,
-    IReadOnlyList<CapabilityPackageMetadata> Versions);
 
 /// <summary>
 /// The extension-facing package metadata read capability. Every member is action-scoped
@@ -1128,6 +1112,15 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _services.PackageStore,
                     _services.PackageCandidates,
                     _services.Visibility),
+            var type when type == typeof(ISearchIndexQueryCapability) =>
+                new SearchIndexQueryCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.Visibility),
             var type when type == typeof(IPackageMetadataReadCapability) ||
                           type == typeof(IPackageContentReadCapability) ||
                           type == typeof(IPackageSymbolReadCapability) =>
@@ -1331,6 +1324,8 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.PackagesContentRead),
             [typeof(IPackageSymbolReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesSymbolsRead),
+            [typeof(ISearchIndexQueryCapability)] = Set(
+                BuiltInCapabilityNames.PackagesSearchQuery),
             [typeof(IPackageMutationCapability)] = Set(
                 BuiltInCapabilityNames.PackagesMetadataWrite,
                 BuiltInCapabilityNames.PackagesContentWrite,
@@ -1577,35 +1572,6 @@ internal sealed class PackageReadCapability(
                 },
                 token);
 
-    public ValueTask<CapabilityPackageSearchPage> SearchAsync(
-        string query,
-        bool includePrerelease,
-        int skip,
-        int take,
-        string? packageType,
-        CancellationToken token) =>
-        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
-            .InvokeAsync(
-                "search",
-                async ct =>
-                {
-                    var page = await store.SearchAsync(
-                        query,
-                        includePrerelease,
-                        skip,
-                        take,
-                        ct,
-                        packageType);
-                    return new CapabilityPackageSearchPage(
-                        page.TotalHits,
-                        [
-                            .. page.Items.Select(item => new CapabilityPackageSearchItem(
-                                Map(item.Package),
-                                Map(item.Versions)))
-                        ]);
-                },
-                token);
-
     private static IReadOnlyList<CapabilityPackageMetadata> Map(
         IEnumerable<TestPackage> packages) =>
         [.. packages.Select(Map)];
@@ -1634,6 +1600,78 @@ internal sealed class PackageReadCapability(
             package.DependencyGroups,
             package.Published,
             package.IsListed);
+}
+
+/// <summary>
+/// Bounded indexed metadata queries for search owners. The store performs the indexed
+/// query against current state; the kernel then reapplies authoritative search
+/// visibility before any metadata crosses the extension boundary.
+/// </summary>
+internal sealed class SearchIndexQueryCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    IPackageStore store,
+    PackageVisibilityPolicy visibility)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        ISearchIndexQueryCapability
+{
+    public ValueTask<IndexedPackageSearchPage> QueryAsync(
+        IndexedPackageSearchRequest request,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return Gate(BuiltInCapabilityNames.PackagesSearchQuery)
+            .InvokeAsync(
+                "query",
+                async ct =>
+                {
+                    var page = await store.SearchAsync(
+                        request.Query,
+                        request.IncludePrerelease,
+                        request.Skip,
+                        request.Take,
+                        ct,
+                        request.PackageType);
+                    var items = page.Items
+                        .Where(item => visibility.CanRead(
+                            item.Package,
+                            PackageResourceClass.Search))
+                        .Select(item => new IndexedPackageSearchItem(
+                            Map(item.Package),
+                            [
+                                .. item.Versions
+                                    .Where(version => visibility.CanRead(
+                                        version,
+                                        PackageResourceClass.Search))
+                                    .Select(Map)
+                            ]))
+                        .Where(item => !item.Versions.IsEmpty)
+                        .ToImmutableArray();
+                    return new IndexedPackageSearchPage(page.TotalHits, items);
+                },
+                token);
+    }
+
+    private static IndexedPackageMetadata Map(TestPackage package) =>
+        new(
+            package.Identity.Id,
+            package.NormalizedVersion,
+            package.Description,
+            package.Summary,
+            package.Title,
+            package.Authors,
+            package.Tags,
+            package.ProjectUrl?.OriginalString,
+            [.. package.RepositoryMetadata.Owners],
+            package.RepositoryMetadata.Downloads,
+            package.RepositoryMetadata.Verified,
+            [
+                .. package.EffectivePackageTypes.Select(
+                    type => new PackageTypeDocument(type.Name, type.Version))
+            ]);
 }
 
 /// <summary>

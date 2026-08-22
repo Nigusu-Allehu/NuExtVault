@@ -11,6 +11,12 @@ internal static class KernelCapabilityNames
     public const string HostClockRead = "host.clock.read";
 
     /// <summary>
+    /// Performs a bounded indexed package search. The kernel applies authoritative
+    /// search visibility immediately before returning the page.
+    /// </summary>
+    public const string PackageSearchQuery = "packages.search.query";
+
+    /// <summary>
     /// Performs bounded signature and scanner inspection of one kernel-issued package
     /// handle. The capability returns observations only and cannot mutate package state.
     /// </summary>

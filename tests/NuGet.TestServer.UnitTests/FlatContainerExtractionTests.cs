@@ -11,8 +11,8 @@ namespace NuGet.TestServer.UnitTests;
 /// <summary>
 /// Step 13 extraction gates. The five flat-container and symbol read operations, their
 /// typed routes, and the package-base-address resource have exactly one owner: the
-/// official <c>NuGet.FlatContainer</c> extension. Registration and search ownership is
-/// deliberately unchanged.
+/// official <c>NuGet.FlatContainer</c> extension. Registration ownership is unchanged,
+/// while search has its own independently extracted owner.
 /// </summary>
 public sealed class FlatContainerExtractionTests
 {
@@ -29,12 +29,11 @@ public sealed class FlatContainerExtractionTests
         "NuGet.FlatContainer.GetVersions"
     ];
 
-    private static readonly string[] RegistrationAndSearchOperations =
+    private static readonly string[] RegistrationOperations =
     [
         "NuGet.Registration.GetIndex",
         "NuGet.Registration.GetLeaf",
-        "NuGet.Registration.GetPage",
-        "NuGet.Search.Query"
+        "NuGet.Registration.GetPage"
     ];
 
     [Fact]
@@ -55,7 +54,7 @@ public sealed class FlatContainerExtractionTests
         }
 
         Assert.All(
-            RegistrationAndSearchOperations,
+            RegistrationOperations,
             operationId => Assert.Equal(
                 ProtocolExtensionId,
                 host.Registry.Find(operationId)!.ExtensionId));
@@ -88,8 +87,7 @@ public sealed class FlatContainerExtractionTests
         Assert.Equal(10, resource.Contribution.Order);
         Assert.All(
             host.Graph.Routes.Where(route =>
-                route.Path.StartsWith("/registration/", StringComparison.Ordinal) ||
-                route.Path == "/query"),
+                route.Path.StartsWith("/registration/", StringComparison.Ordinal)),
             route => Assert.Equal(ProtocolExtensionId, route.ExtensionId));
     }
 

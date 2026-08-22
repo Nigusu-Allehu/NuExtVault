@@ -20,8 +20,7 @@ public sealed class RegistrationSearchSeparationTests
             RepositoryRoot,
             "src",
             "NuGet.TestServer",
-            "Kernel",
-            "Owners",
+            "Extensions",
             "Search");
         var neutralRoot = Path.Combine(
             RepositoryRoot,
@@ -77,6 +76,13 @@ public sealed class RegistrationSearchSeparationTests
             "NuGet.TestServer",
             "Hosting",
             "Endpoints");
+        var searchRoot = Path.Combine(
+            RepositoryRoot,
+            "src",
+            "NuGet.TestServer",
+            "Extensions",
+            "Search");
+        var searchEndpoints = Path.Combine(searchRoot, "SearchEndpoints.cs");
         var neutralContracts = File.ReadAllText(
             Path.Combine(abstractions, "PackageMetadataContracts.cs"));
         var legacyContracts = File.ReadAllText(
@@ -87,7 +93,7 @@ public sealed class RegistrationSearchSeparationTests
         Assert.True(File.Exists(Path.Combine(abstractions, "RegistrationContracts.cs")));
         Assert.True(File.Exists(Path.Combine(abstractions, "SearchContracts.cs")));
         Assert.True(File.Exists(Path.Combine(endpoints, "RegistrationEndpoints.cs")));
-        Assert.True(File.Exists(Path.Combine(endpoints, "SearchEndpoints.cs")));
+        Assert.True(File.Exists(searchEndpoints));
         Assert.DoesNotContain("Registration", neutralContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("Search", neutralContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("GetRegistration", legacyContracts, StringComparison.Ordinal);
@@ -97,35 +103,40 @@ public sealed class RegistrationSearchSeparationTests
     }
 
     [Fact]
-    public void Registration_and_search_keep_their_current_protocol_owner()
+    public void Registration_keeps_its_protocol_owner_while_search_is_extracted()
     {
         using var host = TestServerApplication.Build(ServerProfiles.Embedded);
-        string[] operationIds =
+        string[] registrationOperationIds =
         [
             OperationIds.RegistrationGetIndex,
             OperationIds.RegistrationGetPage,
-            OperationIds.RegistrationGetLeaf,
-            OperationIds.SearchQuery
+            OperationIds.RegistrationGetLeaf
         ];
-        string[] routePaths =
+        string[] registrationRoutePaths =
         [
             "/registration/{id}/index.json",
             "/registration/{id}/page/{lower}/{upper}.json",
-            "/registration/{id}/{version}.json",
-            "/query"
+            "/registration/{id}/{version}.json"
         ];
 
         Assert.All(
-            operationIds,
+            registrationOperationIds,
             operationId => Assert.Equal(
                 BuiltInExtensionIds.Protocol,
                 host.Graph.Operations.Single(
                     operation => operation.OperationId == operationId).ExtensionId));
         Assert.All(
-            routePaths,
+            registrationRoutePaths,
             routePath => Assert.All(
                 host.Graph.Routes.Where(route => route.Path == routePath),
                 route => Assert.Equal(BuiltInExtensionIds.Protocol, route.ExtensionId)));
+        Assert.Equal(
+            SearchExtractionTests.SearchExtensionId,
+            host.Graph.Operations.Single(
+                operation => operation.OperationId == OperationIds.SearchQuery).ExtensionId);
+        Assert.All(
+            host.Graph.Routes.Where(route => route.Path == "/query"),
+            route => Assert.Equal(SearchExtractionTests.SearchExtensionId, route.ExtensionId));
     }
 
     private static IEnumerable<string> EnumerateSource(string root) =>

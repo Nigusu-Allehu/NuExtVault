@@ -1,15 +1,12 @@
 using NuGet.TestServer.Extensions.Abstractions;
-using NuGet.TestServer.Kernel.Capabilities;
-using NuGet.TestServer.Kernel.Owners.PackageMetadata;
 
-namespace NuGet.TestServer.Kernel.Owners.Search;
+namespace NuGet.TestServer.Extensions.Search;
 
 internal static class SearchDocumentBuilder
 {
-    public static SearchResultDocument CreateResult(
-        CapabilityPackageMetadata package,
-        IReadOnlyList<CapabilityPackageMetadata> versions)
+    public static SearchResultDocument CreateResult(IndexedPackageSearchItem item)
     {
+        var package = item.Package;
         var id = package.Id.ToLowerInvariant();
         var version = package.NormalizedVersion;
         return new SearchResultDocument(
@@ -20,17 +17,17 @@ internal static class SearchDocumentBuilder
             string.IsNullOrEmpty(package.Summary) ? package.Description : package.Summary,
             string.IsNullOrEmpty(package.Title) ? package.Id : package.Title,
             [package.Authors],
-            [.. package.RepositoryMetadata.Owners],
+            package.Owners,
             [.. package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
-            package.ProjectUrl?.OriginalString,
-            versions.Sum(item => item.RepositoryMetadata.Downloads),
-            package.RepositoryMetadata.Verified,
-            PackageMetadataDocumentBuilder.CreatePackageTypes(package),
+            package.ProjectUrl,
+            item.Versions.Sum(candidate => candidate.Downloads),
+            package.Verified,
+            package.PackageTypes,
             [
-                .. versions.Select(item => new SearchVersionDocument(
-                    item.NormalizedVersion,
-                    item.RepositoryMetadata.Downloads,
-                    CreateRegistrationLeafReference(id, item.NormalizedVersion)))
+                .. item.Versions.Select(candidate => new SearchVersionDocument(
+                    candidate.NormalizedVersion,
+                    candidate.Downloads,
+                    CreateRegistrationLeafReference(id, candidate.NormalizedVersion)))
             ]);
     }
 

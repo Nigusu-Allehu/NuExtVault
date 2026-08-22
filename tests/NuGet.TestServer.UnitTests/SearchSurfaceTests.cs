@@ -1,8 +1,7 @@
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Search;
 using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Owners.Search;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -11,7 +10,7 @@ public sealed class SearchSurfaceTests
     [Fact]
     public void Search_surface_is_complete_and_body_free()
     {
-        var endpoint = Assert.Single(SearchEndpoints.All);
+        var endpoint = Assert.Single(SearchEndpoints.Descriptors);
 
         Assert.Equal("search.query", endpoint.Name);
         Assert.Equal(["GET", "HEAD"], endpoint.Methods.ToArray());
@@ -24,12 +23,12 @@ public sealed class SearchSurfaceTests
     }
 
     [Fact]
-    public void Search_owner_depends_only_on_its_query_adapter()
+    public void Search_owner_depends_only_on_the_indexed_query_capability()
     {
         var constructor = Assert.Single(typeof(SearchOperations).GetConstructors());
 
         Assert.Equal(
-            [typeof(ISearchPackageQuery)],
+            [typeof(ISearchIndexQueryCapability)],
             constructor.GetParameters().Select(parameter => parameter.ParameterType));
     }
 }

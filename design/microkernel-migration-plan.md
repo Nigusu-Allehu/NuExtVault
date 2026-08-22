@@ -15,7 +15,8 @@ separately compiled conformance module, and enforces the architecture fitness ga
 is merged through PR #69. Step 11D establishes the measured scalability and
 backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
 PR #73, Lane B Step 13 is merged through PR #74, and Lane A Step 12A is merged through
-PR #75. The Lane B Step 13A prerequisite mechanically separates registration and search
+PR #75, and Lane A Step 12B is merged through PR #78. The Lane B Step 13A prerequisite
+mechanically separates registration and search
 contracts, endpoint descriptors, query adapters, document builders/renderers, owners,
 and focused tests while retaining `builtin.protocol` ownership. The two feature
 surfaces depend only on neutral package-metadata primitives and no longer reference
@@ -774,6 +775,10 @@ document contributor.
 
 ### Step 15: Extract search
 
+**Status:** Implemented. The official `NuGet.Search` extension (`builtin.search`) is
+the sole owner of `NuGet.Search.Query`, the body-free `GET`/`HEAD /query` route, and
+the advertised `SearchQueryService/3.0.0-beta` and `3.5.0` resources.
+
 **Goal:** Move indexed querying and prove deterministic projection consistency.
 
 **Changes:**
@@ -782,6 +787,20 @@ document contributor.
 - Use brokered indexed queries and authoritative visibility post-filtering.
 - Declare registration and flat-container URL dependencies.
 - Preserve strong consistency for standard and embedded profiles.
+
+**Implemented as:**
+
+- The generic module seam contributes the search manifest, operation owner, typed
+  route, service-index resources, profile selection, and capability request.
+- The action-scoped `packages.search.query` capability returns only serializable
+  indexed metadata. The kernel reapplies authoritative search visibility on every
+  result before it crosses the capability boundary.
+- Search documents retain typed registration route references, while both advertised
+  resources declare their flat-container and registration resource dependencies for
+  kernel URL projection.
+- The existing authoritative in-memory and durable indexes remain synchronous, so
+  standard and embedded hosts preserve immediate read-your-writes behavior without a
+  stale asynchronous projection or schema migration.
 
 **Tests first:**
 

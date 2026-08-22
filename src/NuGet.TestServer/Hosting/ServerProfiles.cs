@@ -28,6 +28,7 @@ internal static class BuiltInCapabilityNames
     public const string PackagesMetadataWrite = "packages.metadata.write";
     public const string PackagesContentRead = "packages.content.read";
     public const string PackagesSymbolsRead = "packages.symbols.read";
+    public const string PackagesSearchQuery = KernelCapabilityNames.PackageSearchQuery;
     public const string PackagesContentWrite = "packages.content.write-staged";
     public const string PackagesPublish = "packages.publish";
     public const string PackagesUnlist = "packages.unlist";
@@ -162,6 +163,7 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.PackagesMetadataWrite,
             BuiltInCapabilityNames.PackagesContentRead,
             BuiltInCapabilityNames.PackagesSymbolsRead,
+            BuiltInCapabilityNames.PackagesSearchQuery,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,
@@ -200,6 +202,7 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.PackagesMetadataWrite,
             BuiltInCapabilityNames.PackagesContentRead,
             BuiltInCapabilityNames.PackagesSymbolsRead,
+            BuiltInCapabilityNames.PackagesSearchQuery,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,
@@ -241,6 +244,7 @@ internal static class ServerProfiles
             BuiltInCapabilityNames.PackagesMetadataRead,
             BuiltInCapabilityNames.PackagesContentRead,
             BuiltInCapabilityNames.PackagesSymbolsRead,
+            BuiltInCapabilityNames.PackagesSearchQuery,
             BuiltInCapabilityNames.PackagesContentWrite,
             BuiltInCapabilityNames.PackagesPublish,
             BuiltInCapabilityNames.PackagesUnlist,

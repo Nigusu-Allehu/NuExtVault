@@ -137,6 +137,7 @@ public sealed class ExtensionModuleFitnessTests
             "NuGet.TestServer.Extensions.Control",
             "NuGet.TestServer.Extensions.FlatContainer",
             "NuGet.TestServer.Extensions.Operations",
+            "NuGet.TestServer.Extensions.Search",
             "NuGet.TestServer.Extensions.Vulnerabilities",
             "NuGet.TestServer.Kernel",
             "NuGet.TestServer.Kernel.Capabilities",
@@ -280,6 +281,7 @@ internal static class ExtensionFacingCapabilities
         "IPackageSignatureInspectionCapability",
         "IPackageSymbolReadCapability",
         "IRestoreCheckpointCapability",
+        "ISearchIndexQueryCapability",
         "IVulnerabilityCatalogCapability"
     ];
 
@@ -306,6 +308,7 @@ internal static class ExtensionFacingCapabilities
             .Where(type =>
                 type.IsInterface &&
                 (type.Namespace == capabilityNamespace ||
+                 type == typeof(ISearchIndexQueryCapability) ||
                  type == typeof(IPackageSignatureInspectionCapability) ||
                  type == typeof(IPackageScannerCapability)))
             .Distinct()

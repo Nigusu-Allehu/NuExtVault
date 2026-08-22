@@ -177,11 +177,11 @@ After Steps 11A through 11D:
 - Lane A runs 12A transactional state/checkpoints, then 12B operations, health,
   backup, and restore.
 - Lane B runs Step 13 flat container, mechanically separates shared registration and
-  search code, then may run Steps 14 and 15 in parallel after URL projection. Step 13
-  is implemented: flat-container and symbol reads, their routes, and the
+  search code, then may run Steps 14 and 15 in parallel after URL projection. Steps 13
+  and 15 are implemented: flat-container and symbol reads, search, their routes, and the
   `PackageBaseAddress` resource are owned by the official `NuGet.FlatContainer`
-  extension, contributed through the generic module seam; registration and search
-  ownership is unchanged.
+  and `NuGet.Search` extensions through the generic module seam; registration ownership
+  is unchanged.
 - Lane C runs Step 16 supply-chain policy.
 - Step 17 package management waits for the read and policy lanes.
 - Step 18 performs the physical official assembly split.
@@ -207,6 +207,23 @@ HEAD behavior, paging, ordering, filters, rich metadata, symbols, durable restar
 parallel host isolation. It adds no public contract, persisted schema, capability,
 loading, package policy, mutation, operations/state, or sidecar behavior. Reverting the
 change restores the combined source layout without data or wire migration.
+
+### Step 15 implementation update
+
+Search is now contributed by the official `NuGet.Search` module. It is the single
+owner of `NuGet.Search.Query`, the typed `/query` route, and both
+`SearchQueryService` resources. The module consumes only the action-scoped,
+transport-neutral `packages.search.query` capability and emits typed registration
+route references; the resource declarations retain their registration and
+flat-container dependencies for kernel URL projection.
+
+The capability delegates to the existing synchronous indexed stores and reapplies the
+authoritative search visibility decision before returning serializable metadata.
+Consequently publish, unlist, quarantine, and delete changes remain immediately visible
+without an asynchronous projection. Existing totals, paging, ordering, prerelease,
+package-type, rich-metadata, HEAD, body-free, durable restart, parallel-host, and real
+NuGet.Protocol behavior remain unchanged. No schema, registration owner, mutation,
+policy, SDK/loading, or sidecar behavior changes.
 
 ## Step 12B implementation update
 

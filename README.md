@@ -612,8 +612,12 @@ official `NuGet.FlatContainer` extension, which also contributes the advertised
 `PackageBaseAddress` resource. The official `NuTest.Operations` extension owns the
 existing liveness, readiness, storage-health, diagnostics, backup, and restore
 operations through narrow kernel capabilities; health aggregation, integrity, and
-atomic checkpoint/restore authority remain in the kernel. Registration, search,
-publication, and symbol publication remain in their existing owners.
+atomic checkpoint/restore authority remain in the kernel. The official `NuGet.Search`
+extension owns `NuGet.Search.Query`, its body-free `GET`/`HEAD /query` route, and both
+advertised `SearchQueryService` resources. It uses only the bounded
+`packages.search.query` capability, which performs indexed reads and reapplies
+authoritative search visibility before returning metadata. Registration, publication,
+and symbol publication remain in their existing owners.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:
