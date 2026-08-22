@@ -28,7 +28,7 @@
   <ItemGroup>
     <None Include="Schema\extension-manifest-v1.schema.json"
           Pack="true"
-          PackagePath="contentFiles\any\any\nutestserver\" />
+          PackagePath="contentFiles/any/any/nutestserver" />
   </ItemGroup>
 
 </Project>

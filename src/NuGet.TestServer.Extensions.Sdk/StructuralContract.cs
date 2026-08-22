@@ -37,15 +37,15 @@ public sealed class StructuralContractIdentity : IEquatable<StructuralContractId
 public static class StructuralContractFingerprint
 {
     private const string V1Contract =
-        "contract=NuGet.TestServer.Extensions.Sdk/v1\r\n" +
-        "identity=manifest:1\r\n" +
-        "identity=operation:1\r\n" +
-        "identity=contribution:1\r\n" +
-        "identity=route:1\r\n" +
-        "identity=capability:1\r\n" +
-        "identity=structural:1\r\n" +
-        "replacement=disabled\r\n" +
-        "target-framework=net10.0\r\n";
+        "contract=NuGet.TestServer.Extensions.Sdk/v1\n" +
+        "identity=manifest:1\n" +
+        "identity=operation:1\n" +
+        "identity=contribution:1\n" +
+        "identity=route:1\n" +
+        "identity=capability:1\n" +
+        "identity=structural:1\n" +
+        "replacement=disabled\n" +
+        "target-framework=net10.0\n";
 
     private static readonly ReadOnlyMemory<byte> V1Bytes = Encoding.UTF8.GetBytes(V1Contract);
     private static readonly string V1Sha256 =

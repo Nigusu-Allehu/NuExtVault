@@ -1,3 +1,4 @@
+using System.Text;
 using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Extensions.TestKit;
 
@@ -28,7 +29,9 @@ public sealed class CanonicalIdentityTests
     public void Structural_contract_matches_the_reviewed_golden_and_digest()
     {
         var fingerprint = StructuralContractFingerprint.Create(typeof(IExtensionModule).Assembly);
-        var golden = File.ReadAllBytes(TestPaths.Snapshot("sdk-v1.structural-contract.txt"));
+        var golden = Encoding.UTF8.GetBytes(
+            File.ReadAllText(TestPaths.Snapshot("sdk-v1.structural-contract.txt"))
+                .ReplaceLineEndings("\n"));
 
         Assert.Equal(new StructuralContractVersion(1), fingerprint.Version);
         Assert.Equal(golden, fingerprint.CanonicalBytes.ToArray());
