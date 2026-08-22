@@ -1111,9 +1111,11 @@ kernel projects absolute URLs and the fixed service-index document fields after
 trusted-proxy and access processing. Supply-chain admission and validation decisions
 are now contributed by the internal official `NuTest.SupplyChain` module through the
 generic participant seam. Authoritative package, ownership, quota, publication,
-visibility, moderation, recovery, and audit state remains kernel-owned. Existing
-flat-container, registration, search, publication operations, and package-management
-implementations remain unextracted.
+visibility, moderation, recovery, and audit state remains kernel-owned. Flat-container,
+registration, search, and package-management workflows are contributed by their
+official modules through the generic seam. The `NuGet.PackageManagement` module owns
+push, symbol push, list, unlist, relist, and delete orchestration while action-scoped,
+nonreplaceable kernel capabilities retain authoritative mutations.
 
 ## Package Staging example
 

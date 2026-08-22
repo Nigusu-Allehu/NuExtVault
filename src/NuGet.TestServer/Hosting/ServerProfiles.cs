@@ -12,7 +12,6 @@ internal static class BuiltInExtensionIds
 {
     public const string Protocol = "builtin.protocol";
     public const string ServiceIndex = "builtin.service-index";
-    public const string Publication = "builtin.publication";
     public const string Vulnerabilities = "builtin.vulnerabilities";
     public const string TestControl = "builtin.test-control";
     public const string DurableStorage = "builtin.durable-storage";
@@ -92,15 +91,6 @@ internal static class ServerProfiles
         Required(BuiltInCapabilityNames.PackagesMetadataRead));
     private static readonly ExtensionSelection ServiceIndex =
         Extension(BuiltInExtensionIds.ServiceIndex);
-    private static readonly ExtensionSelection Publication = Extension(
-        BuiltInExtensionIds.Publication,
-        Required(BuiltInCapabilityNames.PackagesMetadataRead),
-        Required(BuiltInCapabilityNames.PackagesContentWrite),
-        Required(BuiltInCapabilityNames.PackagesPublish),
-        Required(BuiltInCapabilityNames.PackagesUnlist),
-        Required(BuiltInCapabilityNames.PackagesRelist),
-        Required(BuiltInCapabilityNames.PackagesDelete),
-        Required(BuiltInCapabilityNames.EventsPublish));
     private static readonly ExtensionSelection EmbeddedVulnerabilities = Extension(
         BuiltInExtensionIds.Vulnerabilities,
         Required(BuiltInCapabilityNames.VulnerabilityStateRead));
@@ -149,7 +139,6 @@ internal static class ServerProfiles
         [
             Protocol,
             ServiceIndex,
-            Publication,
             EmbeddedVulnerabilities,
             TestControl,
             SupplyChain,
@@ -187,7 +176,6 @@ internal static class ServerProfiles
         [
             Protocol,
             ServiceIndex,
-            Publication,
             DurableVulnerabilities,
             TestControl,
             DurableStorage,
@@ -231,7 +219,6 @@ internal static class ServerProfiles
         [
             Protocol,
             ServiceIndex,
-            Publication,
             DurableVulnerabilities,
             DurableStorage,
             SupplyChain,

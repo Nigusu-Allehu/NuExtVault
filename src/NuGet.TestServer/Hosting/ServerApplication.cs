@@ -213,7 +213,6 @@ public static class ServerApplication
             composition.ExtensionGraph,
             provider.GetRequiredService<ServiceIndexResourceRegistry>(),
             officialExtensions,
-            packageLimits,
             composition.Modules));
         builder.Services.AddSingleton(_ => KernelRouteTable.Create(
             composition.ExtensionGraph,

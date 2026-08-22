@@ -2,25 +2,26 @@ using System.Collections.Immutable;
 
 namespace NuGet.TestServer.Extensions.Abstractions;
 
-internal sealed record PushPackageRequest(
-    StreamHandle Content,
-    string Actor,
-    string Source,
-    bool IsAdministrator);
+internal sealed record PushPackageRequest(StreamHandle Content);
 
 internal sealed record PushPackageResponse(
     PackageIdentity Package,
     PublicationOutcome Outcome);
 
+internal sealed record PackagePublicationDocument(
+    PackageIdentity Package,
+    PublicationOutcome Outcome,
+    string Message);
+
 internal enum PublicationOutcome
 {
-    Published,
-    Duplicate,
-    Quarantined,
-    Rejected,
-    Unauthorized,
-    QuotaExceeded,
-    Conflict
+    Published = 0,
+    Quarantined = 1,
+    Rejected = 2,
+    Duplicate = 3,
+    Conflict = 4,
+    Unauthorized = 5,
+    QuotaExceeded = 6
 }
 
 internal sealed record PushSymbolsRequest(StreamHandle Content);
@@ -39,20 +40,30 @@ internal sealed record PackageSummaryDocument(
     bool Listed,
     DateTimeOffset Published);
 
-internal sealed record UnlistPackageRequest(PackageIdentity Package, string Actor);
+internal sealed record UnlistPackageRequest(PackageIdentity Package);
 
 internal sealed record UnlistPackageResponse(PackageIdentity Package);
 
-internal sealed record RelistPackageRequest(PackageIdentity Package, string Actor);
+internal sealed record RelistPackageRequest(PackageIdentity Package);
 
 internal sealed record RelistPackageResponse(PackageIdentity Package);
 
 internal sealed record DeletePackageRequest(
     PackageIdentity Package,
-    string Actor,
     string Reason);
 
 internal sealed record DeletePackageResponse(PackageIdentity Package);
+
+internal enum PackageMutationOutcome
+{
+    Succeeded,
+    NotFound,
+    Forbidden
+}
+
+internal sealed record PackageMutationDocument(
+    PackageMutationOutcome Outcome,
+    string? Detail = null);
 
 internal sealed record ModeratePackageRequest(
     PackageIdentity Package,

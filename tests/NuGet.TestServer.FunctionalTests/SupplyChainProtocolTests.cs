@@ -123,6 +123,7 @@ public sealed class SupplyChainProtocolTests
             new ByteArrayContent(overQuota.Content));
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, maliciousPush.StatusCode);
+        Assert.Equal(2, await ReadOutcomeAsync(maliciousPush));
         Assert.Equal(HttpStatusCode.NotFound, maliciousRestore.StatusCode);
         Assert.Equal(HttpStatusCode.Created, cleanPush.StatusCode);
         Assert.Equal(HttpStatusCode.TooManyRequests, overQuotaPush.StatusCode);
@@ -151,7 +152,25 @@ public sealed class SupplyChainProtocolTests
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.OK, duplicate.StatusCode);
+        Assert.Equal(3, await ReadOutcomeAsync(duplicate));
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        Assert.Equal(4, await ReadOutcomeAsync(conflict));
+    }
+
+    [Fact]
+    public async Task Inconclusive_scan_preserves_quarantined_push_wire_outcome()
+    {
+        await using var server = await NuGetTestServerHost.StartAsync(
+            new SupplyChainOptions(),
+            new SelectiveScanner());
+        var package = TestPackageBuilder.Create("Quarantine.Protocol", "1.0.0").Build();
+
+        using var push = await server.HttpClient.PutAsync(
+            "/package",
+            new ByteArrayContent(package.Content));
+
+        Assert.Equal(HttpStatusCode.Accepted, push.StatusCode);
+        Assert.Equal(1, await ReadOutcomeAsync(push));
     }
 
     [Fact]
@@ -247,6 +266,20 @@ public sealed class SupplyChainProtocolTests
             ValueTask.FromResult(
                 package.Identity.Id.StartsWith("Malicious", StringComparison.OrdinalIgnoreCase)
                     ? new PackageScanResult(PackageScanOutcome.Malicious, "deterministic test match")
-                    : new PackageScanResult(PackageScanOutcome.Clean, "deterministic test clean"));
+                    : package.Identity.Id.StartsWith(
+                        "Quarantine",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? new PackageScanResult(
+                            PackageScanOutcome.Inconclusive,
+                            "deterministic test quarantine")
+                        : new PackageScanResult(
+                            PackageScanOutcome.Clean,
+                            "deterministic test clean"));
+    }
+
+    private static async Task<int> ReadOutcomeAsync(HttpResponseMessage response)
+    {
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        return document.RootElement.GetProperty("outcome").GetInt32();
     }
 }

@@ -278,6 +278,30 @@ closed; caller cancellation still propagates. Lifecycle transitions, visibility,
 moderation, recovery, transactions, and audit remain authoritative kernel behavior.
 No Lane A state/checkpoint or Lane B protocol ownership changes are included.
 
+## Step 17 implementation update
+
+Push, symbol push, list, unlist, relist, and delete workflows are now contributed by
+the official `NuGet.PackageManagement` module through the generic module seam. It is
+the single owner of the existing package-management operation IDs and typed routes.
+Gateway authentication, authorization, scopes, TLS, throttling, binding, limits,
+cancellation, and failure mapping remain kernel policy applied before dispatch.
+
+The module orchestrates only action-scoped, transport-neutral capabilities. Those
+capabilities are nonreplaceable, bounded, audited, and fail closed; they expose no
+credentials, stores, database connections, paths, service provider, `HttpContext`, or
+authoritative state. The kernel continues to own package identity and content
+integrity, ownership and quota facts, supply-chain participant aggregation,
+quarantine-first publication, atomic mutation, visibility, moderation, recovery, and
+checkpoint participation.
+
+Existing NuGet V3 routes and client behavior remain unchanged, including streaming,
+immutable and idempotent duplicate handling, symbols, ownership and namespace policy,
+and exact listing/deletion behavior. Authoritative visibility provides immediate
+consistency after each mutation across the official flat-container, registration, and
+search modules. No assembly split, public SDK/loading, sidecar, Package Staging, or
+schema migration is included. Rollback restores the characterized legacy owner with no
+wire or data migration.
+
 ## Open questions and deadlines
 
 ### Before Step 12A
