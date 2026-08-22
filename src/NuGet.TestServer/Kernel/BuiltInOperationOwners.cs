@@ -4,7 +4,6 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
-using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel;
 
@@ -20,14 +19,12 @@ internal static class BuiltInOperationOwners
         ResolvedExtensionGraph graph,
         ServiceIndexResourceRegistry resources,
         OfficialExtensionComposition officialExtensions,
-        PackageTransferLimits limits,
         ImmutableArray<IExtensionModule> modules = default)
     {
         ArgumentNullException.ThrowIfNull(broker);
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentNullException.ThrowIfNull(resources);
         ArgumentNullException.ThrowIfNull(officialExtensions);
-        ArgumentNullException.ThrowIfNull(limits);
         modules = modules.IsDefault ? [] : modules;
         var builder = new OperationRegistryBuilder();
         var selected = graph.Extensions
@@ -37,21 +34,6 @@ internal static class BuiltInOperationOwners
         if (selected.Contains(BuiltInExtensionIds.ServiceIndex))
         {
             new ServiceIndexOperations(resources).Register(builder);
-        }
-
-        if (selected.Contains(BuiltInExtensionIds.Publication))
-        {
-            var capabilities = broker.ForOwner(BuiltInExtensionIds.Publication);
-            new PublicationOperations(
-                capabilities.GetRequired<IPackageReadCapability>(
-                    BuiltInCapabilityNames.PackagesMetadataRead),
-                capabilities.GetRequired<IPackageMutationCapability>(
-                    BuiltInCapabilityNames.PackagesContentWrite),
-                capabilities.GetRequired<IPublicationCapability>(
-                    BuiltInCapabilityNames.PackagesPublish),
-                capabilities.GetRequired<ITypedEventPublisher>(
-                    BuiltInCapabilityNames.EventsPublish),
-                limits).Register(builder);
         }
 
         officialExtensions.RegisterOperations(builder, broker);

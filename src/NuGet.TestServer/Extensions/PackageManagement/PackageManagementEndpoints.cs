@@ -1,17 +1,12 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Routing;
 
-namespace NuGet.TestServer.Hosting.Endpoints;
+namespace NuGet.TestServer.Extensions.PackageManagement;
 
-/// <summary>
-/// Package publication endpoint descriptors. Uploads are bound as kernel content
-/// handles so package and symbol payloads are never buffered by the gateway.
-/// </summary>
-internal static class PublicationEndpoints
+internal static class PackageManagementEndpoints
 {
-    public static ImmutableArray<EndpointDescriptor> Descriptors { get; } =
+    public static ImmutableArray<EndpointDescriptor> All { get; } =
     [
         new()
         {
@@ -34,10 +29,7 @@ internal static class PublicationEndpoints
                     new PushPackageRequest(
                         await request.BindUploadAsync(
                             "The multipart request contains no package.",
-                            token),
-                        request.Caller.IdentityOr("anonymous"),
-                        "default",
-                        request.Caller.IsAdministrator)))
+                            token))))
         },
         new()
         {
@@ -83,8 +75,7 @@ internal static class PublicationEndpoints
             Handler = EndpointHandler.Create<UnlistPackageRequest, UnlistPackageResponse>(
                 OperationIds.PackageManagementUnlist,
                 request => new UnlistPackageRequest(
-                    new PackageIdentity(request.GetRoute("id"), request.GetRoute("version")),
-                    request.Caller.IdentityOr("anonymous")))
+                    new PackageIdentity(request.GetRoute("id"), request.GetRoute("version"))))
         },
         new()
         {
@@ -109,7 +100,6 @@ internal static class PublicationEndpoints
                 OperationIds.PackageManagementDelete,
                 request => new DeletePackageRequest(
                     new PackageIdentity(request.GetRoute("id"), request.GetRoute("version")),
-                    request.Caller.IdentityOr("administrator"),
                     "Production hard-delete endpoint."))
         }
     ];

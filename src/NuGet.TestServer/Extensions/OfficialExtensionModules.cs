@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.FlatContainer;
 using NuGet.TestServer.Extensions.Operations;
+using NuGet.TestServer.Extensions.PackageManagement;
 using NuGet.TestServer.Extensions.Search;
 using NuGet.TestServer.Extensions.Registration;
 
@@ -19,6 +20,7 @@ internal static class OfficialExtensionModules
     [
         new FlatContainerModule(),
         new OperationsModule(),
+        new PackageManagementModule(),
         new RegistrationModule(),
         new SearchModule()
     ];

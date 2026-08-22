@@ -660,38 +660,6 @@ internal static class BuiltInExtensionCatalog
             operations: Operations(OperationFamily.ServiceIndex),
             endpoints: ProtocolEndpoints.ServiceIndex),
         Manifest(
-            BuiltInExtensionIds.Publication,
-            dependencies: [Dependency(BuiltInExtensionIds.Protocol)],
-            operations: Operations(OperationFamily.PackageManagement),
-            endpoints: PublicationEndpoints.Descriptors,
-            resources:
-            [
-                Resource(
-                    "PackagePublish",
-                    "2.0.0",
-                    OperationIds.PackageManagementPush,
-                    "/package",
-                    ServiceResourceAccess.PackagePublish,
-                    order: 50),
-                Resource(
-                    "SymbolPackagePublish",
-                    "4.9.0",
-                    OperationIds.PackageManagementPushSymbols,
-                    "/symbolpackage",
-                    ServiceResourceAccess.Write,
-                    order: 60)
-            ],
-            capabilities:
-            [
-                Required(BuiltInCapabilityNames.PackagesMetadataRead),
-                Required(BuiltInCapabilityNames.PackagesContentWrite),
-                Required(BuiltInCapabilityNames.PackagesPublish),
-                Required(BuiltInCapabilityNames.PackagesUnlist),
-                Required(BuiltInCapabilityNames.PackagesRelist),
-                Required(BuiltInCapabilityNames.PackagesDelete),
-                Required(BuiltInCapabilityNames.EventsPublish)
-            ]),
-        Manifest(
             BuiltInExtensionIds.Vulnerabilities,
             operations: Operations(OperationFamily.Vulnerabilities),
             endpoints: VulnerabilityEndpoints.Descriptors,
@@ -710,7 +678,6 @@ internal static class BuiltInExtensionCatalog
             ]),
         Manifest(
             BuiltInExtensionIds.TestControl,
-            dependencies: [Dependency(BuiltInExtensionIds.Publication)],
             operations: Operations(OperationFamily.TestControl),
             endpoints: ControlEndpoints.Descriptors,
             capabilities:
@@ -723,7 +690,6 @@ internal static class BuiltInExtensionCatalog
             capabilities: [Required(BuiltInCapabilityNames.DurableStorage)]),
         Manifest(
             BuiltInExtensionIds.SupplyChain,
-            dependencies: [Dependency(BuiltInExtensionIds.Publication)],
             operations: Operations(OperationFamily.Moderation),
             endpoints: ModerationEndpoints.Descriptors,
             capabilities:

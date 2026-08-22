@@ -619,8 +619,11 @@ atomic checkpoint/restore authority remain in the kernel. The official `NuGet.Se
 extension owns `NuGet.Search.Query`, its body-free `GET`/`HEAD /query` route, and both
 advertised `SearchQueryService` resources. It uses only the bounded
 `packages.search.query` capability, which performs indexed reads and reapplies
-authoritative search visibility before returning metadata. Registration, publication,
-and symbol publication remain in their existing owners.
+authoritative search visibility before returning metadata. The official
+`NuGet.PackageManagement` extension owns push, symbol push, list, unlist, relist, and
+delete workflows through nonreplaceable action-scoped capabilities. Gateway
+authorization and all authoritative package mutations, policy, visibility, recovery,
+and audit remain kernel-owned.
 
 To select the local source explicitly for restore auditing, add it as an audit
 source:

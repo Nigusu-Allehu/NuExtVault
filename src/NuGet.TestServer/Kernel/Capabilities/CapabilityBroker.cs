@@ -612,6 +612,51 @@ internal interface IPackageSymbolReadCapability
         CancellationToken token);
 }
 
+internal interface IPackagePushCapability
+{
+    ValueTask<PackagePublicationDocument> PublishAsync(
+        StreamHandle content,
+        CancellationToken token);
+}
+
+internal interface IPackageSymbolsPushCapability
+{
+    ValueTask<PackageIdentity> StoreAsync(
+        StreamHandle content,
+        CancellationToken token);
+}
+
+internal interface IPackageManagementListCapability
+{
+    ValueTask<ImmutableArray<PackageSummaryDocument>> QueryAsync(
+        string? packageId,
+        int skip,
+        int take,
+        CancellationToken token);
+}
+
+internal interface IPackageUnlistCapability
+{
+    ValueTask<PackageMutationDocument> SetUnlistedAsync(
+        PackageIdentity package,
+        CancellationToken token);
+}
+
+internal interface IPackageRelistCapability
+{
+    ValueTask<PackageMutationDocument> SetListedAsync(
+        PackageIdentity package,
+        CancellationToken token);
+}
+
+internal interface IPackageDeleteCapability
+{
+    ValueTask<PackageMutationDocument> DeleteAsync(
+        PackageIdentity package,
+        string reason,
+        CancellationToken token);
+}
+
 internal interface IPackageMutationCapability
 {
     ValueTask AddSymbolAsync(byte[] content, CancellationToken token);
@@ -945,16 +990,6 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.PackagesIdentityRead,
                 BuiltInCapabilityNames.PackagesMetadataRead
             ],
-            [BuiltInExtensionIds.Publication] =
-            [
-                BuiltInCapabilityNames.PackagesMetadataRead,
-                BuiltInCapabilityNames.PackagesContentWrite,
-                BuiltInCapabilityNames.PackagesPublish,
-                BuiltInCapabilityNames.PackagesUnlist,
-                BuiltInCapabilityNames.PackagesRelist,
-                BuiltInCapabilityNames.PackagesDelete,
-                BuiltInCapabilityNames.EventsPublish
-            ],
             [BuiltInExtensionIds.Vulnerabilities] =
             [
                 BuiltInCapabilityNames.VulnerabilityStateRead
@@ -1133,6 +1168,22 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _services.PackageStore,
                     _services.PackageCandidates,
                     _services.Visibility),
+            var type when type == typeof(IPackagePushCapability) ||
+                          type == typeof(IPackageSymbolsPushCapability) ||
+                          type == typeof(IPackageManagementListCapability) ||
+                          type == typeof(IPackageUnlistCapability) ||
+                          type == typeof(IPackageRelistCapability) ||
+                          type == typeof(IPackageDeleteCapability) =>
+                new PackageManagementCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.PackageStore,
+                    _services.SupplyChain(),
+                    _services.Diagnostics,
+                    _services.PackageLimits),
             var type when type == typeof(IPackageMutationCapability) =>
                 new PackageMutationCapability(
                     _hostInstanceId,
@@ -1327,6 +1378,18 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.PackagesContentRead),
             [typeof(IPackageSymbolReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesSymbolsRead),
+            [typeof(IPackagePushCapability)] = Set(
+                BuiltInCapabilityNames.PackagesPublish),
+            [typeof(IPackageSymbolsPushCapability)] = Set(
+                BuiltInCapabilityNames.PackagesContentWrite),
+            [typeof(IPackageManagementListCapability)] = Set(
+                BuiltInCapabilityNames.PackagesMetadataRead),
+            [typeof(IPackageUnlistCapability)] = Set(
+                BuiltInCapabilityNames.PackagesUnlist),
+            [typeof(IPackageRelistCapability)] = Set(
+                BuiltInCapabilityNames.PackagesRelist),
+            [typeof(IPackageDeleteCapability)] = Set(
+                BuiltInCapabilityNames.PackagesDelete),
             [typeof(ISearchIndexQueryCapability)] = Set(
                 BuiltInCapabilityNames.PackagesSearchQuery),
             [typeof(IPackageMutationCapability)] = Set(

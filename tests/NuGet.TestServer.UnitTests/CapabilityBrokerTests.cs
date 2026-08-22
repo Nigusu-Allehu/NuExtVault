@@ -10,6 +10,7 @@ using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
 using NuGet.TestServer.Extensions.Registration;
+using NuGet.TestServer.Extensions.PackageManagement;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
 
@@ -84,16 +85,14 @@ public sealed class CapabilityBrokerTests
         await host.Services.GetRequiredService<OperationDispatcher>()
             .DispatchAsync<UnlistPackageRequest, UnlistPackageResponse>(
                 new OperationId("NuGet.PackageManagement.Unlist"),
-                new UnlistPackageRequest(
-                    new PackageIdentity("Audit.Example", "1.0.0"),
-                    "tests"),
+                new UnlistPackageRequest(new PackageIdentity("Audit.Example", "1.0.0")),
                 new OperationExecutionContext("audit-test"),
                 CancellationToken.None);
 
         var entry = Assert.Single(
             host.Services.GetRequiredService<CapabilityAuditLog>().Entries,
             item => item.CapabilityName == BuiltInCapabilityNames.PackagesUnlist);
-        Assert.Equal(BuiltInExtensionIds.Publication, entry.OwnerId);
+        Assert.Equal(PackageManagementModule.ExtensionId, entry.OwnerId);
         Assert.Equal("NuGet.PackageManagement.Unlist", entry.OperationId);
         Assert.Equal(CapabilityCallOutcome.Succeeded, entry.Outcome);
     }
@@ -632,7 +631,7 @@ public sealed class CapabilityBrokerTests
             typeof(NuGet.TestServer.Extensions.FlatContainer.FlatContainerOperations),
             typeof(RegistrationOperations),
             typeof(SearchOperations),
-            typeof(PublicationOperations),
+            typeof(PackageManagementOperations),
             typeof(ModerationOperations),
             typeof(VulnerabilityOperations),
             typeof(ControlOperations),
