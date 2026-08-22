@@ -101,17 +101,20 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
     private readonly string _namespace;
     private readonly bool _fail;
     private readonly int _payloadSize;
+    private readonly bool _mismatchedTypes;
 
     public RegistrationLabelsModule(
         string extensionId = ExtensionId,
         string @namespace = Namespace,
         bool fail = false,
-        int payloadSize = 0)
+        int payloadSize = 0,
+        bool mismatchedTypes = false)
     {
         _extensionId = extensionId;
         _namespace = @namespace;
         _fail = fail;
         _payloadSize = payloadSize;
+        _mismatchedTypes = mismatchedTypes;
         Contribution = new ExtensionModuleContribution(
             new ExtensionManifest(
                         1,
@@ -131,7 +134,9 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
                         RegistrationContributionPoints.Leaf,
                         RegistrationContributionPoints.LeafContractV1,
                         @namespace,
-                        Priority: 100)
+                        Priority: 100,
+                        typeof(RegistrationLeafContributionContext),
+                        typeof(RegistrationLeafExtensionDocument))
             ]
         };
     }
@@ -149,6 +154,18 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
         IDocumentContributorRegistry registry,
         IExtensionCapabilities capabilities)
     {
+        if (_mismatchedTypes)
+        {
+            registry.Register(
+                _extensionId,
+                RegistrationContributionPoints.Leaf,
+                RegistrationContributionPoints.LeafContractV1,
+                _namespace,
+                priority: 100,
+                new MismatchedRegistrationContributor());
+            return;
+        }
+
         registry.Register(
             _extensionId,
             RegistrationContributionPoints.Leaf,
@@ -157,6 +174,14 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
             priority: 100,
             new RegistrationLabelsContributor(_fail, _payloadSize));
     }
+}
+
+internal sealed class MismatchedRegistrationContributor : IDocumentContributor<string, string>
+{
+    public ValueTask<string> ContributeAsync(
+        string context,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult(context);
 }
 
 internal sealed class RegistrationLabelsContributor(bool fail, int payloadSize)

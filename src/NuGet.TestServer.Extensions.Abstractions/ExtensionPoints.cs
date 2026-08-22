@@ -68,7 +68,9 @@ internal sealed record DocumentContributorDescriptor(
     string Point,
     string Contract,
     string Namespace,
-    int Priority);
+    int Priority,
+    Type ContextType,
+    Type ContributionType);
 
 internal sealed record RegisteredDocumentContributor<TContext, TContribution>(
     string ExtensionId,

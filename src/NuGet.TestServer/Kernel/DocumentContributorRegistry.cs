@@ -27,7 +27,9 @@ internal sealed class DocumentContributorRegistry :
                 item.Descriptor.Point,
                 item.Descriptor.Contract,
                 item.Descriptor.Namespace,
-                item.Descriptor.Priority))
+                item.Descriptor.Priority,
+                item.Descriptor.ContextType,
+                item.Descriptor.ContributionType))
         ];
     }
 
@@ -49,7 +51,9 @@ internal sealed class DocumentContributorRegistry :
             point,
             contract,
             @namespace,
-            priority);
+            priority,
+            typeof(TContext),
+            typeof(TContribution));
         if (!_declared.Contains(registrationKey))
         {
             throw new ServerHostingConfigurationException(
@@ -154,7 +158,9 @@ internal sealed class DocumentContributorRegistry :
         string Point,
         string Contract,
         string Namespace,
-        int Priority);
+        int Priority,
+        Type ContextType,
+        Type ContributionType);
 
     private sealed class BoundedContributor<TContext, TContribution>(
         IDocumentContributor<TContext, TContribution> inner)

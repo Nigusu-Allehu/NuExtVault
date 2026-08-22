@@ -348,6 +348,31 @@ public sealed class ExtensionModuleConformanceTests
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Registration_contributor_type_mismatch_fails_startup()
+    {
+        var module = new RegistrationLabelsModule(mismatchedTypes: true);
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                module.Contribution.Selection
+            ]
+        };
+        var composition = ServerComposition.Create(
+            profile,
+            authentication: AuthenticationConfiguration.Anonymous,
+            modules: [module]);
+
+        var failure = await Assert.ThrowsAsync<ServerHostingConfigurationException>(
+            () => NuGetTestServerHost.StartCompositionAsync(
+                composition,
+                CancellationToken.None));
+
+        Assert.Contains("document-contributor-undeclared", failure.Message, StringComparison.Ordinal);
+    }
 }
 
 internal static class FlavorsHost
