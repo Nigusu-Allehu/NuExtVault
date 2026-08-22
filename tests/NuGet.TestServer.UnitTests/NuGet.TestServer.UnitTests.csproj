@@ -24,6 +24,9 @@
     <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
     <ProjectReference Include="..\..\src\NuGet.TestServer\NuGet.TestServer.csproj" />
     <ProjectReference Include="..\NuGet.TestServer.RouteFixture\NuGet.TestServer.RouteFixture.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.SdkFixture\NuGet.TestServer.SdkFixture.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.ExternalExtensionTestKit\NuGet.TestServer.ExternalExtensionTestKit.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.ForbiddenReferenceFixture\NuGet.TestServer.ForbiddenReferenceFixture.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,57 @@
+using NuGet.TestServer.Extensions.Sdk;
+using NuGet.TestServer.Extensions.Vulnerabilities;
+using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Packages;
+
+namespace NuGet.TestServer.ForbiddenReferenceFixture;
+
+/// <summary>
+/// Step 20 tests-first red phase fixture. A separately compiled extension
+/// module that is otherwise well formed but genuinely references the host
+/// assembly (<see cref="NuGetTestServerHost"/>), the kernel assembly
+/// (<see cref="TestPackageBuilder"/>), and the official extensions assembly
+/// (<see cref="EmbeddedVulnerabilitySnapshot"/>). No production code depends on
+/// this assembly; it exists only so unit tests can prove the
+/// external extension loader rejects packages whose entry assembly references
+/// any of those three forbidden assemblies.
+/// </summary>
+public sealed class ForbiddenReferenceExtension : IExtensionModule
+{
+    public const string ExtensionId = "contoso.forbidden-reference";
+
+    public ExtensionModuleContribution Contribution { get; } =
+        ExtensionModuleContribution.FromManifest(new ExtensionManifest(
+            new ManifestSchemaVersion(1),
+            new ExtensionIdentity(ExtensionId, "1.0.0", "Contoso"),
+            new SdkCompatibilityRange(ExtensionSdkVersions.OldestSupported, ExtensionSdkVersions.Current),
+            new ContractVersionSet(
+                ExtensionSdkVersions.ManifestV1,
+                ExtensionSdkVersions.OperationV1,
+                ExtensionSdkVersions.ContributionV1,
+                ExtensionSdkVersions.RouteV1,
+                ExtensionSdkVersions.CapabilityV1,
+                ExtensionSdkVersions.StructuralV1),
+            [],
+            [],
+            [],
+            []));
+
+    public void RegisterOperations(
+        IOperationOwnerRegistry operations,
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource contributions)
+    {
+    }
+
+    /// <summary>
+    /// Never called by any test. Its only purpose is to force genuine
+    /// AssemblyRef metadata to the host, kernel, and official assemblies so a
+    /// static or load-time reference scan has something real to detect.
+    /// </summary>
+    internal static object[] TouchForbiddenAssemblies() =>
+        [
+            typeof(NuGetTestServerHost),
+            typeof(TestPackageBuilder),
+            typeof(EmbeddedVulnerabilitySnapshot)
+        ];
+}

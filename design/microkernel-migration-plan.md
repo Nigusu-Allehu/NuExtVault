@@ -968,6 +968,10 @@ state, wire protocol, or durable data migration exists to undo.
 
 ### Step 20: Add trusted third-party in-process loading
 
+**Status:** Implemented. Discovery is explicit and disabled by default; every
+configured package is required and validated before activation from an immutable
+staged copy. Lifecycle changes require restart.
+
 **Goal:** Support the first external extension without sidecar complexity.
 
 **Changes:**
@@ -998,6 +1002,10 @@ changes.
 
 ### Step 21: Build sidecar transport and supervision
 
+**Current assessment:** Not applicable. No current consumer requires process
+isolation or another implementation language. Reassess only if Step 22 produces
+concrete evidence for either need.
+
 **Entry condition:** At least one concrete extension requires process isolation or a
 different implementation language, and transport-neutral parity is demonstrated.
 
@@ -1025,6 +1033,9 @@ crash or corrupt the host.
 **Rollback:** Disable sidecar execution while retaining in-process support.
 
 ### Step 22: Implement Package Staging as the reference external extension
+
+**Eligibility:** Eligible after Step 20 without Step 21 under the current in-process
+deployment requirements.
 
 **Dependency:** Step 20. Step 21 is required only when the selected deployment needs
 process isolation.
