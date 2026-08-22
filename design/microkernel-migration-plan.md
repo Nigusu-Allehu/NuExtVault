@@ -34,7 +34,14 @@ streaming buffer; capture is read-only apart from completing an already committe
 transaction; and a version 2 archive is validated in both directions so it cannot
 deliver participant state its manifest never declared. It
 is implemented and covered by integrated capability, composition, backup,
-boundedness, and hardening tests. The old Step 12 is paused.
+boundedness, and hardening tests and is merged through PR #75. Step 12B moves health,
+readiness, storage diagnostics, host diagnostics, backup, and restore ownership into
+the official `NuTest.Operations` module through the generic module seam. Kernel
+capabilities retain health aggregation, integrity, bounded stream-handle resolution,
+and the version 2 checkpoint/restore commit authority. Step 12B is implemented and
+covered by ownership, route, capability-fitness, compatibility, checkpoint,
+cancellation, audit, host isolation, and recovery tests but is not yet merged. The old
+Step 12 is paused.
 Steps 11A through 11D are blocking prerequisites added without renumbering the
 existing tracker issues.
 
@@ -647,6 +654,16 @@ checkpoint path is proven.
 
 ### Step 12B: Extract operations, health, backup, and restore
 
+**Status:** Implemented. The official `NuTest.Operations` module is the sole owner of
+the existing liveness, readiness, storage-health, diagnostics, backup, and restore
+operations. It contributes its manifest, generated health routes, required capabilities,
+and owners through the generic Step 11C module seam. Query, backup, and restore use
+separate action-scoped capabilities with transport-neutral documents; no extension
+contract contains an execution context, storage manifest, store, or filesystem path.
+The kernel retains health aggregation, authorization, limits, cancellation, integrity,
+package authority, participant validation, and the Step 12A version 2 atomic
+checkpoint/restore commit.
+
 **Goal:** Validate privileged operations and coordinated state participation.
 
 **Changes:**
@@ -655,6 +672,22 @@ checkpoint path is proven.
 - Keep health aggregation and atomic checkpoint authority in the kernel.
 - Use the Step 12A checkpoint contract.
 - Mark projections rebuildable rather than authoritative backup state.
+
+**Implemented as:**
+
+- The four existing generated routes remain `GET /health/live`,
+  `GET /__test/health`, `GET /health/ready`, and control-authorized
+  `GET /health/storage`, with their existing HEAD, body-free limit, status, and payload
+  behavior.
+- The non-routed diagnostics, backup, and restore operations remain on the same typed
+  dispatcher path. Backup and restore expose version 2 participant and checkpoint
+  documents while the kernel resolves bounded request handles and performs the
+  authoritative operation.
+- Liveness remains a bounded, quota-independent snapshot. Readiness, storage health,
+  diagnostics, backup, and restore retain capability gating, cancellation, overload
+  handling, and operation-attributed audit.
+- Embedded, standard, and production profiles select the same module contribution and
+  retain their existing explicit deny-by-default grants.
 
 **Tests first:**
 

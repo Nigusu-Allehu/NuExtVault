@@ -586,7 +586,7 @@ public sealed class CapabilityBrokerTests
     [Fact]
     public async Task Degraded_extension_health_is_ready_but_visible_in_readiness()
     {
-        var capability = new ServerOperationsCapability(
+        var capability = new OperationsQueryCapability(
             "host",
             BuiltInExtensionIds.Operations,
             ImmutableHashSet.Create(
@@ -601,7 +601,6 @@ public sealed class CapabilityBrokerTests
                 "http://127.0.0.1:0",
                 Authentication.AuthenticationConfiguration.Anonymous,
                 trustedProxies: null),
-            storageDirectory: null,
             new StubExtensionHealthSource(
                 new ExtensionHealthSnapshot(
                     Ready: true,
@@ -637,7 +636,7 @@ public sealed class CapabilityBrokerTests
             typeof(ModerationOperations),
             typeof(VulnerabilityOperations),
             typeof(ControlOperations),
-            typeof(ServerOperationsOperations)
+            typeof(NuGet.TestServer.Extensions.Operations.OperationsOperations)
         ];
 
         foreach (var owner in owners)

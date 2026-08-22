@@ -781,22 +781,6 @@ internal interface IKernelInstrumentationFixtureCapability
     ValueTask ClearRequestsAsync(CancellationToken token);
 }
 
-internal sealed record CapabilityStorageReport(
-    bool Ready,
-    string Status,
-    string Dependency,
-    string? Reason,
-    int PackageCount,
-    long StorageBytes,
-    int VulnerabilitySnapshotCount,
-    int VulnerabilitySnapshotRetentionLimit);
-
-internal sealed record CapabilityDiagnosticsSnapshot(
-    long RequestCount,
-    long FailedRequestCount,
-    long PublishedPackageCount,
-    long StorageFailureCount);
-
 internal sealed record ExtensionHealthSnapshot(bool Ready, string Status, string? Reason);
 
 internal interface IExtensionHealthSource
@@ -804,24 +788,30 @@ internal interface IExtensionHealthSource
     ExtensionHealthSnapshot GetHealth();
 }
 
-internal interface IServerOperationsCapability
+internal interface IOperationsQueryCapability
 {
-    string Mode { get; }
+    ValueTask<OperationsLivenessDocument> GetLivenessAsync(CancellationToken token);
 
-    ValueTask<CapabilityStorageReport> GetReadinessAsync(CancellationToken token);
+    ValueTask<OperationsReadinessDocument> GetReadinessAsync(CancellationToken token);
 
-    ValueTask<CapabilityStorageReport> GetStorageReportAsync(CancellationToken token);
+    ValueTask<OperationsStorageHealthDocument> GetStorageHealthAsync(CancellationToken token);
 
-    ValueTask<CapabilityDiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken token);
+    ValueTask<OperationsDiagnosticsDocument> GetDiagnosticsAsync(CancellationToken token);
+}
 
-    ValueTask<StorageBackupManifest?> CreateBackupAsync(
-        OperationExecutionContext context,
+internal interface IBackupCheckpointCapability
+{
+    ValueTask<BackupManifestDocument?> CreateAsync(
         StreamHandle destination,
+        string requestedBy,
         CancellationToken token);
+}
 
-    ValueTask<StorageBackupManifest?> RestoreAsync(
-        OperationExecutionContext context,
+internal interface IRestoreCheckpointCapability
+{
+    ValueTask<BackupManifestDocument?> RestoreAsync(
         StreamHandle source,
+        string requestedBy,
         CancellationToken token);
 }
 
@@ -1001,12 +991,6 @@ internal static class BuiltInOwnerCapabilityRequirements
                 BuiltInCapabilityNames.ControlPackagesManage,
                 BuiltInCapabilityNames.ControlInstrumentationManage
             ],
-            [BuiltInExtensionIds.Operations] =
-            [
-                BuiltInCapabilityNames.OperationsQuery,
-                BuiltInCapabilityNames.BackupInvoke,
-                BuiltInCapabilityNames.RestoreInvoke
-            ]
         };
 }
 
@@ -1231,8 +1215,8 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.Instrumentation),
-            var type when type == typeof(IServerOperationsCapability) =>
-                new ServerOperationsCapability(
+            var type when type == typeof(IOperationsQueryCapability) =>
+                new OperationsQueryCapability(
                     _hostInstanceId,
                     _ownerId,
                     _grants,
@@ -1241,8 +1225,23 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _services.Storage,
                     _services.Diagnostics,
                     _services.Hosting,
-                    _services.StorageDirectory,
                     _services.ExtensionHealth),
+            var type when type == typeof(IBackupCheckpointCapability) =>
+                new BackupCheckpointCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.StorageDirectory),
+            var type when type == typeof(IRestoreCheckpointCapability) =>
+                new RestoreCheckpointCapability(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.StorageDirectory),
             var type when type == typeof(IVulnerabilityReadCapability) =>
                 new VulnerabilityReadCapability(
                     _hostInstanceId,
@@ -1357,9 +1356,11 @@ internal static class CapabilityContracts
                 BuiltInCapabilityNames.ControlInstrumentationManage),
             [typeof(IKernelInstrumentationFixtureCapability)] = Set(
                 BuiltInCapabilityNames.ControlInstrumentationManage),
-            [typeof(IServerOperationsCapability)] = Set(
-                BuiltInCapabilityNames.OperationsQuery,
-                BuiltInCapabilityNames.BackupInvoke,
+            [typeof(IOperationsQueryCapability)] = Set(
+                BuiltInCapabilityNames.OperationsQuery),
+            [typeof(IBackupCheckpointCapability)] = Set(
+                BuiltInCapabilityNames.BackupInvoke),
+            [typeof(IRestoreCheckpointCapability)] = Set(
                 BuiltInCapabilityNames.RestoreInvoke),
             [typeof(IVulnerabilityReadCapability)] = Set(
                 BuiltInCapabilityNames.VulnerabilityStateRead),
@@ -2302,7 +2303,7 @@ internal static class KernelInstrumentationDocuments
             record.AuthenticatedUser);
 }
 
-internal sealed class ServerOperationsCapability(
+internal sealed class OperationsQueryCapability(
     string hostInstanceId,
     string ownerId,
     ImmutableHashSet<string> grants,
@@ -2311,19 +2312,31 @@ internal sealed class ServerOperationsCapability(
     StorageHealth storage,
     ServerDiagnostics diagnostics,
     ServerHostingOptions hosting,
-    string? storageDirectory,
     IExtensionHealthSource extensionHealth)
-    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IServerOperationsCapability
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits), IOperationsQueryCapability
 {
-    public string Mode => hosting.Mode.ToString().ToLowerInvariant();
+    public ValueTask<OperationsLivenessDocument> GetLivenessAsync(CancellationToken token)
+    {
+        // Liveness must not depend on a quota gate or audit retention. The granted handle
+        // proves access, while this bounded host-mode snapshot remains always available.
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(new OperationsLivenessDocument(
+            "healthy",
+            hosting.Mode.ToString().ToLowerInvariant()));
+    }
 
-    public ValueTask<CapabilityStorageReport> GetReadinessAsync(CancellationToken token) =>
+    public ValueTask<OperationsReadinessDocument> GetReadinessAsync(CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OperationsQuery)
             .InvokeAsync(
                 "readiness",
                 _ =>
                 {
-                    var storageReport = Map(storage.GetReadiness());
+                    var storageHealth = storage.GetReadiness();
+                    var storageReport = new OperationsReadinessDocument(
+                        storageHealth.Ready,
+                        storageHealth.Status,
+                        storageHealth.Dependency,
+                        storageHealth.Reason);
                     if (!storageReport.Ready)
                     {
                         return ValueTask.FromResult(storageReport);
@@ -2343,24 +2356,51 @@ internal sealed class ServerOperationsCapability(
                 },
                 token);
 
-    public ValueTask<CapabilityStorageReport> GetStorageReportAsync(CancellationToken token) =>
+    public ValueTask<OperationsStorageHealthDocument> GetStorageHealthAsync(
+        CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OperationsQuery)
-            .InvokeAsync("storage-health", _ => ValueTask.FromResult(Map(storage.GetReport())), token);
+            .InvokeAsync(
+                "storage-health",
+                _ =>
+                {
+                    var report = storage.GetReport();
+                    return ValueTask.FromResult(new OperationsStorageHealthDocument(
+                        report.Ready,
+                        report.Status,
+                        report.Dependency,
+                        report.Reason,
+                        report.PackageCount,
+                        report.StorageBytes,
+                        report.VulnerabilitySnapshotCount,
+                        report.VulnerabilitySnapshotRetentionLimit));
+                },
+                token);
 
-    public ValueTask<CapabilityDiagnosticsSnapshot> GetDiagnosticsAsync(CancellationToken token) =>
+    public ValueTask<OperationsDiagnosticsDocument> GetDiagnosticsAsync(CancellationToken token) =>
         Gate(BuiltInCapabilityNames.OperationsQuery)
             .InvokeAsync(
                 "diagnostics",
-                _ => ValueTask.FromResult(new CapabilityDiagnosticsSnapshot(
+                _ => ValueTask.FromResult(new OperationsDiagnosticsDocument(
                     diagnostics.RequestCount,
                     diagnostics.FailedRequestCount,
                     diagnostics.PublishedPackageCount,
                     diagnostics.StorageFailureCount)),
                 token);
+}
 
-    public ValueTask<StorageBackupManifest?> CreateBackupAsync(
-        OperationExecutionContext context,
+internal sealed class BackupCheckpointCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    string? storageDirectory)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IBackupCheckpointCapability
+{
+    public ValueTask<BackupManifestDocument?> CreateAsync(
         StreamHandle destination,
+        string requestedBy,
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.BackupInvoke)
             .InvokeAsync(
@@ -2372,16 +2412,28 @@ internal sealed class ServerOperationsCapability(
                         return null;
                     }
 
-                    var file = context.Content.Resolve(destination).FilePath
+                    var file = OperationExecutionScope.Required.Content.Resolve(destination).FilePath
                         ?? throw new InvalidOperationException(
                             "Backup requires a kernel-issued file handle.");
-                    return await StorageBackup.CreateAsync(storageDirectory, file, ct);
+                    var manifest = await StorageBackup.CreateAsync(storageDirectory, file, ct);
+                    return OperationsCheckpointDocuments.Map(manifest);
                 },
                 token);
+}
 
-    public ValueTask<StorageBackupManifest?> RestoreAsync(
-        OperationExecutionContext context,
+internal sealed class RestoreCheckpointCapability(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    string? storageDirectory)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IRestoreCheckpointCapability
+{
+    public ValueTask<BackupManifestDocument?> RestoreAsync(
         StreamHandle source,
+        string requestedBy,
         CancellationToken token) =>
         Gate(BuiltInCapabilityNames.RestoreInvoke)
             .InvokeAsync(
@@ -2393,23 +2445,39 @@ internal sealed class ServerOperationsCapability(
                         return null;
                     }
 
-                    var file = context.Content.Resolve(source).FilePath
+                    var file = OperationExecutionScope.Required.Content.Resolve(source).FilePath
                         ?? throw new InvalidOperationException(
                             "Restore requires a kernel-issued file handle.");
-                    return await StorageBackup.RestoreAsync(file, storageDirectory, ct);
+                    var manifest = await StorageBackup.RestoreAsync(file, storageDirectory, ct);
+                    return OperationsCheckpointDocuments.Map(manifest);
                 },
                 token);
+}
 
-    private static CapabilityStorageReport Map(StorageHealthReport report) =>
+internal static class OperationsCheckpointDocuments
+{
+    public static BackupManifestDocument Map(StorageBackupManifest manifest) =>
         new(
-            report.Ready,
-            report.Status,
-            report.Dependency,
-            report.Reason,
-            report.PackageCount,
-            report.StorageBytes,
-            report.VulnerabilitySnapshotCount,
-            report.VulnerabilitySnapshotRetentionLimit);
+            manifest.Version,
+            manifest.CreatedAt,
+            [
+                .. manifest.Files.Select(file => new BackupEntryDocument(
+                    file.Path,
+                    file.Length,
+                    file.Sha256))
+            ],
+            [
+                .. (manifest.Participants ?? []).Select(participant =>
+                    new BackupParticipantDocument(
+                        participant.ExtensionId,
+                        participant.ExtensionVersion,
+                        participant.SchemaName,
+                        participant.SchemaVersion,
+                        participant.Required,
+                        participant.RecordCount,
+                        participant.Sha256))
+            ],
+            manifest.CheckpointId);
 }
 
 internal sealed class VulnerabilityReadCapability(

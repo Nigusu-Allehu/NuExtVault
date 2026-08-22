@@ -117,11 +117,6 @@ internal static class ServerProfiles
     private static readonly ExtensionSelection DurableStorage = Extension(
         BuiltInExtensionIds.DurableStorage,
         Required(BuiltInCapabilityNames.DurableStorage));
-    private static readonly ExtensionSelection Operations = Extension(
-        BuiltInExtensionIds.Operations,
-        Required(BuiltInCapabilityNames.OperationsQuery),
-        Required(BuiltInCapabilityNames.BackupInvoke),
-        Required(BuiltInCapabilityNames.RestoreInvoke));
     private static readonly ExtensionSelection SupplyChain = Extension(
         BuiltInExtensionIds.SupplyChain,
         Required(BuiltInCapabilityNames.ModerationRead),
@@ -157,7 +152,6 @@ internal static class ServerProfiles
             Publication,
             EmbeddedVulnerabilities,
             TestControl,
-            Operations,
             SupplyChain,
             SupplyChainPolicy,
             .. OfficialExtensionModules.Selections
@@ -196,7 +190,6 @@ internal static class ServerProfiles
             DurableVulnerabilities,
             TestControl,
             DurableStorage,
-            Operations,
             SupplyChain,
             SupplyChainPolicy,
             .. OfficialExtensionModules.Selections
@@ -239,7 +232,6 @@ internal static class ServerProfiles
             Publication,
             DurableVulnerabilities,
             DurableStorage,
-            Operations,
             SupplyChain,
             SupplyChainPolicy,
             .. OfficialExtensionModules.Selections

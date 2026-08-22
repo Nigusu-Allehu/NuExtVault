@@ -124,6 +124,30 @@ internal sealed record GetDiagnosticsResponse(
     long PublishedPackageCount,
     long StorageFailureCount);
 
+internal sealed record OperationsLivenessDocument(string Status, string Mode);
+
+internal sealed record OperationsReadinessDocument(
+    bool Ready,
+    string Status,
+    string Dependency,
+    string? Reason);
+
+internal sealed record OperationsStorageHealthDocument(
+    bool Ready,
+    string Status,
+    string Dependency,
+    string? Reason,
+    int PackageCount,
+    long StorageBytes,
+    int VulnerabilitySnapshotCount,
+    int VulnerabilitySnapshotRetentionLimit);
+
+internal sealed record OperationsDiagnosticsDocument(
+    long RequestCount,
+    long FailedRequestCount,
+    long PublishedPackageCount,
+    long StorageFailureCount);
+
 internal sealed record CreateBackupRequest(
     StreamHandle Destination,
     string RequestedBy);
@@ -139,9 +163,20 @@ internal sealed record RestoreBackupResponse(BackupManifestDocument Manifest);
 internal sealed record BackupManifestDocument(
     int Version,
     DateTimeOffset CreatedAt,
-    ImmutableArray<BackupEntryDocument> Entries);
+    ImmutableArray<BackupEntryDocument> Entries,
+    ImmutableArray<BackupParticipantDocument> Participants,
+    long? CheckpointId);
 
 internal sealed record BackupEntryDocument(
     string LogicalName,
     long Length,
+    string Sha256);
+
+internal sealed record BackupParticipantDocument(
+    string ExtensionId,
+    string ExtensionVersion,
+    string SchemaName,
+    int SchemaVersion,
+    bool Required,
+    int RecordCount,
     string Sha256);
