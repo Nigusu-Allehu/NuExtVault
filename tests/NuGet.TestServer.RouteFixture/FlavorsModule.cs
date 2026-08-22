@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using NuGet.TestServer.Extensions.Abstractions;
 
 namespace NuGet.TestServer.RouteFixture;
@@ -80,7 +81,8 @@ internal sealed class FlavorsModule : IExtensionModule
 
     public void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities)
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(capabilities);
@@ -88,6 +90,126 @@ internal sealed class FlavorsModule : IExtensionModule
             ExtensionId,
             new FlavorIndexOwner(capabilities.GetRequired<IHostClockCapability>(
                 KernelCapabilityNames.HostClockRead)));
+    }
+}
+
+internal sealed class RegistrationLabelsModule : IExtensionModule
+{
+    public const string ExtensionId = "contoso.registration-labels";
+    public const string Namespace = "Contoso.PackageLabels";
+    private readonly string _extensionId;
+    private readonly string _namespace;
+    private readonly bool _fail;
+    private readonly int _payloadSize;
+    private readonly bool _mismatchedTypes;
+    private readonly bool _declareMismatchedTypes;
+
+    public RegistrationLabelsModule(
+        string extensionId = ExtensionId,
+        string @namespace = Namespace,
+        bool fail = false,
+        int payloadSize = 0,
+        bool mismatchedTypes = false,
+        bool declareMismatchedTypes = false)
+    {
+        _extensionId = extensionId;
+        _namespace = @namespace;
+        _fail = fail;
+        _payloadSize = payloadSize;
+        _mismatchedTypes = mismatchedTypes;
+        _declareMismatchedTypes = declareMismatchedTypes;
+        Contribution = new ExtensionModuleContribution(
+            new ExtensionManifest(
+                        1,
+                        extensionId,
+                        new ExtensionVersion(1, 0, 0),
+                        ExtensionVersionRange.Major(1),
+                        [new ExtensionDependency("builtin.registration", ExtensionVersionRange.Major(1))],
+                        [],
+                        [],
+                        [],
+                        []),
+            [])
+        {
+            DocumentContributors =
+            [
+                        new DocumentContributorDescriptor(
+                        RegistrationContributionPoints.Leaf,
+                        RegistrationContributionPoints.LeafContractV1,
+                        @namespace,
+                        Priority: 100,
+                        declareMismatchedTypes
+                            ? typeof(string)
+                            : typeof(RegistrationLeafContributionContext),
+                        declareMismatchedTypes
+                            ? typeof(string)
+                            : typeof(RegistrationLeafExtensionDocument))
+            ]
+        };
+    }
+
+    public ExtensionModuleContribution Contribution { get; }
+
+    public void RegisterOperations(
+        IOperationOwnerRegistry registry,
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
+    {
+    }
+
+    public void RegisterDocumentContributors(
+        IDocumentContributorRegistry registry,
+        IExtensionCapabilities capabilities)
+    {
+        if (_mismatchedTypes || _declareMismatchedTypes)
+        {
+            registry.Register(
+                _extensionId,
+                RegistrationContributionPoints.Leaf,
+                RegistrationContributionPoints.LeafContractV1,
+                _namespace,
+                priority: 100,
+                new MismatchedRegistrationContributor());
+            return;
+        }
+
+        registry.Register(
+            _extensionId,
+            RegistrationContributionPoints.Leaf,
+            RegistrationContributionPoints.LeafContractV1,
+            _namespace,
+            priority: 100,
+            new RegistrationLabelsContributor(_fail, _payloadSize));
+    }
+}
+
+internal sealed class MismatchedRegistrationContributor : IDocumentContributor<string, string>
+{
+    public ValueTask<string> ContributeAsync(
+        string context,
+        CancellationToken cancellationToken) =>
+        ValueTask.FromResult(context);
+}
+
+internal sealed class RegistrationLabelsContributor(bool fail, int payloadSize)
+: IDocumentContributor<RegistrationLeafContributionContext, RegistrationLeafExtensionDocument>
+{
+    public ValueTask<RegistrationLeafExtensionDocument> ContributeAsync(
+        RegistrationLeafContributionContext context,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (fail)
+        {
+            throw new InvalidOperationException("Contributor failure.");
+        }
+
+        return ValueTask.FromResult(new RegistrationLeafExtensionDocument(
+            JsonSerializer.SerializeToElement(new Dictionary<string, object?>
+            {
+                ["labels"] = new[] { "approved", context.Package.Id.ToLowerInvariant() },
+                ["payload"] = new string('x', payloadSize)
+            })));
     }
 }
 

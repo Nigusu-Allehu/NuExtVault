@@ -125,6 +125,8 @@ internal sealed record ExtensionModuleContribution(
 {
     public ImmutableArray<PolicyParticipantDescriptor> PolicyParticipants { get; init; } = [];
 
+    public ImmutableArray<DocumentContributorDescriptor> DocumentContributors { get; init; } = [];
+
     /// <summary>The profile selection a host uses to activate this module.</summary>
     public ExtensionSelection Selection => new(Manifest.Id, Manifest.RequestedCapabilities);
 }
@@ -141,7 +143,14 @@ internal interface IExtensionModule
 
     void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities);
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions);
+
+    void RegisterDocumentContributors(
+        IDocumentContributorRegistry registry,
+        IExtensionCapabilities capabilities)
+    {
+    }
 
     void RegisterPolicyParticipants(
         IPolicyParticipantRegistry registry,

@@ -4,7 +4,6 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
-using NuGet.TestServer.Kernel.Owners.Registration;
 using NuGet.TestServer.Packages;
 
 namespace NuGet.TestServer.Kernel;
@@ -34,18 +33,6 @@ internal static class BuiltInOperationOwners
         var selected = graph.Extensions
             .Select(extension => extension.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        if (selected.Contains(BuiltInExtensionIds.Protocol))
-        {
-            var capabilities = broker.ForOwner(BuiltInExtensionIds.Protocol);
-            var packages = capabilities.GetRequired<IPackageReadCapability>(
-                BuiltInCapabilityNames.PackagesMetadataRead);
-            new RegistrationOperations(
-                new RegistrationPackageQuery(packages),
-                new RegistrationDocumentBuilder(
-                    capabilities.GetRequired<IVulnerabilityReadCapability>(
-                        BuiltInCapabilityNames.VulnerabilityStateRead))).Register(builder);
-        }
 
         if (selected.Contains(BuiltInExtensionIds.ServiceIndex))
         {
@@ -80,15 +67,19 @@ internal static class BuiltInOperationOwners
         // Official and separately compiled modules are composed through the same generic
         // seam: the host never names a module, its operations, its routes, or its
         // capabilities.
-        foreach (var module in OfficialExtensionModules.All
-                     .Concat(modules)
+        var allModules = OfficialExtensionModules.All.Concat(modules).ToArray();
+        var documentContributors = DocumentContributorRegistry.Create(graph, allModules, broker);
+        foreach (var module in allModules
                      .Where(module => selected.Contains(module.Contribution.Manifest.Id))
                      .OrderBy(
                          module => module.Contribution.Manifest.Id,
                          StringComparer.Ordinal))
         {
             var moduleId = module.Contribution.Manifest.Id;
-            module.RegisterOperations(builder, broker.ForOwner(moduleId));
+            module.RegisterOperations(
+                builder,
+                broker.ForOwner(moduleId),
+                documentContributors);
         }
 
         return builder.Build(graph, ExtensionModules.CreateContractIndex(modules));

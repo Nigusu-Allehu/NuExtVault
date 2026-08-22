@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Kernel;
 
-namespace NuGet.TestServer.Hosting.Endpoints;
+namespace NuGet.TestServer.Extensions.Registration;
 
 internal static class RegistrationEndpoints
 {

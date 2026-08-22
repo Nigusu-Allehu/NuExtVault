@@ -138,6 +138,7 @@ public sealed class ExtensionModuleFitnessTests
             "NuGet.TestServer.Extensions.FlatContainer",
             "NuGet.TestServer.Extensions.Operations",
             "NuGet.TestServer.Extensions.Search",
+            "NuGet.TestServer.Extensions.Registration",
             "NuGet.TestServer.Extensions.Vulnerabilities",
             "NuGet.TestServer.Kernel",
             "NuGet.TestServer.Kernel.Capabilities",

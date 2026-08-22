@@ -63,6 +63,20 @@ internal static class ExtensionModules
             }
         }
 
+        var duplicateNamespace = modules
+            .SelectMany(module => module.Contribution.DocumentContributors)
+            .GroupBy(
+                contributor => (contributor.Point, contributor.Namespace),
+                EqualityComparer<(string Point, string Namespace)>.Default)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateNamespace is not null)
+        {
+            throw new ServerHostingConfigurationException(
+                $"document-contributor-namespace-conflict: Namespace " +
+                $"'{duplicateNamespace.Key.Namespace}' is declared more than once for " +
+                $"contribution point '{duplicateNamespace.Key.Point}'.");
+        }
+
         return modules;
     }
 }

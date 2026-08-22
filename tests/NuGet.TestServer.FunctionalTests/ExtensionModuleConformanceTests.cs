@@ -4,6 +4,7 @@ using System.Text.Json;
 using NuGet.TestServer.Authentication;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
+using NuGet.TestServer.Packages;
 using NuGet.TestServer.RouteFixture;
 
 namespace NuGet.TestServer.FunctionalTests;
@@ -246,6 +247,160 @@ public sealed class ExtensionModuleConformanceTests
             route => route.Path == "/flavors/index.json" &&
                      route.ExtensionId == FlavorsModule.ExtensionId);
     }
+
+    [Fact]
+    public async Task Separately_compiled_module_adds_namespaced_registration_metadata()
+    {
+        var module = new RegistrationLabelsModule();
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                module.Contribution.Selection
+            ]
+        };
+        await using var server = await NuGetTestServerHost.StartCompositionAsync(
+            ServerComposition.Create(
+                profile,
+                authentication: AuthenticationConfiguration.Anonymous,
+                modules: [module]),
+            CancellationToken.None);
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Contributed.Package", "1.0.0").Build());
+
+        using var response = await server.HttpClient.GetAsync(
+            "/registration/contributed.package/1.0.0.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
+        var extensions = document.RootElement
+            .GetProperty("catalogEntry")
+            .GetProperty("extensions");
+        var contribution = extensions.GetProperty(RegistrationLabelsModule.Namespace);
+
+        Assert.Equal(
+            ["approved", "contributed.package"],
+            contribution.GetProperty("labels")
+                .EnumerateArray()
+                .Select(value => value.GetString()!)
+                .ToArray());
+        Assert.Equal(
+            [RegistrationLabelsModule.Namespace],
+            extensions.EnumerateObject().Select(property => property.Name).ToArray());
+    }
+
+    [Fact]
+    public void Duplicate_registration_contributor_namespaces_fail_composition()
+    {
+        var first = new RegistrationLabelsModule();
+        var second = new RegistrationLabelsModule(
+            "contoso.duplicate-registration-labels",
+            RegistrationLabelsModule.Namespace);
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                first.Contribution.Selection,
+                second.Contribution.Selection
+            ]
+        };
+
+        var failure = Assert.Throws<ServerHostingConfigurationException>(() =>
+            ServerComposition.Create(
+                profile,
+                authentication: AuthenticationConfiguration.Anonymous,
+                modules: [first, second]));
+
+        Assert.Contains(
+            "document-contributor-namespace-conflict",
+            failure.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 20_000)]
+    public async Task Registration_contributor_failure_or_oversize_fails_the_response(
+        bool fail,
+        int payloadSize)
+    {
+        var module = new RegistrationLabelsModule(fail: fail, payloadSize: payloadSize);
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                module.Contribution.Selection
+            ]
+        };
+        await using var server = await NuGetTestServerHost.StartCompositionAsync(
+            ServerComposition.Create(
+                profile,
+                authentication: AuthenticationConfiguration.Anonymous,
+                modules: [module]),
+            CancellationToken.None);
+        await server.Packages.AddAsync(
+            TestPackageBuilder.Create("Rejected.Contribution", "1.0.0").Build());
+
+        using var response = await server.HttpClient.GetAsync(
+            "/registration/rejected.contribution/1.0.0.json");
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Registration_contributor_type_mismatch_fails_startup()
+    {
+        var module = new RegistrationLabelsModule(mismatchedTypes: true);
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                module.Contribution.Selection
+            ]
+        };
+        var composition = ServerComposition.Create(
+            profile,
+            authentication: AuthenticationConfiguration.Anonymous,
+            modules: [module]);
+
+        var failure = await Assert.ThrowsAsync<ServerHostingConfigurationException>(
+            () => NuGetTestServerHost.StartCompositionAsync(
+                composition,
+                CancellationToken.None));
+
+        Assert.Contains("document-contributor-undeclared", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Registration_contributor_contract_with_wrong_types_fails_startup()
+    {
+        var module = new RegistrationLabelsModule(declareMismatchedTypes: true);
+        var profile = ServerProfiles.Embedded with
+        {
+            Extensions =
+            [
+                .. ServerProfiles.Embedded.Extensions,
+                module.Contribution.Selection
+            ]
+        };
+        var composition = ServerComposition.Create(
+            profile,
+            authentication: AuthenticationConfiguration.Anonymous,
+            modules: [module]);
+
+        var failure = await Assert.ThrowsAsync<ServerHostingConfigurationException>(
+            () => NuGetTestServerHost.StartCompositionAsync(
+                composition,
+                CancellationToken.None));
+
+        Assert.Contains(
+            "document-contributor-contract-type-mismatch",
+            failure.Message,
+            StringComparison.Ordinal);
+    }
 }
 
 internal static class FlavorsHost
@@ -338,7 +493,8 @@ internal sealed class ConflictingModule : IExtensionModule
 
     public void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities)
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
     {
     }
 }

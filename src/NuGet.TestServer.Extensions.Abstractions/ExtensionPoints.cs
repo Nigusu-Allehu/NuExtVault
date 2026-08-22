@@ -57,6 +57,44 @@ internal interface IDocumentContributor<TContribution>
         CancellationToken cancellationToken);
 }
 
+internal interface IDocumentContributor<in TContext, TContribution>
+{
+    ValueTask<TContribution> ContributeAsync(
+        TContext context,
+        CancellationToken cancellationToken);
+}
+
+internal sealed record DocumentContributorDescriptor(
+    string Point,
+    string Contract,
+    string Namespace,
+    int Priority,
+    Type ContextType,
+    Type ContributionType);
+
+internal sealed record RegisteredDocumentContributor<TContext, TContribution>(
+    string ExtensionId,
+    string Namespace,
+    int Priority,
+    IDocumentContributor<TContext, TContribution> Contributor);
+
+internal interface IDocumentContributorRegistry
+{
+    void Register<TContext, TContribution>(
+        string extensionId,
+        string point,
+        string contract,
+        string @namespace,
+        int priority,
+        IDocumentContributor<TContext, TContribution> contributor);
+}
+
+internal interface IDocumentContributionSource
+{
+    ImmutableArray<RegisteredDocumentContributor<TContext, TContribution>>
+        Get<TContext, TContribution>(string point, string contract);
+}
+
 internal sealed record DocumentContributionContext(
     OperationId OperationId,
     string Slot,

@@ -41,7 +41,8 @@ internal sealed class SupplyChainExtension : IExtensionModule
 
     public void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities)
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
     {
     }
 

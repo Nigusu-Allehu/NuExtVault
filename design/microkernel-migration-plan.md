@@ -16,7 +16,8 @@ is merged through PR #69. Step 11D establishes the measured scalability and
 backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
 PR #73, Lane B Step 13 is merged through PR #74, and Lane A Step 12A is merged through
 PR #75, and Lane A Step 12B is merged through PR #78. The Lane B Step 13A prerequisite
-mechanically separates registration and search
+mechanically separates registration and search and is merged through PR #77. Lane B
+Step 15 is merged through PR #79. Step 14 extracts registration in this change.
 contracts, endpoint descriptors, query adapters, document builders/renderers, owners,
 and focused tests while retaining `builtin.protocol` ownership. The two feature
 surfaces depend only on neutral package-metadata primitives and no longer reference
@@ -750,6 +751,8 @@ resource. Registration and search ownership is unchanged.
 **Rollback:** Revert route ownership to the legacy adapter.
 
 ### Step 14: Extract registration
+
+**Status:** Implemented by the Step 14 change.
 
 **Goal:** Move registration document creation and paging.
 

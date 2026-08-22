@@ -15,6 +15,7 @@ namespace NuGet.TestServer.UnitTests;
 public sealed class SearchExtractionTests
 {
     internal const string SearchExtensionId = "builtin.search";
+    private const string RegistrationExtensionId = "builtin.registration";
     private const string ProtocolExtensionId = "builtin.protocol";
     private const string SearchCapability = "packages.search.query";
 
@@ -50,7 +51,7 @@ public sealed class SearchExtractionTests
                 OperationIds.RegistrationGetLeaf
             },
             operationId => Assert.Equal(
-                ProtocolExtensionId,
+                RegistrationExtensionId,
                 host.Registry.Find(operationId)!.ExtensionId));
     }
 

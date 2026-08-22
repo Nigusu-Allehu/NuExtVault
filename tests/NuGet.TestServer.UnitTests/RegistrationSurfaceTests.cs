@@ -1,8 +1,7 @@
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Registration;
 using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Hosting.Endpoints;
 using NuGet.TestServer.Kernel;
-using NuGet.TestServer.Kernel.Owners.Registration;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -34,12 +33,16 @@ public sealed class RegistrationSurfaceTests
     }
 
     [Fact]
-    public void Registration_owner_depends_only_on_its_query_and_document_builder()
+    public void Registration_owner_depends_only_on_narrow_capabilities_and_contributions()
     {
         var constructor = Assert.Single(typeof(RegistrationOperations).GetConstructors());
 
         Assert.Equal(
-            [typeof(IRegistrationPackageQuery), typeof(RegistrationDocumentBuilder)],
+            [
+                typeof(IRegistrationMetadataReadCapability),
+                typeof(IRegistrationVulnerabilityReadCapability),
+                typeof(IDocumentContributionSource)
+            ],
             constructor.GetParameters().Select(parameter => parameter.ParameterType));
     }
 }

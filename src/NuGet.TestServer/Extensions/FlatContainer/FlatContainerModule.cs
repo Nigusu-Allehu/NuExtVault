@@ -56,7 +56,8 @@ internal sealed class FlatContainerModule : IExtensionModule
 
     public void RegisterOperations(
         IOperationOwnerRegistry registry,
-        IExtensionCapabilities capabilities)
+        IExtensionCapabilities capabilities,
+        IDocumentContributionSource documentContributions)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(capabilities);

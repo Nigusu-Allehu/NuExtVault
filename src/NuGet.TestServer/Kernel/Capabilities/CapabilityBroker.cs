@@ -943,8 +943,7 @@ internal static class BuiltInOwnerCapabilityRequirements
             [BuiltInExtensionIds.Protocol] =
             [
                 BuiltInCapabilityNames.PackagesIdentityRead,
-                BuiltInCapabilityNames.PackagesMetadataRead,
-                BuiltInCapabilityNames.VulnerabilityStateRead
+                BuiltInCapabilityNames.PackagesMetadataRead
             ],
             [BuiltInExtensionIds.Publication] =
             [
@@ -1122,6 +1121,7 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _services.PackageStore,
                     _services.Visibility),
             var type when type == typeof(IPackageMetadataReadCapability) ||
+                          type == typeof(IRegistrationMetadataReadCapability) ||
                           type == typeof(IPackageContentReadCapability) ||
                           type == typeof(IPackageSymbolReadCapability) =>
                 new PackageResourceReadCapability(
@@ -1235,7 +1235,8 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.StorageDirectory),
-            var type when type == typeof(IVulnerabilityReadCapability) =>
+            var type when type == typeof(IVulnerabilityReadCapability) ||
+                          type == typeof(IRegistrationVulnerabilityReadCapability) =>
                 new VulnerabilityReadCapability(
                     _hostInstanceId,
                     _ownerId,
@@ -1320,6 +1321,8 @@ internal static class CapabilityContracts
             [typeof(IPackageMetadataReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesIdentityRead,
                 BuiltInCapabilityNames.PackagesMetadataRead),
+            [typeof(IRegistrationMetadataReadCapability)] = Set(
+                BuiltInCapabilityNames.PackagesMetadataRead),
             [typeof(IPackageContentReadCapability)] = Set(
                 BuiltInCapabilityNames.PackagesContentRead),
             [typeof(IPackageSymbolReadCapability)] = Set(
@@ -1358,6 +1361,8 @@ internal static class CapabilityContracts
             [typeof(IRestoreCheckpointCapability)] = Set(
                 BuiltInCapabilityNames.RestoreInvoke),
             [typeof(IVulnerabilityReadCapability)] = Set(
+                BuiltInCapabilityNames.VulnerabilityStateRead),
+            [typeof(IRegistrationVulnerabilityReadCapability)] = Set(
                 BuiltInCapabilityNames.VulnerabilityStateRead),
             [typeof(IVulnerabilityCatalogCapability)] = Set(
                 BuiltInCapabilityNames.VulnerabilityStateRead),
@@ -1691,6 +1696,7 @@ internal sealed class PackageResourceReadCapability(
     PackageVisibilityPolicy visibility)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
         IPackageMetadataReadCapability,
+        IRegistrationMetadataReadCapability,
         IPackageContentReadCapability,
         IPackageSymbolReadCapability
 {
@@ -1709,6 +1715,38 @@ internal sealed class PackageResourceReadCapability(
                             PackageResourceClass.VersionEnumeration))
                         .Select(package => package.NormalizedVersion)
                         .ToImmutableArray();
+                },
+                token);
+
+    public ValueTask<ImmutableArray<RegistrationPackageMetadata>> FindByIdAsync(
+        string packageId,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "registration-find-by-id",
+                async ct =>
+                    (await candidates.FindStoredByIdAsync(packageId, ct))
+                        .Where(package => visibility.CanRead(
+                            package,
+                            PackageResourceClass.Registration))
+                        .Select(MapRegistration)
+                        .ToImmutableArray(),
+                token);
+
+    public ValueTask<RegistrationPackageMetadata?> FindLeafAsync(
+        string packageId,
+        string version,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.PackagesMetadataRead)
+            .InvokeAsync(
+                "registration-find-leaf",
+                async ct =>
+                {
+                    var package = await store.FindAsync(packageId, version, ct);
+                    return package is not null &&
+                           visibility.CanRead(package, PackageResourceClass.Registration)
+                        ? MapRegistration(package)
+                        : null;
                 },
                 token);
 
@@ -1790,6 +1828,53 @@ internal sealed class PackageResourceReadCapability(
                         SupportsRanges: true);
                 },
                 token);
+
+    private static RegistrationPackageMetadata MapRegistration(TestPackage package) =>
+        new(
+            new PackageIdentity(package.Identity.Id, package.NormalizedVersion),
+            package.Authors,
+            [.. package.RepositoryMetadata.Owners],
+            package.RepositoryMetadata.Downloads,
+            package.Description,
+            package.Summary,
+            string.IsNullOrEmpty(package.Title) ? package.Identity.Id : package.Title,
+            [.. package.Tags.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
+            package.ProjectUrl?.OriginalString,
+            package.Readme,
+            package.Icon,
+            package.LicenseExpression,
+            package.LicenseFile,
+            package.LicenseUrl?.OriginalString,
+            [
+                .. package.EffectivePackageTypes.Select(
+                    type => new PackageTypeDocument(type.Name, type.Version))
+            ],
+            package.Repository is null
+                ? null
+                : new PackageRepositoryDocument(
+                    package.Repository.Type,
+                    package.Repository.Url,
+                    package.Repository.Commit,
+                    package.Repository.Branch),
+            package.IsListed,
+            package.Published,
+            [
+                .. package.DependencyGroups.Select(group => new PackageDependencyGroupDocument(
+                    group.TargetFramework.GetShortFolderName(),
+                    [
+                        .. group.Packages.Select(dependency => new PackageDependencyDocument(
+                            dependency.Id,
+                            dependency.VersionRange.ToNormalizedString()))
+                    ]))
+            ],
+            package.RepositoryMetadata.Deprecation is { } deprecation
+                ? new PackageDeprecationDocument(
+                    [.. deprecation.Reasons],
+                    deprecation.Message,
+                    deprecation.AlternatePackage is { } alternate
+                        ? new PackageAlternateDocument(alternate.Id, alternate.Range)
+                        : null)
+                : null);
 
     public ValueTask<ContentDescriptor?> OpenSymbolsAsync(
         string packageId,
@@ -2526,7 +2611,8 @@ internal sealed class VulnerabilityReadCapability(
     CapabilityLimits limits,
     VulnerabilitySnapshotProvider snapshots)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
-        IVulnerabilityReadCapability
+        IVulnerabilityReadCapability,
+        IRegistrationVulnerabilityReadCapability
 {
     public VulnerabilitySnapshot Active =>
         Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
@@ -2551,6 +2637,22 @@ internal sealed class VulnerabilityReadCapability(
         snapshot = result.value;
         return result.found;
     }
+
+    public ValueTask<ImmutableArray<VulnerabilityAdvisoryDocument>> FindAsync(
+        PackageIdentity package,
+        CancellationToken token) =>
+        Gate(BuiltInCapabilityNames.VulnerabilityStateRead)
+            .InvokeAsync(
+                "registration-find",
+                _ => ValueTask.FromResult(
+                    snapshots.Active.Find(
+                            package.Id,
+                            NuGet.Versioning.NuGetVersion.Parse(package.Version))
+                        .Select(advisory => new VulnerabilityAdvisoryDocument(
+                            advisory.Url.AbsoluteUri,
+                            advisory.Severity.ToString()))
+                        .ToImmutableArray()),
+                token);
 }
 
 /// <summary>
