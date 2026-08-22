@@ -655,14 +655,8 @@ internal static class BuiltInExtensionCatalog
     [
         Manifest(
             BuiltInExtensionIds.Protocol,
-            operations: Operations(
-                OperationFamily.Registration,
-                OperationFamily.Search),
-            endpoints:
-            [
-                .. RegistrationEndpoints.All,
-                .. SearchEndpoints.All
-            ],
+            operations: Operations(OperationFamily.Registration),
+            endpoints: RegistrationEndpoints.All,
             resources:
             [
                 Resource(
@@ -672,29 +666,7 @@ internal static class BuiltInExtensionCatalog
                     "/registration/",
                     producesUrlsFor: ["PackageBaseAddress/3.0.0"],
                     requiresResourceTypes: ["PackageBaseAddress/3.0.0"],
-                    order: 20),
-                Resource(
-                    "SearchQueryService",
-                    "3.0.0-beta",
-                    OperationIds.SearchQuery,
-                    "/query",
-                    requiresResourceTypes:
-                    [
-                        "PackageBaseAddress/3.0.0",
-                        "RegistrationsBaseUrl/3.6.0"
-                    ],
-                    order: 30),
-                Resource(
-                    "SearchQueryService",
-                    "3.5.0",
-                    OperationIds.SearchQuery,
-                    "/query",
-                    requiresResourceTypes:
-                    [
-                        "PackageBaseAddress/3.0.0",
-                        "RegistrationsBaseUrl/3.6.0"
-                    ],
-                    order: 40)
+                    order: 20)
             ],
             capabilities:
             [

@@ -1267,7 +1267,7 @@ Startup diagnostics should display:
 
 ```text
 Extension                     Version  Mode     State  Capabilities
-NuGet.Search                  1.0.0    inproc   Ready  packages.metadata.read
+NuGet.Search                  1.0.0    inproc   Ready  packages.search.query
 Contoso.PackageLabels         1.2.0    sidecar  Ready  extension-state.*, packages.metadata.read
 ```
 

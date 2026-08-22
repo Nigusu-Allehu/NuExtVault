@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.FlatContainer;
 using NuGet.TestServer.Extensions.Operations;
+using NuGet.TestServer.Extensions.Search;
 
 namespace NuGet.TestServer.Extensions;
 
@@ -16,7 +17,8 @@ internal static class OfficialExtensionModules
     public static ImmutableArray<IExtensionModule> All { get; } =
     [
         new FlatContainerModule(),
-        new OperationsModule()
+        new OperationsModule(),
+        new SearchModule()
     ];
 
     public static ImmutableArray<ExtensionManifest> Manifests { get; } =

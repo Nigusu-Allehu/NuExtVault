@@ -1,6 +1,6 @@
 using NuGet.TestServer.Extensions.Abstractions;
 
-namespace NuGet.TestServer.Kernel.Owners.Search;
+namespace NuGet.TestServer.Extensions.Search;
 
 internal static class SearchDocumentRenderer
 {

@@ -4,12 +4,12 @@ using Microsoft.Extensions.DependencyInjection;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Extensions.Control;
 using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Search;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
 using NuGet.TestServer.Kernel.Owners.Registration;
-using NuGet.TestServer.Kernel.Owners.Search;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
 
