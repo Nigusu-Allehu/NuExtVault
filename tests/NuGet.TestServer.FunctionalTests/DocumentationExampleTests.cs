@@ -538,10 +538,10 @@ public sealed class DocumentationExampleTests
 
         public static TemporaryDirectory Create()
         {
-            var path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                "NuGet.TestServer.DocumentationTests",
-                Guid.NewGuid().ToString("N"));
+            var parent = OperatingSystem.IsMacOS()
+                ? System.IO.Path.Combine(RepositoryRoot, "artifacts", "documentation-tests")
+                : System.IO.Path.Combine(System.IO.Path.GetTempPath(), "NuGet.TestServer.DocumentationTests");
+            var path = System.IO.Path.Combine(parent, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(path);
             return new TemporaryDirectory(path);
         }
