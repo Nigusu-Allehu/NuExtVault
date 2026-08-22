@@ -102,19 +102,22 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
     private readonly bool _fail;
     private readonly int _payloadSize;
     private readonly bool _mismatchedTypes;
+    private readonly bool _declareMismatchedTypes;
 
     public RegistrationLabelsModule(
         string extensionId = ExtensionId,
         string @namespace = Namespace,
         bool fail = false,
         int payloadSize = 0,
-        bool mismatchedTypes = false)
+        bool mismatchedTypes = false,
+        bool declareMismatchedTypes = false)
     {
         _extensionId = extensionId;
         _namespace = @namespace;
         _fail = fail;
         _payloadSize = payloadSize;
         _mismatchedTypes = mismatchedTypes;
+        _declareMismatchedTypes = declareMismatchedTypes;
         Contribution = new ExtensionModuleContribution(
             new ExtensionManifest(
                         1,
@@ -135,8 +138,12 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
                         RegistrationContributionPoints.LeafContractV1,
                         @namespace,
                         Priority: 100,
-                        typeof(RegistrationLeafContributionContext),
-                        typeof(RegistrationLeafExtensionDocument))
+                        declareMismatchedTypes
+                            ? typeof(string)
+                            : typeof(RegistrationLeafContributionContext),
+                        declareMismatchedTypes
+                            ? typeof(string)
+                            : typeof(RegistrationLeafExtensionDocument))
             ]
         };
     }
@@ -154,7 +161,7 @@ internal sealed class RegistrationLabelsModule : IExtensionModule
         IDocumentContributorRegistry registry,
         IExtensionCapabilities capabilities)
     {
-        if (_mismatchedTypes)
+        if (_mismatchedTypes || _declareMismatchedTypes)
         {
             registry.Register(
                 _extensionId,

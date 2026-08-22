@@ -102,6 +102,16 @@ internal sealed class DocumentContributorRegistry :
         Get<TContext, TContribution>(string point, string contract)
     {
         var key = (point, contract, typeof(TContext), typeof(TContribution));
+        if (_registrations.Keys.Any(candidate =>
+                string.Equals(candidate.Point, point, StringComparison.Ordinal) &&
+                string.Equals(candidate.Contract, contract, StringComparison.Ordinal) &&
+                candidate != key))
+        {
+            throw new ServerHostingConfigurationException(
+                $"document-contributor-contract-type-mismatch: Contribution point '{point}' " +
+                $"and contract '{contract}' were registered with incompatible types.");
+        }
+
         return !_registrations.TryGetValue(key, out var registrations)
             ? []
             :

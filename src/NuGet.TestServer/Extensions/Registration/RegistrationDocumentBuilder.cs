@@ -7,6 +7,14 @@ internal sealed class RegistrationDocumentBuilder(
     IRegistrationVulnerabilityReadCapability vulnerabilities,
     IDocumentContributionSource contributions)
 {
+    private readonly ImmutableArray<RegisteredDocumentContributor<
+        RegistrationLeafContributionContext,
+        RegistrationLeafExtensionDocument>> _contributors = contributions.Get<
+            RegistrationLeafContributionContext,
+            RegistrationLeafExtensionDocument>(
+            RegistrationContributionPoints.Leaf,
+            RegistrationContributionPoints.LeafContractV1);
+
     public async ValueTask<RegistrationPageDocument> CreatePageAsync(
         IReadOnlyList<RegistrationPackageMetadata> packages,
         CancellationToken cancellationToken)
@@ -43,11 +51,7 @@ internal sealed class RegistrationDocumentBuilder(
         var extensionValues =
             ImmutableSortedDictionary.CreateBuilder<string, RegistrationLeafExtensionDocument>(
                 StringComparer.Ordinal);
-        foreach (var contributor in contributions.Get<
-                     RegistrationLeafContributionContext,
-                     RegistrationLeafExtensionDocument>(
-                     RegistrationContributionPoints.Leaf,
-                     RegistrationContributionPoints.LeafContractV1))
+        foreach (var contributor in _contributors)
         {
             extensionValues.Add(
                 contributor.Namespace,
