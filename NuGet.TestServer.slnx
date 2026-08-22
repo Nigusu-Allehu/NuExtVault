@@ -4,6 +4,7 @@
     <Project Path="src/NuGet.TestServer.Extensions.Sdk/NuGet.TestServer.Extensions.Sdk.csproj" />
     <Project Path="src/NuGet.TestServer.Extensions.TestKit/NuGet.TestServer.Extensions.TestKit.csproj" />
     <Project Path="src/NuGet.TestServer.Extensions.Official/NuGet.TestServer.Extensions.Official.csproj" />
+    <Project Path="src/NuGet.TestServer.Extensions.PackageStaging/NuGet.TestServer.Extensions.PackageStaging.csproj" />
     <Project Path="src/NuGet.TestServer.Kernel/NuGet.TestServer.Kernel.csproj" />
     <Project Path="src/NuGet.TestServer/NuGet.TestServer.csproj" />
   </Folder>

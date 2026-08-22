@@ -60,4 +60,7 @@ internal static class BuiltInCapabilityNames
     public const string SupplyChainSignatureInspect =
         KernelCapabilityNames.SupplyChainSignatureInspect;
     public const string SupplyChainPackageScan = KernelCapabilityNames.SupplyChainPackageScan;
+    public const string PackageContentWriteStaged =
+        KernelCapabilityNames.PackageContentWriteStaged;
+    public const string PublicationRequest = KernelCapabilityNames.PublicationRequest;
 }

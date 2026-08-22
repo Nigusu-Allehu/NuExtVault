@@ -166,7 +166,24 @@ public static class ServerApplication
             MaximumStreamBytes: Math.Max(
                 packageLimits.MaxRequestBodyBytes,
                 packageLimits.MaxPackageBytes)));
-        builder.Services.AddSingleton(_ => CreateExtensionStateStore(storageDirectory));
+        builder.Services.AddSingleton(_ => CreateExtensionStateStore(storageDirectory, composition));
+        builder.Services.AddSingleton(_ => new StagedContentStore(
+            storageDirectory,
+            composition.InstanceId,
+            quotas: null,
+            TimeProvider.System));
+        builder.Services.AddHostedService<StagedContentReclaimer>();
+        builder.Services.AddSingleton(_ => new PublicationJournal(storageDirectory));
+        builder.Services.AddSingleton(provider => new StagedPublicationCoordinator(
+            composition.InstanceId,
+            provider.GetRequiredService<StagedContentStore>(),
+            provider.GetRequiredService<PublicationJournal>(),
+            provider.GetRequiredService<TransactionalStateStore>(),
+            provider.GetRequiredService<IPackageStore>(),
+            () => provider.GetRequiredService<PackageSupplyChainService>(),
+            packageLimits,
+            provider.GetRequiredService<ServerDiagnostics>(),
+            provider.GetRequiredService<TimeProvider>()));
         builder.Services.AddSingleton(provider => new CapabilityBroker(
             composition.InstanceId,
             composition.ExtensionGraph,
@@ -188,7 +205,11 @@ public static class ServerApplication
                 officialExtensions,
                 provider.GetRequiredService<KernelOutboundHttpClient>(),
                 packageLimits,
-                provider.GetRequiredService<TimeProvider>())));
+                provider.GetRequiredService<TimeProvider>())
+            {
+                StagedPublication = () =>
+                    provider.GetRequiredService<StagedPublicationCoordinator>()
+            }));
         builder.Services.AddSingleton(provider => PolicyParticipantRegistry.Create(
             composition.ExtensionGraph,
             composition.Modules,
@@ -244,6 +265,15 @@ public static class ServerApplication
             _ = app.Services.GetRequiredService<IPackageStore>();
             _ = app.Services.GetRequiredService<PackageSupplyChainService>();
 
+            // Interrupted staged publications are finished or failed closed before the
+            // host serves a request, and expired staged leases are reclaimed.
+            var stagedPublication = app.Services
+                .GetRequiredService<StagedPublicationCoordinator>();
+            stagedPublication.RecoverAsync(CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+            stagedPublication.Content.ReclaimExpiredAsync(CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+
             // Ownership, contracts, and route coverage are validated before listening.
             _ = app.Services.GetRequiredService<OperationGateway>();
 
@@ -263,11 +293,14 @@ public static class ServerApplication
         return app;
     }
 
-    private static TransactionalStateStore CreateExtensionStateStore(string? storageDirectory)
+    private static TransactionalStateStore CreateExtensionStateStore(
+        string? storageDirectory,
+        ServerComposition composition)
     {
+        var participants = CreateStateParticipants(composition);
         if (storageDirectory is null)
         {
-            return new TransactionalStateStore(root: null, KernelStateParticipants.BuiltIn);
+            return new TransactionalStateStore(root: null, participants);
         }
 
         var legacyVulnerabilities = new LegacyStateFileSetRegistration(
@@ -277,7 +310,7 @@ public static class ServerApplication
             MaximumFileCount: 64).Validate();
         return new TransactionalStateStore(
             Path.Combine(storageDirectory, "extension-state"),
-            KernelStateParticipants.BuiltIn,
+            participants,
             quotas: null,
             ImmutableDictionary<
                     string,
@@ -288,6 +321,36 @@ public static class ServerApplication
                     ImmutableDictionary<string, LegacyStateFileSetRegistration>
                         .Empty
                         .Add(VulnerabilityExtension.LegacyStateName, legacyVulnerabilities)));
+    }
+
+    /// <summary>
+    /// Registers every state schema the active extensions declare in their manifests,
+    /// on top of the built-in participants. Registration is generic: the kernel reads
+    /// the declaration, never an extension name.
+    /// </summary>
+    internal static ImmutableArray<StateParticipantDescriptor> CreateStateParticipants(
+        ServerComposition composition)
+    {
+        var active = composition.ExtensionGraph.Extensions
+            .Select(extension => extension.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var declared = composition.Modules
+            .Select(module => module.Contribution.Manifest)
+            .Where(manifest =>
+                manifest.State is not null &&
+                active.Contains(manifest.Identity.Id) &&
+                !KernelStateParticipants.BuiltIn.Any(participant => string.Equals(
+                    participant.ExtensionId,
+                    manifest.Identity.Id,
+                    StringComparison.Ordinal)))
+            .DistinctBy(manifest => manifest.Identity.Id, StringComparer.Ordinal)
+            .Select(manifest => new StateParticipantDescriptor(
+                manifest.Identity.Id,
+                manifest.Identity.Version,
+                manifest.State!.SchemaName,
+                manifest.State.SchemaVersion,
+                manifest.State.Required).Validate());
+        return [.. KernelStateParticipants.BuiltIn, .. declared];
     }
 
     private static void MapMiddleware(WebApplication app)

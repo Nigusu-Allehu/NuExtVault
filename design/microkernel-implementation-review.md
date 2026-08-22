@@ -3,11 +3,11 @@
 ## Scope and status
 
 This review records the original architecture debate and implementation evidence
-through Microkernel Step 20. The public SDK contracts, TestKit, strict manifest,
-canonical identities, attestation primitives, and trusted in-process package loader
-are implemented and locally packable. External publication, runtime hot reload,
-sidecars, durable events, security sandboxing, and distributed behavior are not
-claimed.
+through Microkernel Step 22. The public SDK contracts (v1.3.0), TestKit (v1.1.0),
+strict manifest, canonical identities, attestation primitives, trusted in-process
+package loader, and the Package Staging reference external extension are implemented
+and locally packable. External publication, runtime hot reload, sidecars, durable
+events, security sandboxing, and distributed behavior are not claimed.
 
 The implemented system is a complete official microkernel with a stabilized local
 SDK and explicit administrator-installed third-party loading. Packages are validated,
@@ -371,7 +371,7 @@ Manifest, SDK, operation, contribution, route, capability, and structural identi
 are independent. Canonical UTF-8 bytes, ordinal ordering, lowercase SHA-256 digests,
 golden snapshots, and ES256 attestations fail closed on identity, version, digest,
 publisher, key, algorithm, suite, or time mismatch. The host-supported SDK window is
-`1.0.0` through `1.2.0` inclusive in major 1; support/deprecation clocks begin only
+`1.0.0` through `1.3.0` inclusive in major 1; support/deprecation clocks begin only
 after first external publication.
 
 Public contributors can define only new stable operation IDs in their own namespace.
@@ -388,10 +388,10 @@ projection, and required clock capability through real Kestrel. Every configured
 external package is required; failure prevents startup. See
 [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
 
-Step 21 remains not applicable: no current NuTestServer consumer requires process
-isolation or another implementation language. Step 22 is eligible directly from
-Step 20 and must determine whether Package Staging creates evidence that changes that
-conclusion.
+Step 22 is implemented through the trusted Step 20 in-process loader. Package Staging
+uses only bounded, host-scoped capability handles and supplies neither untrusted
+native code nor an alternate-language runtime. It therefore produced no concrete
+evidence requiring process isolation; Step 21 remains not applicable.
 
 ## Open questions and deadlines
 
@@ -417,7 +417,7 @@ conclusion.
 - Resolved by Step 19 and recorded in
   [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md): public typed route/new
   operation contribution, transport-neutral negotiated contracts, SDK
-  `1.0.0`-`1.2.0`, canonical structural identities, ES256 publisher trust, disabled
+  `1.0.0`-`1.3.0`, canonical structural identities, ES256 publisher trust, disabled
   replacement, strict JSON plus typed builder, `net10.0`, local in-process-first
   contracts, and no v1 optional-startup degradation promise.
 

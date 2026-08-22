@@ -10,6 +10,7 @@ using NuGet.TestServer.Extensions.Sdk;
 using NuGet.TestServer.Cli;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Extensions.Vulnerabilities;
+using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Operations;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Storage;
@@ -18,7 +19,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0)
 {
     Console.Error.WriteLine(
-        "Usage: nuget-test-server <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [package limit options] [authentication options]");
+        "Usage: nuget-test-server <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [--extension-grant <capability>] [package limit options] [authentication options]");
     return 2;
 }
 
@@ -59,13 +60,41 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
 
     try
     {
-        var manifest = await StorageBackup.RestoreAsync(input, restoreStorage);
+        using var externalRuntime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [.. ReadRepeatedPathOption(arguments, "--extension-root")],
+                ReadTrustRoots(arguments),
+                TimeProvider.System));
+        if (externalRuntime.Diagnostics.Results.FirstOrDefault(result => !result.Succeeded)
+            is { } failure)
+        {
+            throw new CliConfigurationException(
+                $"{failure.FailureCode}: {failure.RedactedMessage}");
+        }
+
+        var participants = externalRuntime.Modules
+            .Select(module => module.Contribution.Manifest)
+            .Where(manifest => manifest.State is not null)
+            .Select(manifest => new StateParticipantDescriptor(
+                manifest.Identity.Id,
+                manifest.Identity.Version,
+                manifest.State!.SchemaName,
+                manifest.State.SchemaVersion,
+                manifest.State.Required).Validate());
+        var manifest = await StorageBackup.RestoreAsync(
+            input,
+            restoreStorage,
+            [.. KernelStateParticipants.BuiltIn, .. participants],
+            CancellationToken.None);
         Console.WriteLine(
             $"Restored {manifest.Files.Count} files into '{Path.GetFullPath(restoreStorage)}'.");
         return 0;
     }
     catch (Exception exception) when (
-        exception is IOException or UnauthorizedAccessException or ArgumentException)
+        exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or CliConfigurationException)
     {
         Console.Error.WriteLine($"Restore failed: {exception.Message}");
         return 1;
@@ -162,7 +191,8 @@ try
         packageLimits: packageLimits,
         trustedProxies: ParseTrustedProxies(arguments),
         extensionRoots: ReadRepeatedPathOption(arguments, "--extension-root"),
-        extensionTrustRoots: ReadTrustRoots(arguments));
+        extensionTrustRoots: ReadTrustRoots(arguments),
+        extensionGrants: ReadExtensionGrants(arguments));
     app = ServerApplication.Build(composition);
 }
 catch (Exception exception) when (
@@ -271,6 +301,32 @@ static ImmutableArray<string> ReadRepeatedPathOption(
     return values.ToImmutable();
 }
 
+static ImmutableArray<string> ReadExtensionGrants(IReadOnlyList<string> arguments)
+{
+    var grants = ImmutableArray.CreateBuilder<string>();
+    for (var index = 1; index < arguments.Count; index++)
+    {
+        if (!string.Equals(
+                arguments[index],
+                "--extension-grant",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (index + 1 >= arguments.Count ||
+            arguments[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new CliConfigurationException(
+                "--extension-grant requires one capability name.");
+        }
+
+        grants.Add(arguments[++index]);
+    }
+
+    return grants.ToImmutable();
+}
+
 static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string> arguments)
 {
     var roots = ImmutableArray.CreateBuilder<ConformanceTrustRoot>();
@@ -292,7 +348,10 @@ static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string>
                 Convert.FromBase64String(root.GetProperty("subjectPublicKeyInfoBase64").GetString()!)));
         }
         catch (Exception exception) when (
-            exception is JsonException or FormatException or InvalidOperationException)
+            exception is JsonException or
+                FormatException or
+                InvalidOperationException or
+                KeyNotFoundException)
         {
             throw new CliConfigurationException(
                 $"Extension trust-root file '{Path.GetFileName(path)}' is invalid.");

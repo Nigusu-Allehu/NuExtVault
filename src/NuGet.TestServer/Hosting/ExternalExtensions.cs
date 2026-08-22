@@ -517,6 +517,19 @@ internal static class ExternalExtensionPackageLoader
 
     private static void ValidateManifest(ExtensionManifest manifest)
     {
+        if (manifest.Identity.Id.Equals("NuGet", StringComparison.OrdinalIgnoreCase) ||
+            manifest.Identity.Id.StartsWith("NuGet.", StringComparison.OrdinalIgnoreCase) ||
+            manifest.Identity.Id.Equals("NuTest", StringComparison.OrdinalIgnoreCase) ||
+            manifest.Identity.Id.Equals("builtin", StringComparison.OrdinalIgnoreCase) ||
+            manifest.Identity.Id.StartsWith("builtin.", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ExternalExtensionException(
+                manifest.Identity.Id,
+                manifest.Identity.Version,
+                "external-extension.identity-squatting",
+                $"Package '{manifest.Identity.Id}' claims a reserved extension identity.");
+        }
+
         var conformance = manifest.Operations
             .Select(operation => ExtensionConformance.ValidateOwnership(manifest.Identity.Id, operation))
             .FirstOrDefault(result => !result.IsValid);
@@ -546,9 +559,17 @@ internal static class ExternalExtensionPackageLoader
 
         foreach (var contribution in manifest.Contributions)
         {
-            if (contribution.Identity.Value.StartsWith("NuGet.", StringComparison.OrdinalIgnoreCase) ||
-                contribution.Identity.Value.StartsWith("NuTest.", StringComparison.OrdinalIgnoreCase) ||
-                contribution.Identity.Value.StartsWith("builtin.", StringComparison.OrdinalIgnoreCase))
+            // Reserved prefixes stop one extension from claiming another owner's
+            // contribution identity. An identity inside the declaring extension's own
+            // namespace is never squatting, even when the extension itself is published
+            // under a reserved prefix.
+            var owned = contribution.Identity.Value.StartsWith(
+                manifest.Identity.Id + ".",
+                StringComparison.Ordinal);
+            if (!owned &&
+                (contribution.Identity.Value.StartsWith("NuGet.", StringComparison.OrdinalIgnoreCase) ||
+                 contribution.Identity.Value.StartsWith("NuTest.", StringComparison.OrdinalIgnoreCase) ||
+                 contribution.Identity.Value.StartsWith("builtin.", StringComparison.OrdinalIgnoreCase)))
             {
                 throw new ExternalExtensionException(
                     manifest.Identity.Id,

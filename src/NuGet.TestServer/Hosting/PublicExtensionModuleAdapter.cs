@@ -63,9 +63,19 @@ internal static class PublicExtensionModuleAdapter
             .Where(contribution => contribution.Kind == "service-resource")
             .Select(contribution =>
             {
-                var route = manifest.Routes.SingleOrDefault()
-                    ?? throw new ServerHostingConfigurationException(
-                        "external-extension.resource-route-ambiguous: A service resource requires exactly one route.");
+                var route = contribution.Route is { } reference
+                    ? manifest.Routes.SingleOrDefault(candidate =>
+                        candidate.Identity.Value == reference.Value)
+                      ?? throw new ServerHostingConfigurationException(
+                          "external-extension.resource-route-missing: Service resource " +
+                          $"'{contribution.Identity.Value}' references unknown route " +
+                          $"'{reference.Value}'.")
+                    : manifest.Routes.Length == 1
+                        ? manifest.Routes[0]
+                        : throw new ServerHostingConfigurationException(
+                            "external-extension.resource-route-ambiguous: Service resource " +
+                            $"'{contribution.Identity.Value}' must reference a route by id " +
+                            "unless the extension declares exactly one route.");
                 return new ServiceResourceContribution(
                     contribution.Identity.Value,
                     contribution.Version.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -97,6 +107,7 @@ internal static class PublicExtensionModuleAdapter
         {
             OwnedOperations = [.. manifest.Operations.Select(operation => operation.Identity.Value)],
             Resources = resources,
+            State = manifest.State,
             ValidatedManifestDigest = manifestDigest,
             ValidatedStagedContentDigest = stagedContentDigest
         };
@@ -109,7 +120,8 @@ internal static class PublicExtensionModuleAdapter
         OperationBinding binding,
         RecordedRouteBinder binder)
     {
-        var handler = binder.CreateHandler(route.Operation.Value, binding.ResponseType);
+        var routeParameterNames = EndpointPathTemplate.ReadParameterNames(route.Path);
+        var handler = binder.CreateHandler(route.Operation.Value, binding.ResponseType, route);
         return new EndpointDescriptor
         {
             Name = route.Identity.Value,
@@ -131,7 +143,13 @@ internal static class PublicExtensionModuleAdapter
                 _ => throw new ServerHostingConfigurationException(
                     $"external-extension.route-access-invalid: Route '{route.Identity.Value}' has invalid access.")
             }),
-            Body = EndpointBodyBinding.None,
+            Body = route.Body switch
+            {
+                RouteBodyBinding.Stream => EndpointBodyBinding.Stream,
+                RouteBodyBinding.Bounded => EndpointBodyBinding.Bounded(),
+                _ => EndpointBodyBinding.None
+            },
+            RouteParameters = [.. routeParameterNames.Select(name => new EndpointParameter(name))],
             Limits = route.MaximumRequestBytes == 0
                 ? EndpointLimits.BodyFree with
                 {
@@ -225,34 +243,94 @@ internal static class PublicExtensionModuleAdapter
 
     private abstract class RecordedRouteBinder
     {
-        public abstract IEndpointHandler CreateHandler(string operationId, Type responseType);
+        public abstract IEndpointHandler CreateHandler(
+            string operationId, Type responseType, RouteDeclaration route);
     }
 
     private sealed class RecordedRouteBinder<TRequest>(
         Func<RouteBindingRequest, CancellationToken, ValueTask<TRequest>> binder)
         : RecordedRouteBinder
     {
-        public override IEndpointHandler CreateHandler(string operationId, Type responseType)
+        public override IEndpointHandler CreateHandler(
+            string operationId, Type responseType, RouteDeclaration route)
         {
             var method = typeof(RecordedRouteBinder<TRequest>)
                 .GetMethod(nameof(CreateTypedHandler), BindingFlags.Instance | BindingFlags.NonPublic)!
                 .MakeGenericMethod(responseType);
-            return (IEndpointHandler)method.Invoke(this, [operationId])!;
+            return (IEndpointHandler)method.Invoke(this, [operationId, route])!;
         }
 
-        private IEndpointHandler CreateTypedHandler<TResponse>(string operationId) =>
-            EndpointHandler.Create(async (request, token) =>
+        private IEndpointHandler CreateTypedHandler<TResponse>(
+            string operationId, RouteDeclaration route)
+        {
+            var routeParameterNames = EndpointPathTemplate.ReadParameterNames(route.Path);
+            var declaredHeaders = route.Headers
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            return EndpointHandler.Create(async (request, token) =>
             {
-                var body = new BoundedDocument(
-                    [],
-                    Math.Max(0, request.Limits.MaxRequestBytes),
-                    "application/octet-stream");
-                var typed = await binder(new RouteBindingRequest(
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                    body), token);
+                var body = route.Body == RouteBodyBinding.Bounded
+                    ? await request.ReadBoundedBodyAsync(
+                        Math.Max(1, request.Limits.MaxRequestBytes),
+                        token)
+                    : null;
+                var source = new KernelRouteBindingSource(
+                    request,
+                    routeParameterNames,
+                    declaredHeaders,
+                    route.Body,
+                    body);
+                var typed = await binder(new RouteBindingRequest(source), token);
                 return EndpointInvocation.Operation<TRequest, TResponse>(operationId, typed);
             });
+        }
+    }
+
+    /// <summary>
+    /// The kernel side of a public route binding. It exposes only the route values the
+    /// path template declares, the query the request actually carries, the headers the
+    /// manifest declares, and either the bounded body the kernel already read or a
+    /// kernel-issued, non-buffering stream handle.
+    /// </summary>
+    private sealed class KernelRouteBindingSource(
+        EndpointRequest request,
+        ImmutableArray<string> routeParameterNames,
+        ImmutableHashSet<string> declaredHeaders,
+        RouteBodyBinding body,
+        BoundedDocument? boundedBody) : IRouteBindingSource
+    {
+        public bool TryGetRoute(string name, out string? value)
+        {
+            value = null;
+            if (string.IsNullOrWhiteSpace(name) ||
+                !routeParameterNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            value = request.GetRoute(name);
+            return true;
+        }
+
+        public bool TryGetQuery(string name, out string? value)
+        {
+            value = string.IsNullOrWhiteSpace(name) ? null : request.GetQuery(name);
+            return value is not null;
+        }
+
+        public string? FindHeader(string name) =>
+            declaredHeaders.Contains(name) ? request.GetHeader(name) : null;
+
+        public BoundedDocument ReadBody() =>
+            boundedBody ?? throw new InvalidOperationException(
+                body == RouteBodyBinding.Stream
+                    ? "This route declares a streaming request body; use BindBodyStream."
+                    : "This route does not declare a request body.");
+
+        public StreamHandle BindBodyStream() =>
+            body == RouteBodyBinding.Stream
+                ? request.BindBodyStream()
+                : throw new InvalidOperationException(
+                    "This route does not declare a streaming request body.");
     }
 
     private sealed class RecordingCapabilities : IExtensionCapabilities

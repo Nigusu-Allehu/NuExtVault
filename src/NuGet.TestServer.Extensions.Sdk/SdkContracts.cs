@@ -165,7 +165,38 @@ public enum OperationOwnership
 public sealed record ContributionDeclaration(
     ContributionIdentity Identity,
     string Kind,
-    ContributionContractVersion Version);
+    ContributionContractVersion Version)
+{
+    /// <summary>
+    /// The route this contribution projects, when the extension declares more than one
+    /// route. The kernel resolves the reference and projects the absolute URL; the
+    /// contribution never carries a host-derived address.
+    /// </summary>
+    public RouteIdentity? Route { get; init; }
+}
+
+/// <summary>
+/// How the kernel binds the request payload for one declared route. The kernel reads a
+/// bounded body before the binder runs and hands a stream route a non-buffering,
+/// kernel-issued <see cref="StreamHandle"/>.
+/// </summary>
+public enum RouteBodyBinding
+{
+    None = 0,
+    Bounded,
+    Stream
+}
+
+/// <summary>
+/// The authoritative extension state one extension owns. The kernel registers the
+/// namespaced schema with its transactional store before the host listens, so an
+/// extension can never write state the kernel does not know how to checkpoint,
+/// migrate, quota, or restore.
+/// </summary>
+public sealed record ExtensionStateDeclaration(
+    string SchemaName,
+    int SchemaVersion,
+    bool Required);
 
 public sealed class RouteDeclaration
 {
@@ -201,7 +232,9 @@ public sealed class RouteDeclaration
         long maximumResponseBytes,
         string access,
         string head,
-        int timeoutMilliseconds)
+        int timeoutMilliseconds,
+        RouteBodyBinding? body = null,
+        ImmutableArray<string> headers = default)
     {
         Identity = identity;
         Operation = operation;
@@ -213,6 +246,8 @@ public sealed class RouteDeclaration
         Access = access;
         Head = head;
         TimeoutMilliseconds = timeoutMilliseconds;
+        DeclaredBody = body;
+        Headers = headers.IsDefault ? [] : headers;
     }
 
     public RouteIdentity Identity { get; }
@@ -234,6 +269,23 @@ public sealed class RouteDeclaration
     internal string Head { get; }
 
     internal int TimeoutMilliseconds { get; }
+
+    /// <summary>
+    /// The body binding declared by the manifest, or <c>null</c> when the manifest does
+    /// not declare one and the kernel infers it from <see cref="MaximumRequestBytes"/>.
+    /// </summary>
+    internal RouteBodyBinding? DeclaredBody { get; }
+
+    /// <summary>The request headers a binder for this route may read.</summary>
+    internal ImmutableArray<string> Headers { get; }
+
+    /// <summary>
+    /// The effective body binding: a declared value, otherwise <see cref="RouteBodyBinding.None"/>
+    /// for body-free routes and <see cref="RouteBodyBinding.Bounded"/> for the rest.
+    /// </summary>
+    public RouteBodyBinding Body =>
+        DeclaredBody ??
+        (MaximumRequestBytes <= 0 ? RouteBodyBinding.None : RouteBodyBinding.Bounded);
 }
 
 public static class ExtensionSdkVersions
@@ -243,7 +295,7 @@ public static class ExtensionSdkVersions
     public static SdkContractIdentity Identity { get; } =
         new("NuGet.TestServer.Extensions.Sdk");
 
-    public static SdkContractVersion Current { get; } = new(1, 2, 0);
+    public static SdkContractVersion Current { get; } = new(1, 3, 0);
 
     public static SdkContractVersion OldestSupported { get; } = new(1, 0, 0);
 
@@ -450,33 +502,113 @@ public sealed class OperationContributor
     }
 }
 
+/// <summary>
+/// The kernel-owned binding source behind <see cref="RouteBindingRequest"/>. It is
+/// implemented by the kernel only; a binder never reaches the HTTP request context,
+/// dependency injection, or endpoint routing through it.
+/// </summary>
+internal interface IRouteBindingSource
+{
+    bool TryGetRoute(string name, out string? value);
+
+    bool TryGetQuery(string name, out string? value);
+
+    string? FindHeader(string name);
+
+    BoundedDocument ReadBody();
+
+    StreamHandle BindBodyStream();
+}
+
 public sealed class RouteBindingRequest
 {
-    private readonly IReadOnlyDictionary<string, string> _route;
-    private readonly IReadOnlyDictionary<string, string> _query;
-    private readonly BoundedDocument _body;
+    private readonly IRouteBindingSource _source;
+
+    internal RouteBindingRequest(IRouteBindingSource source)
+    {
+        _source = source ?? throw new ArgumentNullException(nameof(source));
+    }
 
     internal RouteBindingRequest(
         IReadOnlyDictionary<string, string> route,
         IReadOnlyDictionary<string, string> query,
         BoundedDocument body)
+        : this(new DictionaryBindingSource(route, query, body))
     {
-        _route = route;
-        _query = query;
-        _body = body;
     }
 
     public string GetRoute(string name) =>
-        _route.TryGetValue(name, out var value)
+        _source.TryGetRoute(name, out var value) && value is not null
             ? value
             : throw new KeyNotFoundException($"Route value '{name}' is not available.");
 
+    /// <summary>
+    /// Reads a declared route value without throwing when the route does not declare it.
+    /// </summary>
+    public bool TryGetRoute(string name, out string? value) =>
+        _source.TryGetRoute(name, out value);
+
     public string GetQuery(string name) =>
-        _query.TryGetValue(name, out var value)
+        _source.TryGetQuery(name, out var value) && value is not null
             ? value
             : throw new KeyNotFoundException($"Query value '{name}' is not available.");
 
-    public BoundedDocument ReadBody() => _body;
+    /// <summary>
+    /// Reads a query value without throwing when the request omits it.
+    /// </summary>
+    public bool TryGetQuery(string name, out string? value) =>
+        _source.TryGetQuery(name, out value);
+
+    /// <summary>
+    /// Reads one of the request headers the route declares. Undeclared headers are never
+    /// visible, so a binder cannot read authorization or transport headers.
+    /// </summary>
+    public string? FindHeader(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return _source.FindHeader(name);
+    }
+
+    /// <summary>
+    /// Reads the bounded request body the kernel already read under the route's declared
+    /// limit. Routes that declare <see cref="RouteBodyBinding.Stream"/> reject this call.
+    /// </summary>
+    public BoundedDocument ReadBody() => _source.ReadBody();
+
+    /// <summary>
+    /// Registers the unbuffered request body as kernel content and returns the
+    /// kernel-issued handle. Package and symbol content never crosses the boundary as
+    /// bytes; the kernel owns the stream, its limit, and its lifetime.
+    /// </summary>
+    public StreamHandle BindBodyStream() => _source.BindBodyStream();
+
+    private sealed class DictionaryBindingSource(
+        IReadOnlyDictionary<string, string> route,
+        IReadOnlyDictionary<string, string> query,
+        BoundedDocument body) : IRouteBindingSource
+    {
+        public bool TryGetRoute(string name, out string? value)
+        {
+            var found = route.TryGetValue(name, out var resolved);
+            value = resolved;
+            return found;
+        }
+
+        public bool TryGetQuery(string name, out string? value)
+        {
+            var found = query.TryGetValue(name, out var resolved);
+            value = resolved;
+            return found;
+        }
+
+        public string? FindHeader(string name) => null;
+
+        public BoundedDocument ReadBody() => body;
+
+        public StreamHandle BindBodyStream() =>
+            throw new InvalidOperationException(
+                "This route does not declare a streaming request body.");
+    }
 }
 
 public interface IRouteBinderRegistry

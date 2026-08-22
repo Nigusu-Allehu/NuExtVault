@@ -16,10 +16,32 @@ internal static class CliServerProfileFactory
         PackageTransferLimits packageLimits,
         TrustedProxyOptions? trustedProxies,
         ImmutableArray<string> extensionRoots = default,
-        ImmutableArray<ConformanceTrustRoot> extensionTrustRoots = default)
+        ImmutableArray<ConformanceTrustRoot> extensionTrustRoots = default,
+        ImmutableArray<string> extensionGrants = default)
     {
+        var profile = production ? ServerProfiles.Production : ServerProfiles.Standard;
+        if (!extensionGrants.IsDefaultOrEmpty)
+        {
+            // Capabilities stay denied by default: an administrator grants exactly the
+            // ones an installed extension may use, and an ungranted required capability
+            // still fails startup.
+            var granted = profile.Grants
+                .Select(grant => grant.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            profile = profile with
+            {
+                Grants =
+                [
+                    .. profile.Grants,
+                    .. extensionGrants
+                        .Where(granted.Add)
+                        .Select(name => new CapabilityGrant(name))
+                ]
+            };
+        }
+
         return ServerComposition.Create(
-            production ? ServerProfiles.Production : ServerProfiles.Standard,
+            profile,
             url,
             storageDirectory,
             authentication,

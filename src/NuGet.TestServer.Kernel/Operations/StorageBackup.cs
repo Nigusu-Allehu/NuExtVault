@@ -15,6 +15,13 @@ public static class StorageBackup
     private const long MaximumManifestBytes = 10 * 1024 * 1024;
     private const long RestoreFreeSpaceReserveBytes = 256 * 1024 * 1024;
     internal const string ExtensionStateDirectoryName = "extension-state";
+
+    /// <summary>
+    /// Staged content and its publication journal travel with the checkpoint so a
+    /// restored host observes exactly the staging and promotion state it captured.
+    /// </summary>
+    internal const string StagedContentDirectoryName =
+        NuGet.TestServer.Kernel.Capabilities.StagedContentStore.DirectoryName;
     internal const string RestoreJournalName = ".restore.commit";
     private const string RestoreStagingPrefix = ".nuget-test-server-restore-";
     private const int RestoreStagingSuffixLength = 32;
@@ -27,7 +34,14 @@ public static class StorageBackup
         TransactionalStateStore.WriteJournalFileName
     ];
     private static readonly string[] IncludedDirectories =
-        ["packages", "security", "trash", "vulnerabilities", ExtensionStateDirectoryName];
+        [
+            "packages",
+            "security",
+            "trash",
+            "vulnerabilities",
+            ExtensionStateDirectoryName,
+            StagedContentDirectoryName
+        ];
     private static readonly string[] IncludedFiles =
     [
         "packages.db",

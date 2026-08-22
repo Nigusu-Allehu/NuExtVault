@@ -25,9 +25,66 @@ public static class RepositoryPaths
         "NuGet.TestServer.ForbiddenReferenceFixture",
         "NuGet.TestServer.ForbiddenReferenceFixture.csproj");
 
+    /// <summary>
+    /// The optional Package Staging extension. It lives under <c>src</c> because it is a
+    /// first-class, independently packable extension, not a test fixture; tests only
+    /// pack it the way an administrator would install it.
+    /// </summary>
+    public static string PackageStagingProjectPath { get; } = Path.Combine(
+        "src",
+        "NuGet.TestServer.Extensions.PackageStaging",
+        "NuGet.TestServer.Extensions.PackageStaging.csproj");
+
+    /// <summary>
+    /// Serializes fixture <c>dotnet</c> invocations. Several collections pack their own
+    /// extension into the same artifacts and package folders, and concurrent restores of
+    /// one package folder are not safe, so packs are serialized within the process and
+    /// across processes. The cross-process gate is a lock file rather than a mutex
+    /// because the critical section spans an <c>await</c>.
+    /// </summary>
+    private static readonly SemaphoreSlim ProcessGate = new(1, 1);
+
+    private static string PackLockPath => Path.Combine(ArtifactsDirectory, ".pack.lock");
+
     public static async Task<ProcessResult> DotNetAsync(params string[] arguments)
     {
         Directory.CreateDirectory(ArtifactsDirectory);
+        await ProcessGate.WaitAsync();
+        try
+        {
+            using var gate = await AcquireLockFileAsync();
+            return await RunAsync(arguments);
+        }
+        finally
+        {
+            ProcessGate.Release();
+        }
+    }
+
+    private static async Task<FileStream> AcquireLockFileAsync()
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMinutes(10);
+        while (true)
+        {
+            try
+            {
+                return new FileStream(
+                    PackLockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    1,
+                    FileOptions.DeleteOnClose);
+            }
+            catch (IOException) when (DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(200);
+            }
+        }
+    }
+
+    private static async Task<ProcessResult> RunAsync(string[] arguments)
+    {
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo

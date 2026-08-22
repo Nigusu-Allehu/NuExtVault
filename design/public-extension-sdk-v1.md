@@ -3,7 +3,8 @@
 ## Status and scope
 
 This is the authoritative policy for the NuTestServer public extension SDK v1
-surface stabilized by Microkernel Step 19 and loaded by Step 20. The implementation
+surface stabilized by Microkernel Step 19, loaded by Step 20, and additively extended
+to SDK `1.3.0` by Step 22. The implementation
 and package projects exist in this repository, can be packed locally, and are
 exercised by official and separately packaged test extensions. They have not been
 published to NuGet.org or any other external feed.
@@ -12,7 +13,10 @@ Step 20 adds administrator-installed package discovery, trusted in-process loadi
 validation, and activation through repeatable CLI package and trust roots. Discovery
 is disabled by default and performs no network access. Sidecars remain deferred
 until a concrete consumer requires process isolation or another implementation
-language. Package Staging and external publication remain out of scope.
+language. Step 22 adds the independently packed `NuTest.PackageStaging` reference
+extension and generic staged-content, atomic-publication, transactional-state,
+route-header/body-binding, and state-manifest contracts. External publication remains
+out of scope.
 
 ## Packages, assemblies, and target framework
 
@@ -20,8 +24,8 @@ The two public package and assembly identities are:
 
 | Package and assembly | Version | Purpose |
 | --- | --- | --- |
-| `NuGet.TestServer.Extensions.Sdk` | `1.0.0` | Supported extension contracts, strict JSON manifest parser, schema, canonical identities, conformance checks, and attestation APIs |
-| `NuGet.TestServer.Extensions.TestKit` | `1.0.0` | Typed manifest builder, capability fake, and conformance helper |
+| `NuGet.TestServer.Extensions.Sdk` | `1.3.0` | Supported extension contracts, strict JSON manifest parser, schema, canonical identities, conformance checks, and attestation APIs |
+| `NuGet.TestServer.Extensions.TestKit` | `1.1.0` | Typed manifest builder, capability fake, and conformance helper |
 
 Both packages target only `net10.0`. This is intentional for v1: the server,
 kernel, official extension assembly, CLI, functional tests, and independently
@@ -105,8 +109,8 @@ capability contract, and structural contract identities are independent typed
 surfaces. Sidecar RPC would be an additional independent surface, but no sidecar
 contract exists in Step 19.
 
-The host-supported SDK range today is `1.0.0` through `1.2.0`, inclusive, and only
-within major version 1. An SDK below `1.0.0`, above `1.2.0`, or in another major is
+The host-supported SDK range today is `1.0.0` through `1.3.0`, inclusive, and only
+within major version 1. An SDK below `1.0.0`, above `1.3.0`, or in another major is
 unsupported. A manifest range must include a host-supported selection, and every
 declared contract version and structural identity must match that selection.
 Unknown required fields, unsupported ranges, missing identities, or any version or

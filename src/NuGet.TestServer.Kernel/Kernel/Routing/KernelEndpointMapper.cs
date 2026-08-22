@@ -93,6 +93,59 @@ internal sealed class HttpEndpointRequest(
     public override string GetNormalizedPackageVersion(string name) =>
         KernelPackageVersions.Normalize(GetRoute(name));
 
+    public override string? GetHeader(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return context.Request.Headers.TryGetValue(name, out var values) && values.Count > 0
+            ? values[0]
+            : null;
+    }
+
+    public override async ValueTask<BoundedDocument> ReadBoundedBodyAsync(
+        long maximumBytes,
+        CancellationToken cancellationToken)
+    {
+        if (maximumBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumBytes));
+        }
+
+        if (context.Request.ContentLength is { } declared && declared > maximumBytes)
+        {
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.PayloadTooLarge,
+                new OperationProblemBody("The request body exceeds the declared route limit.")));
+        }
+
+        using var buffer = new MemoryStream();
+        var chunk = new byte[Math.Min(81920, maximumBytes)];
+        var total = 0L;
+        while (true)
+        {
+            var read = await context.Request.Body.ReadAsync(chunk, cancellationToken);
+            if (read == 0)
+            {
+                break;
+            }
+
+            total += read;
+            if (total > maximumBytes)
+            {
+                throw new OperationBindingException(new OperationResult(
+                    OperationResultStatus.PayloadTooLarge,
+                    new OperationProblemBody(
+                        "The request body exceeds the declared route limit.")));
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken);
+        }
+
+        return new BoundedDocument(
+            buffer.ToArray(),
+            maximumBytes,
+            context.Request.ContentType ?? "application/octet-stream");
+    }
+
     public override int? GetQueryInt32(string name)
     {
         var value = GetQuery(name);
@@ -123,11 +176,17 @@ internal sealed class HttpEndpointRequest(
                 $"Failed to bind parameter \"{name}\" from \"{value}\".");
     }
 
-    public override StreamHandle BindBodyStream() =>
-        execution.Content.RegisterStream(
+    public override StreamHandle BindBodyStream()
+    {
+        var declaredLength = context.Request.ContentLength ?? 0;
+        return execution.Content.RegisterStream(
             context.Request.Body,
             context.Request.ContentType ?? "application/octet-stream",
-            context.Request.ContentLength ?? 0);
+            declaredLength,
+            maximumLength: Limits.MaxRequestBytes > 0
+                ? Limits.MaxRequestBytes
+                : Math.Max(1, declaredLength));
+    }
 
     public override async ValueTask<StreamHandle> BindUploadAsync(
         string missingFileDetail,
@@ -161,7 +220,10 @@ internal sealed class HttpEndpointRequest(
         return execution.Content.RegisterStream(
             file.OpenReadStream(),
             file.ContentType ?? "application/octet-stream",
-            file.Length);
+            file.Length,
+            maximumLength: Limits.MaxRequestBytes > 0
+                ? Limits.MaxRequestBytes
+                : Math.Max(1, file.Length));
     }
 
     public override StreamHandle RegisterContent(ReadOnlyMemory<byte> content, string contentType) =>

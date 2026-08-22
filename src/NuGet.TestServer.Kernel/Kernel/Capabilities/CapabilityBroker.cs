@@ -1036,7 +1036,8 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _grants,
                     _audit,
                     _limits,
-                    _services.StorageDirectory),
+                    _services.StorageDirectory,
+                    _services.ExtensionState.Participants),
             var type when type == typeof(IRegistrationVulnerabilityReadCapability) =>
                 new VulnerabilityReadCapability(
                     _hostInstanceId,
@@ -1104,6 +1105,30 @@ internal sealed class CapabilityOwnerContext : IExtensionCapabilities
                     _audit,
                     _limits,
                     _services.Clock),
+            var type when type == typeof(ITransactionalStateCapability) =>
+                new TransactionalStateCapabilityHandle(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.ExtensionState),
+            var type when type == typeof(IStagedContentWriteCapability) =>
+                new StagedContentWriteCapabilityHandle(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.StagedPublication()),
+            var type when type == typeof(IAtomicPackagePublicationCapability) =>
+                new AtomicPackagePublicationCapabilityHandle(
+                    _hostInstanceId,
+                    _ownerId,
+                    _grants,
+                    _audit,
+                    _limits,
+                    _services.StagedPublication()),
             _ => throw new InvalidOperationException(
                 $"Capability handle type '{typeof(T).FullName}' is not available.")
         };
@@ -1191,7 +1216,14 @@ internal static class CapabilityContracts
             [typeof(IPackageSignatureInspectionCapability)] = Set(
                 BuiltInCapabilityNames.SupplyChainSignatureInspect),
             [typeof(IPackageScannerCapability)] = Set(
-                BuiltInCapabilityNames.SupplyChainPackageScan)
+                BuiltInCapabilityNames.SupplyChainPackageScan),
+            [typeof(ITransactionalStateCapability)] = Set(
+                BuiltInCapabilityNames.ExtensionStateRead,
+                BuiltInCapabilityNames.ExtensionStateWrite),
+            [typeof(IStagedContentWriteCapability)] = Set(
+                BuiltInCapabilityNames.PackageContentWriteStaged),
+            [typeof(IAtomicPackagePublicationCapability)] = Set(
+                BuiltInCapabilityNames.PublicationRequest)
         };
 
     public static bool Supports(Type type, string capabilityName) =>
@@ -1217,7 +1249,17 @@ internal sealed record CapabilityServices(
     IExtensionHealthSource ExtensionHealth,
     KernelOutboundHttpClient OutboundHttp,
     PackageTransferLimits PackageLimits,
-    TimeProvider Clock);
+    TimeProvider Clock)
+{
+    /// <summary>
+    /// The host-scoped staged publication coordinator. It is resolved lazily for the
+    /// same reason as the supply chain: the coordinator depends on services the host
+    /// composes after the capability services record is created.
+    /// </summary>
+    public Func<StagedPublicationCoordinator> StagedPublication { get; init; } =
+        () => throw new InvalidOperationException(
+            "This host does not compose a staged publication coordinator.");
+}
 
 internal sealed class PackageSignatureInspectionCapability(
     string hostInstanceId,
@@ -2371,7 +2413,8 @@ internal sealed class RestoreCheckpointCapability(
     ImmutableHashSet<string> grants,
     CapabilityAuditLog audit,
     CapabilityLimits limits,
-    string? storageDirectory)
+    string? storageDirectory,
+    ImmutableArray<StateParticipantDescriptor> participants)
     : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
         IRestoreCheckpointCapability
 {
@@ -2392,7 +2435,11 @@ internal sealed class RestoreCheckpointCapability(
                     var file = OperationExecutionScope.Required.Content.Resolve(source).FilePath
                         ?? throw new InvalidOperationException(
                             "Restore requires a kernel-issued file handle.");
-                    var manifest = await StorageBackup.RestoreAsync(file, storageDirectory, ct);
+                    var manifest = await StorageBackup.RestoreAsync(
+                        file,
+                        storageDirectory,
+                        participants,
+                        ct);
                     return OperationsCheckpointDocuments.Map(manifest);
                 },
                 token);
@@ -2794,4 +2841,260 @@ internal sealed class ResponseLifetimeStream(Stream inner, IDisposable lifetime)
         lifetime.Dispose();
         GC.SuppressFinalize(this);
     }
+}
+
+internal sealed class TransactionalStateCapabilityHandle(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    TransactionalStateStore store)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        ITransactionalStateCapability
+{
+    public ValueTask<TransactionalStateEntry<T>?> ReadEntryAsync<T>(
+        string key,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateRead)
+            .InvokeAsync(
+                "state.read",
+                async token =>
+                {
+                    var record = await store.ReadAsync(OwnerId, key, token, MaximumStreamBytes);
+                    if (record is null)
+                    {
+                        return null;
+                    }
+
+                    var value = System.Text.Json.JsonSerializer.Deserialize<T>(record.Value);
+                    return value is null
+                        ? null
+                        : new TransactionalStateEntry<T>(value, record.ETag);
+                },
+                cancellationToken);
+
+    public ValueTask<TransactionalStateWriteResult> WriteAsync<T>(
+        string key,
+        T value,
+        long? expectedConcurrencyToken,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateWrite)
+            .InvokeAsync(
+                "state.write",
+                async token =>
+                {
+                    try
+                    {
+                        var record = await store.WriteAsync(
+                            OwnerId,
+                            key,
+                            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value),
+                            expectedConcurrencyToken,
+                            token,
+                            MaximumStreamBytes,
+                            requireAbsent: expectedConcurrencyToken is null);
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.Written,
+                            record.ETag,
+                            null);
+                    }
+                    catch (StateConcurrencyException)
+                    {
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.ConcurrencyConflict,
+                            0,
+                            "The state record changed since it was read.");
+                    }
+                    catch (StateQuotaExceededException)
+                    {
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.QuotaExceeded,
+                            0,
+                            "The extension exceeded its state quota.");
+                    }
+                    catch (ArgumentException)
+                    {
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.Invalid,
+                            0,
+                            "The state key or value is invalid.");
+                    }
+                },
+                cancellationToken);
+
+    public ValueTask<TransactionalStateWriteResult> DeleteAsync(
+        string key,
+        long expectedConcurrencyToken,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateWrite)
+            .InvokeAsync(
+                "state.delete",
+                async token =>
+                {
+                    try
+                    {
+                        await store.DeleteAsync(OwnerId, key, expectedConcurrencyToken, token);
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.Written,
+                            0,
+                            null);
+                    }
+                    catch (StateConcurrencyException)
+                    {
+                        return new TransactionalStateWriteResult(
+                            TransactionalStateWriteOutcome.ConcurrencyConflict,
+                            0,
+                            "The state record changed since it was read.");
+                    }
+                },
+                cancellationToken);
+
+    public ValueTask<IReadOnlyList<string>> ListKeysAsync(
+        string keyPrefix,
+        int take,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.ExtensionStateRead)
+            .InvokeAsync<IReadOnlyList<string>>(
+                "state.list",
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    return ValueTask.FromResult<IReadOnlyList<string>>(
+                        store.ListKeys(OwnerId, keyPrefix ?? string.Empty, take));
+                },
+                cancellationToken);
+}
+
+internal sealed class StagedContentWriteCapabilityHandle(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    StagedPublicationCoordinator coordinator)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IStagedContentWriteCapability
+{
+    public ValueTask<StagedContentWriteResult> WritePackageAsync(
+        StreamHandle content,
+        CancellationToken cancellationToken) =>
+        StreamGate(BuiltInCapabilityNames.PackageContentWriteStaged)
+            .InvokeAsync(
+                "staged-content.write-package",
+                async token =>
+                {
+                    var (stream, limit, owned) = Resolve(content);
+                    try
+                    {
+                        return await coordinator.StagePackageAsync(OwnerId, stream, limit, token);
+                    }
+                    finally
+                    {
+                        if (owned)
+                        {
+                            await stream.DisposeAsync();
+                        }
+                    }
+                },
+                cancellationToken);
+
+    public ValueTask<StagedContentWriteResult> WriteSymbolsAsync(
+        StreamHandle content,
+        StagedPackageIdentity expectedIdentity,
+        CancellationToken cancellationToken) =>
+        StreamGate(BuiltInCapabilityNames.PackageContentWriteStaged)
+            .InvokeAsync(
+                "staged-content.write-symbols",
+                async token =>
+                {
+                    var (stream, limit, owned) = Resolve(content);
+                    try
+                    {
+                        return await coordinator.StageSymbolsAsync(
+                            OwnerId,
+                            stream,
+                            expectedIdentity,
+                            limit,
+                            token);
+                    }
+                    finally
+                    {
+                        if (owned)
+                        {
+                            await stream.DisposeAsync();
+                        }
+                    }
+                },
+                cancellationToken);
+
+    public ValueTask<StagedContentReleaseResult> ReleaseAsync(
+        StagedContentHandle handle,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.PackageContentWriteStaged)
+            .InvokeAsync(
+                "staged-content.release",
+                token => coordinator.ReleaseAsync(OwnerId, handle.HandleId, token),
+                cancellationToken);
+
+    /// <summary>
+    /// Opens kernel-issued content. The request body belongs to the gateway, so only
+    /// streams this capability creates are reported as owned and disposed here.
+    /// </summary>
+    private (Stream Stream, long Limit, bool Owned) Resolve(StreamHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        var content = OperationExecutionScope.Required.Content.Resolve(handle);
+        var limit = Math.Min(
+            handle.MaximumLength <= 0 ? MaximumStreamBytes : handle.MaximumLength,
+            MaximumStreamBytes);
+        if (content.Stream is { } stream)
+        {
+            return (stream, limit, false);
+        }
+
+        if (content.Bytes is { } bytes)
+        {
+            return (new MemoryStream(bytes.ToArray(), writable: false), limit, true);
+        }
+
+        return content.FilePath is { } path
+            ? (File.OpenRead(path), limit, true)
+            : throw new InvalidOperationException("Staged content has no readable payload.");
+    }
+}
+
+internal sealed class AtomicPackagePublicationCapabilityHandle(
+    string hostInstanceId,
+    string ownerId,
+    ImmutableHashSet<string> grants,
+    CapabilityAuditLog audit,
+    CapabilityLimits limits,
+    StagedPublicationCoordinator coordinator)
+    : CapabilityHandle(hostInstanceId, ownerId, grants, audit, limits),
+        IAtomicPackagePublicationCapability
+{
+    public ValueTask<AtomicPublicationResult> PublishAsync<TState>(
+        AtomicPublicationRequest<TState> request,
+        CancellationToken cancellationToken) =>
+        Gate(BuiltInCapabilityNames.PublicationRequest)
+            .InvokeAsync(
+                "publication.request",
+                token =>
+                {
+                    ArgumentNullException.ThrowIfNull(request);
+                    ArgumentNullException.ThrowIfNull(request.PackageContent);
+                    ArgumentNullException.ThrowIfNull(request.StateTransition);
+                    return coordinator.PublishAsync(
+                        OwnerId,
+                        new StagedPublicationCommand(
+                            request.PackageContent.HandleId,
+                            request.SymbolContent?.HandleId,
+                            request.IdempotencyKey,
+                            request.StateTransition.Key,
+                            request.StateTransition.ExpectedConcurrencyToken,
+                            StagedPublicationCoordinator.Serialize(request.StateTransition.Value)),
+                        token);
+                },
+                cancellationToken);
 }

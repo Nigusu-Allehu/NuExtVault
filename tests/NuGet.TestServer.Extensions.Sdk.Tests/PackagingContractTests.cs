@@ -26,14 +26,14 @@ public sealed class PackagingContractTests
         Assert.Equal(0, results[1].ExitCode);
 
         AssertPackage(
-            Path.Combine(output, "NuGet.TestServer.Extensions.Sdk.1.0.0.nupkg"),
+            Path.Combine(output, "NuGet.TestServer.Extensions.Sdk.1.3.0.nupkg"),
             [
                 "lib/net10.0/NuGet.TestServer.Extensions.Sdk.dll",
                 "lib/net10.0/NuGet.TestServer.Extensions.Sdk.xml",
                 "contentFiles/any/any/nutestserver/extension-manifest-v1.schema.json"
             ]);
         AssertPackage(
-            Path.Combine(output, "NuGet.TestServer.Extensions.TestKit.1.0.0.nupkg"),
+            Path.Combine(output, "NuGet.TestServer.Extensions.TestKit.1.1.0.nupkg"),
             [
                 "lib/net10.0/NuGet.TestServer.Extensions.TestKit.dll",
                 "lib/net10.0/NuGet.TestServer.Extensions.TestKit.xml"

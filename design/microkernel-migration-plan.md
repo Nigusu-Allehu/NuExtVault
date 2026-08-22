@@ -55,6 +55,44 @@ kernel source change. SDK/TestKit packages are stabilized for local packing but 
 not published externally. Filesystem discovery, assembly load contexts, and
 activation begin in Step 20.
 
+Step 22 implements Package Staging as the reference external extension. It lives in
+`src/NuGet.TestServer.Extensions.PackageStaging`, is independently packable as
+`NuTest.PackageStaging`, references only the public SDK (v1.3.0), ships a strict
+manifest with a signed ES256 conformance attestation, and loads through the Step 20
+trusted in-process package loader. It is absent from every official catalog, kernel
+catalog, and default profile: an administrator must supply extension roots, trust
+roots, and explicit capability grants (`--extension-root`, `--extension-trust-root`,
+`--extension-grant`). An ungranted required capability still fails startup.
+
+Step 22 added these generic kernel mechanisms, none of which name staging:
+
+- An optional manifest `state` declaration. The kernel registers the declared
+  namespaced schema with its transactional extension store before the host listens,
+  so any extension can own authoritative state with migrations, quotas, checkpoints,
+  and crash-safe restore.
+- Manifest-declared route body binding (`none`, `bounded`, or `stream`) plus declared
+  request headers. A streaming route receives a kernel-issued, non-buffering
+  `StreamHandle`; a bounded route receives the body the kernel already read under the
+  declared limit. Binders never see `HttpContext`, and undeclared or reserved headers
+  stay invisible.
+- An optional contribution `routeId` reference so a service-index resource can name
+  one of several declared routes while the kernel still projects the absolute URL.
+- A host-scoped staged content store: in memory for an embedded host and under the
+  configured storage directory otherwise, with per-owner quotas, leases, owner and
+  host binding, orphan removal, and coherent participation in backup and restore.
+- A kernel-owned publication recovery journal. The journal is written before the
+  package transaction begins and the outcome is recorded before any dependent state
+  moves, so a retry with the same idempotency key replays the recorded result and a
+  restarted host deterministically finishes or fails closed. An extension never
+  applies a compensating compare-and-swap after publication.
+
+Public SDK capabilities added additively at v1.3.0: `IStagedContentWriteCapability`
+(`packages.content.write-staged`), `IAtomicPackagePublicationCapability`
+(`publication.request`), and `ITransactionalStateCapability`
+(`extension-state.read` and `extension-state.write`). Sidecar execution is not
+required; the in-process loader is sufficient, and Package Staging produced no
+evidence that changes the Step 21 entry condition.
+
 Target architecture:
 [`design/microkernel-extension-architecture.md`](../design/microkernel-extension-architecture.md).
 
@@ -928,7 +966,7 @@ packages targeting `net10.0`. The SDK contains the strict deterministic JSON sch
 and parser, typed independently versioned identities, public new-operation and route
 binding surfaces, bounded capability contracts, canonical UTF-8/SHA-256 identities,
 and ES256 conformance attestation verification. Official modules and the separately
-compiled fixture conform at the oldest (`1.0.0`) and current (`1.2.0`) supported SDK
+compiled fixture conform at the oldest (`1.0.0`) and then-current (`1.2.0`) SDK
 versions. No external publication, discovery, loading, activation, or sidecar is
 included. The authoritative decisions and migration guide are in
 [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md).
@@ -1175,7 +1213,7 @@ Resolve these questions before the named gate:
   contribution are public; replacement is disabled and built-ins are nonreplaceable.
 - Answered in Steps 11C and 19: `OperationResult` is transport-neutral and structural
   negotiation fails closed across independently versioned contracts.
-- Answered in Step 19: the host accepts SDK `1.0.0` through `1.2.0` inclusive within
+- Answered in Steps 19 and 22: the host accepts SDK `1.0.0` through `1.3.0` inclusive within
   major 1; the 12-month/two-minor support floor begins only after first publication.
 - Answered in Step 19: canonical UTF-8 bytes and lowercase SHA-256 identities are
   frozen by goldens and shared by manifest, structural, and attestation definitions.

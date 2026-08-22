@@ -100,9 +100,69 @@ Embedded and programmatic hosts remain network-independent and load no external
 packages unless explicitly configured. To roll back, remove the extension-root
 options and restart; the official extension bundle continues unchanged.
 
-Manifest v1 service-resource declarations do not carry a route reference. Therefore
-an external manifest that advertises a service resource must currently declare
-exactly one route, which becomes that resource's projected URL.
+Manifest v1 service-resource declarations may carry an optional `routeId` reference.
+An extension that declares more than one route must name the route that backs its
+service resource; the kernel resolves the reference and projects the absolute URL. An
+extension with exactly one route may omit the reference.
+
+Capabilities stay denied by default. Grant an installed extension the capabilities
+its manifest requires with repeated `--extension-grant` options:
+
+```powershell
+dotnet run --project .\src\NuGet.TestServer.Cli -- start `
+  --extension-root C:\NuTestServer\extensions `
+  --extension-trust-root C:\NuTestServer\trust\contoso.json `
+  --extension-grant extension-state.read `
+  --extension-grant extension-state.write
+```
+
+An extension whose required capability is not granted fails startup instead of
+running with reduced privileges.
+
+## Optional Package Staging extension
+
+`NuTest.PackageStaging` is an optional, independently packable extension in
+`src/NuGet.TestServer.Extensions.PackageStaging`. It is absent from every default
+profile; installing it requires an extension root, a trust root, and explicit grants
+for `host.clock.read`, `extension-state.read`, `extension-state.write`,
+`packages.content.write-staged`, and `publication.request`.
+
+Once installed it serves these administrator-only routes:
+
+```text
+PUT    /staging/groups/{groupId}
+GET    /staging/groups
+GET    /staging/groups/{groupId}
+PUT    /staging/groups/{groupId}/packages
+PUT    /staging/groups/{groupId}/packages/{packageId}/{version}/symbols
+GET    /staging/groups/{groupId}/packages/{packageId}/{version}
+POST   /staging/groups/{groupId}/packages/{packageId}/{version}/promote
+POST   /staging/groups/{groupId}/packages/{packageId}/{version}/reject
+POST   /staging/groups/{groupId}/expire
+```
+
+Uploads stream the request body straight into kernel-owned staged storage; the kernel
+extracts and validates package and symbol identity and rejects malformed archives.
+Staged packages are invisible to `/query`, `/registration`, and `/flatcontainer`
+until promotion and visible immediately after it. Promotion runs through the kernel's
+publication pipeline behind a recovery journal, so repeating a request with the same
+`Idempotency-Key` replays the recorded result instead of publishing twice.
+Expired staged leases are reclaimed while the host runs and before new quota
+admission. Backups include staged bytes, extension state, and the publication journal.
+Restore a backup containing required staging state with the same trusted package
+configuration:
+
+```powershell
+nuget-test-server restore --input .\backup.zip --storage .\restored `
+  --extension-root .\extensions `
+  --extension-trust-root .\trust\nutest.json
+```
+
+Every response carries a typed `outcome` string, for example:
+
+```json
+{ "outcome": "Succeeded", "packageId": "Contoso.Sample", "version": "1.2.3", "replayed": false, "detail": null }
+```
 
 ## Start the server
 

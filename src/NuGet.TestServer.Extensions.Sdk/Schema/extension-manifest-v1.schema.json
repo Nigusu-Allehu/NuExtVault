@@ -72,8 +72,19 @@
         "properties": {
           "id": { "$ref": "#/$defs/stableIdentity" },
           "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
-          "version": { "const": 1 }
+          "version": { "const": 1 },
+          "routeId": { "type": "string", "minLength": 1, "maxLength": 256 }
         }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "schemaName", "schemaVersion", "required" ],
+      "properties": {
+        "schemaName": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]*$" },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "required": { "type": "boolean" }
       }
     },
     "routes": {
@@ -96,6 +107,13 @@
           "path": { "type": "string", "pattern": "^/(?:[^?#]*)$", "maxLength": 1024 },
           "access": { "enum": [ "anonymous", "read", "write", "publish", "unlist", "delete", "admin", "control" ] },
           "head": { "enum": [ "none", "mirrors-get" ] },
+          "body": { "enum": [ "none", "bounded", "stream" ] },
+          "headers": {
+            "type": "array",
+            "maxItems": 16,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9-]+$" }
+          },
           "maximumRequestBytes": { "type": "integer", "minimum": 0 },
           "maximumResponseBytes": { "type": "integer", "minimum": 1 },
           "timeoutMilliseconds": { "type": "integer", "minimum": 1, "maximum": 3600000 }

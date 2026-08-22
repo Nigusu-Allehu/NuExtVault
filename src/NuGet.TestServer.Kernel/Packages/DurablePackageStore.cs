@@ -127,6 +127,16 @@ public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
             _symbols.GetValueOrDefault(SymbolKey(id, Normalize(version)))?.ToArray());
     }
 
+    public ValueTask<byte[]?> FindStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(
+            _symbols.GetValueOrDefault(SymbolKey(id, Normalize(version)))?.ToArray());
+    }
+
     public async ValueTask AddSymbolAsync(byte[] content, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(content);
@@ -156,9 +166,33 @@ public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
                     package.NormalizedVersion);
             }
         }
+
         finally
         {
             package.Dispose();
+            _gate.Release();
+        }
+    }
+
+    public async ValueTask<bool> DeleteStoredSymbolAsync(
+        string id,
+        string version,
+        CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token);
+        try
+        {
+            var normalizedVersion = Normalize(version);
+            if (!_symbols.TryRemove(SymbolKey(id, normalizedVersion), out _))
+            {
+                return false;
+            }
+
+            _blobs.Delete(GetSymbolRelativePath(id, normalizedVersion));
+            return true;
+        }
+        finally
+        {
             _gate.Release();
         }
     }
