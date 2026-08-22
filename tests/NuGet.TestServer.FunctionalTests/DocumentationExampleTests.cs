@@ -85,10 +85,17 @@ public sealed class DocumentationExampleTests
         var examples = Examples();
         Assert.Contains("Source:      http://127.0.0.1:<port>/v3/index.json",
             examples["user-01-start-output"].Content, StringComparison.Ordinal);
+        var productionStart = examples["user-04-production-start"].Content;
+        Assert.StartsWith("$env:NUTEST_IDENTITIES = \"{{IDENTITY_JSON}}\"",
+            productionStart, StringComparison.Ordinal);
+        Assert.Contains("& \"{{TOOL_COMMAND}}\" start --production",
+            productionStart, StringComparison.Ordinal);
         Assert.Contains("--identity-config-env NUTEST_IDENTITIES",
-            examples["user-04-production-start"].Content, StringComparison.Ordinal);
+            productionStart, StringComparison.Ordinal);
         Assert.Contains("--trusted-proxy 127.0.0.1",
-            examples["user-04-production-start"].Content, StringComparison.Ordinal);
+            productionStart, StringComparison.Ordinal);
+        Assert.Contains("--port \"{{PORT}}\"", productionStart, StringComparison.Ordinal);
+        Assert.Contains("--storage \"{{STORAGE}}\"", productionStart, StringComparison.Ordinal);
 
         var config = XDocument.Parse(examples["user-02-nuget-config"].Content);
         var source = config.Descendants("add").Single();
@@ -112,7 +119,15 @@ public sealed class DocumentationExampleTests
             examples["user-07-package-layout"].Content.ReplaceLineEndings());
 
         using var trust = JsonDocument.Parse(examples["user-07-trust-root"].Content);
+        Assert.Equal(4, trust.RootElement.EnumerateObject().Count());
+        Assert.Equal("Contoso", trust.RootElement.GetProperty("publisher").GetString());
+        Assert.Equal(
+            "contoso-extension-signing-2026",
+            trust.RootElement.GetProperty("keyId").GetString());
         Assert.Equal("ES256", trust.RootElement.GetProperty("algorithm").GetString());
+        Assert.Equal(
+            "<base64 DER SubjectPublicKeyInfo>",
+            trust.RootElement.GetProperty("subjectPublicKeyInfoBase64").GetString());
         var grants =
             new[] { "host.clock.read", "extension-state.read", "extension-state.write",
                     "packages.content.write-staged", "publication.request" };
