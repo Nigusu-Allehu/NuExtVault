@@ -5,6 +5,7 @@ using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 
 namespace NuGet.TestServer.UnitTests;
 
@@ -111,11 +112,7 @@ public sealed class ExtensionModuleFitnessTests
             @"\bResults\s*\.|\bHttpContext\b|\bIEndpointRouteBuilder\b|\bWebApplication\b|" +
             @"\bIServiceProvider\b|\bUtf8JsonWriter\b",
             RegexOptions.CultureInvariant);
-        var offenders = EnumerateSourceFiles(Path.Combine(
-                RepositoryRoot,
-                "src",
-                "NuGet.TestServer",
-                "Extensions"))
+        var offenders = EnumerateSourceFiles(OfficialExtensionRoot)
             .Where(file => forbidden.IsMatch(File.ReadAllText(file)))
             .Select(file => Path.GetRelativePath(RepositoryRoot, file))
             .Order(StringComparer.Ordinal)
@@ -127,41 +124,24 @@ public sealed class ExtensionModuleFitnessTests
     [Fact]
     public void Official_extension_owners_use_only_the_abstraction_contract_boundary()
     {
-        // The official extensions still live in the kernel assembly until the physical
-        // split, so the boundary is enforced on the namespaces they may import.
-        // NuGet.TestServer.Vulnerabilities holds the vulnerability extension's own
-        // feature state and moves with it in the Step 18 assembly split.
-        var allowed = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "NuGet.TestServer.Extensions.Abstractions",
-            "NuGet.TestServer.Extensions.Control",
-            "NuGet.TestServer.Extensions.FlatContainer",
-            "NuGet.TestServer.Extensions.Operations",
-            "NuGet.TestServer.Extensions.PackageManagement",
-            "NuGet.TestServer.Extensions.Search",
-            "NuGet.TestServer.Extensions.Registration",
-            "NuGet.TestServer.Extensions.Vulnerabilities",
-            "NuGet.TestServer.Kernel",
-            "NuGet.TestServer.Kernel.Capabilities",
-            "NuGet.TestServer.Hosting",
-            "NuGet.TestServer.Vulnerabilities"
-        };
+        // Step 18 made this a compiled boundary: the official extensions are their own
+        // assembly and may import the contracts plus their own feature namespaces only.
         var offenders = new List<string>();
-        foreach (var file in EnumerateSourceFiles(Path.Combine(
-                     RepositoryRoot,
-                     "src",
-                     "NuGet.TestServer",
-                     "Extensions")))
+        foreach (var file in EnumerateSourceFiles(OfficialExtensionRoot))
         {
             foreach (Match match in Regex.Matches(
                          File.ReadAllText(file),
                          @"using\s+(NuGet\.TestServer\.[A-Za-z0-9_\.]+)\s*;"))
             {
-                if (!allowed.Contains(match.Groups[1].Value))
+                var imported = match.Groups[1].Value;
+                if (imported == "NuGet.TestServer.Extensions.Abstractions" ||
+                    imported.StartsWith("NuGet.TestServer.Extensions.", StringComparison.Ordinal))
                 {
-                    offenders.Add(
-                        $"{Path.GetRelativePath(RepositoryRoot, file)}: {match.Groups[1].Value}");
+                    continue;
                 }
+
+                offenders.Add(
+                    $"{Path.GetRelativePath(RepositoryRoot, file)}: {imported}");
             }
         }
 
@@ -207,7 +187,7 @@ public sealed class ExtensionModuleFitnessTests
             "NuGet.TestServer.Operations.StorageBackupManifest",
             "NuGet.TestServer.Faults.FaultRule",
             "NuGet.TestServer.Requests.RequestRecord",
-            "NuGet.TestServer.Vulnerabilities.VulnerabilitySnapshot",
+            "NuGet.TestServer.Extensions.Vulnerabilities.VulnerabilitySnapshot",
             "System.IO.Stream",
             "System.IServiceProvider"
         ];
@@ -243,6 +223,10 @@ public sealed class ExtensionModuleFitnessTests
                     $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
                     StringComparison.Ordinal));
 
+    /// <summary>The source root of the separately compiled official extension assembly.</summary>
+    internal static string OfficialExtensionRoot =>
+        Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Official");
+
     internal static string RepositoryRoot { get; } = FindRepositoryRoot();
 
     private static string FindRepositoryRoot()
@@ -261,7 +245,9 @@ public sealed class ExtensionModuleFitnessTests
 
 /// <summary>
 /// Discovers the capability interfaces an official extension owner can reach and
-/// classifies whether a signature type may cross that boundary.
+/// classifies whether a signature type may cross that boundary. Discovery runs against
+/// the separately compiled official extension assembly, so it measures the real
+/// boundary rather than a namespace convention.
 /// </summary>
 internal static class ExtensionFacingCapabilities
 {
@@ -288,6 +274,8 @@ internal static class ExtensionFacingCapabilities
         "IPackageSymbolReadCapability",
         "IPackageSymbolsPushCapability",
         "IPackageUnlistCapability",
+        "IRegistrationMetadataReadCapability",
+        "IRegistrationVulnerabilityReadCapability",
         "IRestoreCheckpointCapability",
         "ISearchIndexQueryCapability",
         "IVulnerabilityCatalogCapability"
@@ -295,13 +283,9 @@ internal static class ExtensionFacingCapabilities
 
     public static ImmutableArray<Type> Discover()
     {
-        var assembly = typeof(ServerApplication).Assembly;
-        var capabilityNamespace = typeof(IPackageControlCapability).Namespace;
-        var owners = assembly.GetTypes()
-            .Where(type =>
-                type.Namespace is { } name &&
-                name.StartsWith("NuGet.TestServer.Extensions.", StringComparison.Ordinal))
-            .ToArray();
+        var assembly = typeof(NuGet.TestServer.Extensions.Official.OfficialExtensionModules)
+            .Assembly;
+        var owners = assembly.GetTypes();
         var reachable = owners
             .SelectMany(type => type
                 .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
@@ -315,10 +299,7 @@ internal static class ExtensionFacingCapabilities
                             .Append(method.ReturnType))))
             .Where(type =>
                 type.IsInterface &&
-                (type.Namespace == capabilityNamespace ||
-                 type == typeof(ISearchIndexQueryCapability) ||
-                 type == typeof(IPackageSignatureInspectionCapability) ||
-                 type == typeof(IPackageScannerCapability)))
+                type.Name.EndsWith("Capability", StringComparison.Ordinal))
             .Distinct()
             .OrderBy(type => type.Name, StringComparer.Ordinal)
             .ToImmutableArray();
@@ -356,32 +337,12 @@ internal static class ExtensionFacingCapabilities
             return false;
         }
 
+        // After the Step 18 split the boundary is the contract assembly itself: an
+        // extension-facing capability may only name contract types and framework types.
         var namespaceName = candidate.Namespace ?? string.Empty;
-        if (namespaceName == "NuGet.TestServer.Extensions.Abstractions" ||
-            namespaceName.StartsWith("System", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return candidate.Namespace == typeof(IPackageControlCapability).Namespace &&
-               ReviewedCapabilityDocuments.Contains(candidate.Name);
+        return namespaceName == "NuGet.TestServer.Extensions.Abstractions" ||
+               namespaceName.StartsWith("System", StringComparison.Ordinal);
     }
-
-    /// <summary>
-    /// Kernel-declared capability payloads that were explicitly reviewed as
-    /// contract-safe. <c>OutboundHttpResponse</c> carries a bounded byte document rather
-    /// than a raw stream. Adding an entry requires the same review.
-    /// </summary>
-    private static readonly ImmutableHashSet<string> ReviewedCapabilityDocuments =
-    [
-        "ExtensionStateEntry`1",
-        "ExtensionStateFile",
-        "ExtensionStateFileSet",
-        "OutboundHttpRequest",
-        "OutboundHttpResponse",
-        "VulnerabilityCatalogDocument",
-        "VulnerabilityCatalogPageDocument"
-    ];
 
     private static IEnumerable<Type> Expand(Type type, HashSet<Type> visited)
     {
@@ -411,7 +372,7 @@ internal static class ExtensionFacingCapabilities
             }
         }
 
-        if (type.Namespace == typeof(IPackageControlCapability).Namespace &&
+        if (type.Namespace == "NuGet.TestServer.Extensions.Abstractions" &&
             ReviewedCapabilityDocuments.Contains(type.Name))
         {
             foreach (var property in type.GetProperties(
@@ -424,4 +385,20 @@ internal static class ExtensionFacingCapabilities
             }
         }
     }
+
+    /// <summary>
+    /// Capability payloads that were explicitly reviewed as contract-safe and whose
+    /// members are expanded transitively. <c>OutboundHttpResponse</c> carries a bounded
+    /// byte document rather than a raw stream. Adding an entry requires the same review.
+    /// </summary>
+    private static readonly ImmutableHashSet<string> ReviewedCapabilityDocuments =
+    [
+        "ExtensionStateEntry`1",
+        "ExtensionStateFile",
+        "ExtensionStateFileSet",
+        "OutboundHttpRequest",
+        "OutboundHttpResponse",
+        "VulnerabilityCatalogDocument",
+        "VulnerabilityCatalogPageDocument"
+    ];
 }

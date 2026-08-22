@@ -4,22 +4,19 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Description>
+      The composition root. It is the only assembly allowed to reference both the kernel
+      and the official extension assembly: it selects the official bundle, resolves the
+      profile, and hands the kernel a validated host composition.
+    </Description>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.0" />
-    <PackageReference Include="NuGet.Packaging" Version="7.9.0" />
-    <PackageReference Include="NuGet.Protocol" Version="7.9.0" />
-    <PackageReference Include="SQLitePCLRaw.provider.e_sqlite3" Version="2.1.11" />
-    <PackageReference Include="SourceGear.sqlite3" Version="3.53.4" />
+    <ProjectReference Include="..\NuGet.TestServer.Kernel\NuGet.TestServer.Kernel.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.Extensions.Official\NuGet.TestServer.Extensions.Official.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
     <InternalsVisibleTo Include="NuGet.TestServer.Cli" />
     <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
     <InternalsVisibleTo Include="NuGet.TestServer.RouteFixture" />

@@ -185,20 +185,17 @@ public sealed class FlatContainerExtractionTests
         var extensionRoot = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "FlatContainer");
         var moduleList = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "OfficialExtensionModules.cs");
         var registrationRoot = Path.Combine(
             ExtensionModuleFitnessTests.RepositoryRoot,
             "src",
-            "NuGet.TestServer",
-            "Extensions",
+            "NuGet.TestServer.Extensions.Official",
             "Registration");
         var pattern = new Regex(
             Regex.Escape(FlatContainerExtensionId) + "|FlatContainerModule|FlatContainerOperations",

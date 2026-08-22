@@ -7,6 +7,7 @@ using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Vulnerabilities;
+using NuGet.TestServer.Extensions.Abstractions;
 
 namespace NuGet.TestServer.UnitTests;
 

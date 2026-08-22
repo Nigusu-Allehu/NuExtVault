@@ -11,6 +11,9 @@
   <ItemGroup>
     <AssemblyMetadata Include="CompatibilityStatus" Value="InternalPreCompatibility" />
     <InternalsVisibleTo Include="NuGet.TestServer" />
+    <InternalsVisibleTo Include="NuGet.TestServer.Cli" />
+    <InternalsVisibleTo Include="NuGet.TestServer.Extensions.Official" />
+    <InternalsVisibleTo Include="NuGet.TestServer.Kernel" />
     <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
     <InternalsVisibleTo Include="NuGet.TestServer.RouteFixture" />
     <InternalsVisibleTo Include="NuGet.TestServer.UnitTests" />

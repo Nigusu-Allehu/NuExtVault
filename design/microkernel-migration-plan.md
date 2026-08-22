@@ -1134,9 +1134,11 @@ Resolve these questions before the named gate:
 
 ### Before Step 18
 
-- What one-way assembly dependency graph is enforceable?
-- How are typed capabilities injected without kernel references to official
-  implementations?
+- Answered in Step 18: the enforceable one-way graph is
+  `Abstractions <- Kernel`, `Abstractions <- Official`, and
+  `Kernel + Official <- NuGet.TestServer` composition root.
+- Answered in Step 18: typed capabilities are declared in the abstractions,
+  implemented by the kernel, and resolved by declared capability identity.
 
 ### Before Step 19
 

@@ -6,6 +6,8 @@ using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Packages;
 using NuGet.TestServer.Requests;
 using NuGet.TestServer.Vulnerabilities;
+using NuGet.TestServer.Extensions.Abstractions;
+using NuGet.TestServer.Extensions.Vulnerabilities;
 
 namespace NuGet.TestServer.Hosting;
 

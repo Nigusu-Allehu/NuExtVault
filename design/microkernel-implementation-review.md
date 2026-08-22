@@ -184,7 +184,10 @@ After Steps 11A through 11D:
   is unchanged.
 - Lane C runs Step 16 supply-chain policy.
 - Step 17 package management waits for the read and policy lanes.
-- Step 18 performs the physical official assembly split.
+- Step 18 performs the physical official assembly split. It is implemented: the
+  official extensions ship as `NuGet.TestServer.Extensions.Official`, the kernel and
+  runtime as `NuGet.TestServer.Kernel`, and `NuGet.TestServer` is the only assembly
+  that references both.
 - Step 19 publishes no SDK until route, URL, rendering, capability, contract identity,
   support, signing, replacement, manifest, and target-framework decisions are made.
 - Step 20 adds trusted in-process loading.
@@ -302,6 +305,52 @@ search modules. No assembly split, public SDK/loading, sidecar, Package Staging,
 schema migration is included. Rollback restores the characterized legacy owner with no
 wire or data migration.
 
+## Step 18 implementation update
+
+The official extensions are now a separately compiled assembly. The enforced acceptance
+gate is the compiled assembly graph, not a namespace convention:
+
+```text
+NuGet.TestServer.Extensions.Abstractions      (contracts; System-only dependencies)
+        ^                              ^
+NuGet.TestServer.Kernel        NuGet.TestServer.Extensions.Official
+        ^                              ^
+        +------ NuGet.TestServer (composition root) ------+
+                          ^
+                 NuGet.TestServer.Cli
+```
+
+`NuGet.TestServer.Kernel` owns hosting, routing, security, the capability broker,
+package identity and content, storage, transactional state, checkpoints, moderation,
+and diagnostics. `NuGet.TestServer.Extensions.Official` owns the service index, flat
+container, registration, search, package management, operations, supply-chain policy,
+test control, and the vulnerability catalog feature together with its own snapshot
+state. Neither references the other. `NuGet.TestServer` is the only assembly that
+references both: it resolves the profile, selects the official bundle explicitly, and
+hands owners capabilities the kernel resolved by declared capability identity. The
+conformance fixture obeys the same compiled constraints as the official assembly.
+
+Contracts that had to cross the boundary moved into the abstractions rather than
+becoming an escape hatch: stable operation IDs, built-in extension and capability
+names, the extension-facing capability interfaces and their documents, the capability
+and extension-state failure contracts, and `IVulnerabilityCatalogSource`, the
+host-scoped catalog projection the kernel reads when it serves the vulnerability
+capability. Capability implementations remain kernel-owned; the official extension
+assembly references only the abstractions plus `NuGet.Versioning`, and no ASP.NET,
+storage, kernel, dependency-injection, raw-stream, filesystem, or secret surface.
+
+Every module ID, manifest, operation ID, typed route, service resource, profile
+selection, capability grant, contributor seam, owner uniqueness rule, ordering rule,
+and wire behavior is unchanged. Standard, embedded, production, CLI, and programmatic
+embedded bootstrap paths each select the official bundle explicitly, and parallel hosts
+stay isolated. The official assembly holds no process-global mutable state; the former
+static capability-requirement aggregate no longer enumerates official modules.
+
+The structural capability fingerprint gained two entries because the registration
+metadata and registration vulnerability contracts are now discovered through the
+compiled boundary; no existing entry changed. Rollback recombines the assemblies
+without any contract, wire, or data migration.
+
 ## Open questions and deadlines
 
 ### Before Step 12A
@@ -313,9 +362,13 @@ wire or data migration.
 
 ### Before Step 18
 
-- What one-way assembly graph prevents kernel references to official
-  implementations?
-- How are typed capabilities injected across that graph?
+- Answered in Step 18: the enforced graph is
+  `Abstractions <- Kernel`, `Abstractions <- Official`, and
+  `Kernel + Official <- NuGet.TestServer` composition root. Compiled
+  assembly-reference fitness tests are the acceptance gate.
+- Answered in Step 18: capability interfaces and their transport-neutral documents
+  live in the abstractions; the kernel implements them and the broker resolves handles
+  by declared capability identity, so no reflection or official type name is involved.
 
 ### Before Step 19
 

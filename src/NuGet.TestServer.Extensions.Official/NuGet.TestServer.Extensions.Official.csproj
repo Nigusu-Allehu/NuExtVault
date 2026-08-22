@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>NuGet.TestServer.Extensions</RootNamespace>
+    <Description>
+      The official NuGet.TestServer extensions. They are compiled separately from the
+      kernel and may reference only the extension abstractions and transport-neutral
+      packages, so the kernel has no compile-time knowledge of them.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NuGet.Versioning" Version="7.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NuGet.TestServer.Extensions.Abstractions\NuGet.TestServer.Extensions.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
+    <InternalsVisibleTo Include="NuGet.TestServer" />
+    <InternalsVisibleTo Include="NuGet.TestServer.Cli" />
+    <InternalsVisibleTo Include="NuGet.TestServer.FunctionalTests" />
+    <InternalsVisibleTo Include="NuGet.TestServer.UnitTests" />
+  </ItemGroup>
+
+</Project>

@@ -84,8 +84,8 @@ public sealed class EndpointCompositionFitnessTests
         var roots = new[]
         {
             Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Abstractions"),
-            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer", "Kernel", "Owners"),
-            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer", "Extensions")
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Kernel", "Kernel", "Owners"),
+            Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Official")
         };
         var forbidden = new Regex(
             @"\bBaseAddress\b|Request\.(Host|Scheme)|X-Forwarded-(Host|Proto|Prefix)|" +

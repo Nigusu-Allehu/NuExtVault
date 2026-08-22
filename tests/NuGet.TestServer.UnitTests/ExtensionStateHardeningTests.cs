@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel.Capabilities;
+using NuGet.TestServer.Extensions.Abstractions;
 
 namespace NuGet.TestServer.UnitTests;
 
