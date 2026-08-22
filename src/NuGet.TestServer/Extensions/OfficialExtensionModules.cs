@@ -3,6 +3,7 @@ using NuGet.TestServer.Extensions.Abstractions;
 using NuGet.TestServer.Extensions.FlatContainer;
 using NuGet.TestServer.Extensions.Operations;
 using NuGet.TestServer.Extensions.Search;
+using NuGet.TestServer.Extensions.Registration;
 
 namespace NuGet.TestServer.Extensions;
 
@@ -18,6 +19,7 @@ internal static class OfficialExtensionModules
     [
         new FlatContainerModule(),
         new OperationsModule(),
+        new RegistrationModule(),
         new SearchModule()
     ];
 

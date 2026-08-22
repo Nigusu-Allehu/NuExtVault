@@ -1,6 +1,6 @@
 using NuGet.Versioning;
 
-namespace NuGet.TestServer.Kernel.Owners.Registration;
+namespace NuGet.TestServer.Extensions.Registration;
 
 internal static class RegistrationPageBounds
 {

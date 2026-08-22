@@ -288,7 +288,7 @@ public sealed class OperationContractTests
             "Owners", "Downloads", "Description", "Summary", "Title", "Tags",
             "ProjectUrl", "Readme", "Icon", "LicenseExpression", "LicenseFile",
             "LicenseUrl", "PackageTypes", "Repository", "Listed", "Published",
-            "DependencyGroups", "Deprecation", "Vulnerabilities"
+            "DependencyGroups", "Deprecation", "Vulnerabilities", "Extensions"
         ];
         string[] searchFields =
         [

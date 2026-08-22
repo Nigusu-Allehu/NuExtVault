@@ -378,55 +378,56 @@ public sealed class SupplyChainPolicyParticipantTests
 
     private sealed class EmptyPolicyModule : IExtensionModule
     {
-            public const string PolicyPoint = "test.empty-policy";
-            public const string ParticipantId = "test.empty-participant";
+        public const string PolicyPoint = "test.empty-policy";
+        public const string ParticipantId = "test.empty-participant";
 
-            public ExtensionModuleContribution Contribution { get; } = new(
-                new ExtensionManifest(
-                    1,
-                    "test.empty-policy-module",
-                    new ExtensionVersion(1, 0, 0),
-                    ExtensionVersionRange.Major(1),
-                    [],
-                    [],
-                    [],
-                    [],
-                    []),
-                [])
-            {
-                PolicyParticipants =
-                [
-                    new PolicyParticipantDescriptor(
+        public ExtensionModuleContribution Contribution { get; } = new(
+            new ExtensionManifest(
+                1,
+                "test.empty-policy-module",
+                new ExtensionVersion(1, 0, 0),
+                ExtensionVersionRange.Major(1),
+                [],
+                [],
+                [],
+                [],
+                []),
+            [])
+        {
+            PolicyParticipants =
+            [
+                new PolicyParticipantDescriptor(
                         PolicyPoint,
                         ParticipantId,
                         IsAuthoritative: true)
-                ]
-            };
+            ]
+        };
 
-            public void RegisterOperations(
-                IOperationOwnerRegistry registry,
-                IExtensionCapabilities capabilities)
-            {
+        public void RegisterOperations(
+            IOperationOwnerRegistry registry,
+            IExtensionCapabilities capabilities,
+            IDocumentContributionSource documentContributions)
+        {
         }
 
-            public void RegisterPolicyParticipants(
-                IPolicyParticipantRegistry registry,
-                IExtensionCapabilities capabilities) =>
-                registry.Register(
-                    Contribution.Manifest.Id,
-                    new PolicyParticipantRegistration<string>(
-                        PolicyPoint,
-                        ParticipantId,
-                        IsAuthoritative: true,
-                        new StringPolicyParticipant()));
+        public void RegisterPolicyParticipants(
+            IPolicyParticipantRegistry registry,
+            IExtensionCapabilities capabilities) =>
+            registry.Register(
+                Contribution.Manifest.Id,
+                new PolicyParticipantRegistration<string>(
+                    PolicyPoint,
+                    ParticipantId,
+                    IsAuthoritative: true,
+                    new StringPolicyParticipant()));
 
-            private sealed class StringPolicyParticipant : IPolicyParticipant<string>
-            {
-                public ValueTask<PolicyDecision> EvaluateAsync(
-                    string context,
-                    CancellationToken cancellationToken) =>
-                    ValueTask.FromResult(new PolicyDecision(PolicyDecisionKind.Allow, null));
-            }
+        private sealed class StringPolicyParticipant : IPolicyParticipant<string>
+        {
+            public ValueTask<PolicyDecision> EvaluateAsync(
+                string context,
+                CancellationToken cancellationToken) =>
+                ValueTask.FromResult(new PolicyDecision(PolicyDecisionKind.Allow, null));
+        }
 
     }
 }

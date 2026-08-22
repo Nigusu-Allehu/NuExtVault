@@ -1,4 +1,4 @@
-using NuGet.TestServer.Kernel.Owners.Registration;
+using NuGet.TestServer.Extensions.Registration;
 
 namespace NuGet.TestServer.UnitTests;
 

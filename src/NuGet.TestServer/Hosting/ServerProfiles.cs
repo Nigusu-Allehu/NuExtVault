@@ -89,8 +89,7 @@ internal static class ServerProfiles
     private static readonly ExtensionSelection Protocol = Extension(
         BuiltInExtensionIds.Protocol,
         Required(BuiltInCapabilityNames.PackagesIdentityRead),
-        Required(BuiltInCapabilityNames.PackagesMetadataRead),
-        Required(BuiltInCapabilityNames.VulnerabilityStateRead));
+        Required(BuiltInCapabilityNames.PackagesMetadataRead));
     private static readonly ExtensionSelection ServiceIndex =
         Extension(BuiltInExtensionIds.ServiceIndex);
     private static readonly ExtensionSelection Publication = Extension(

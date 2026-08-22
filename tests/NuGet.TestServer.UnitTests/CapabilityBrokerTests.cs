@@ -9,7 +9,7 @@ using NuGet.TestServer.Hosting;
 using NuGet.TestServer.Kernel;
 using NuGet.TestServer.Kernel.Capabilities;
 using NuGet.TestServer.Kernel.Owners;
-using NuGet.TestServer.Kernel.Owners.Registration;
+using NuGet.TestServer.Extensions.Registration;
 using NuGet.TestServer.Extensions.Vulnerabilities;
 using NuGet.TestServer.Packages;
 
@@ -160,9 +160,9 @@ public sealed class CapabilityBrokerTests
             "hold",
             async token =>
             {
-               entered.SetResult();
-               await release.Task.WaitAsync(token);
-               return true;
+                entered.SetResult();
+                await release.Task.WaitAsync(token);
+                return true;
             },
             CancellationToken.None).AsTask();
         await entered.Task;

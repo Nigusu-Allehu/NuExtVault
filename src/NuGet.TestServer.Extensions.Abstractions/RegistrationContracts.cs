@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 
 namespace NuGet.TestServer.Extensions.Abstractions;
 
@@ -52,7 +53,59 @@ internal sealed record RegistrationLeafDocument(
     DateTimeOffset Published,
     ImmutableArray<PackageDependencyGroupDocument> DependencyGroups,
     PackageDeprecationDocument? Deprecation,
-    ImmutableArray<VulnerabilityAdvisoryDocument> Vulnerabilities);
+    ImmutableArray<VulnerabilityAdvisoryDocument> Vulnerabilities,
+    ImmutableSortedDictionary<string, RegistrationLeafExtensionDocument> Extensions);
+
+internal static class RegistrationContributionPoints
+{
+    public const string Leaf = "NuGet.Registration.BuildLeaf";
+    public const string LeafContractV1 = "registration-leaf-v1";
+}
+
+internal sealed record RegistrationLeafContributionContext(PackageIdentity Package);
+
+internal sealed record RegistrationLeafExtensionDocument(JsonElement Value);
+
+internal sealed record RegistrationPackageMetadata(
+    PackageIdentity Package,
+    string Authors,
+    ImmutableArray<string> Owners,
+    long Downloads,
+    string Description,
+    string? Summary,
+    string? Title,
+    ImmutableArray<string> Tags,
+    string? ProjectUrl,
+    string? Readme,
+    string? Icon,
+    string? LicenseExpression,
+    string? LicenseFile,
+    string? LicenseUrl,
+    ImmutableArray<PackageTypeDocument> PackageTypes,
+    PackageRepositoryDocument? Repository,
+    bool Listed,
+    DateTimeOffset Published,
+    ImmutableArray<PackageDependencyGroupDocument> DependencyGroups,
+    PackageDeprecationDocument? Deprecation);
+
+internal interface IRegistrationMetadataReadCapability
+{
+    ValueTask<ImmutableArray<RegistrationPackageMetadata>> FindByIdAsync(
+        string packageId,
+        CancellationToken cancellationToken);
+
+    ValueTask<RegistrationPackageMetadata?> FindLeafAsync(
+        string packageId,
+        string version,
+        CancellationToken cancellationToken);
+}
+
+internal interface IRegistrationVulnerabilityReadCapability
+{
+    ValueTask<ImmutableArray<VulnerabilityAdvisoryDocument>> FindAsync(
+        PackageIdentity package,
+        CancellationToken cancellationToken);
+}
 
 internal sealed record PackageDependencyGroupDocument(
     string TargetFramework,

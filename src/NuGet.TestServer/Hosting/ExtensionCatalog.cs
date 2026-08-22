@@ -597,28 +597,28 @@ internal sealed class ExtensionCatalog
         new($"catalog.{code}: {message}");
 
     private static IReadOnlyDictionary<string, IReadOnlySet<string>> WellKnownResourceVersions
-        { get; } = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
-        {
-            ["PackageBaseAddress"] = new HashSet<string>(["3.0.0"], StringComparer.Ordinal),
-            ["RegistrationsBaseUrl"] = new HashSet<string>(["3.6.0"], StringComparer.Ordinal),
-            ["SearchQueryService"] = new HashSet<string>(
+    { get; } = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
+    {
+        ["PackageBaseAddress"] = new HashSet<string>(["3.0.0"], StringComparer.Ordinal),
+        ["RegistrationsBaseUrl"] = new HashSet<string>(["3.6.0"], StringComparer.Ordinal),
+        ["SearchQueryService"] = new HashSet<string>(
                 ["3.0.0-beta", "3.5.0"],
                 StringComparer.Ordinal),
-            ["PackagePublish"] = new HashSet<string>(["2.0.0"], StringComparer.Ordinal),
-            ["SymbolPackagePublish"] = new HashSet<string>(["4.9.0"], StringComparer.Ordinal),
-            ["VulnerabilityInfo"] = new HashSet<string>(["6.7.0"], StringComparer.Ordinal)
-        };
+        ["PackagePublish"] = new HashSet<string>(["2.0.0"], StringComparer.Ordinal),
+        ["SymbolPackagePublish"] = new HashSet<string>(["4.9.0"], StringComparer.Ordinal),
+        ["VulnerabilityInfo"] = new HashSet<string>(["6.7.0"], StringComparer.Ordinal)
+    };
 
     private static IReadOnlyDictionary<string, ServiceResourceAccess> RequiredResourceAccess
-        { get; } = new Dictionary<string, ServiceResourceAccess>(StringComparer.Ordinal)
-        {
-            [OperationIds.FlatContainerGetVersions] = ServiceResourceAccess.Read,
-            [OperationIds.RegistrationGetIndex] = ServiceResourceAccess.Read,
-            [OperationIds.SearchQuery] = ServiceResourceAccess.Read,
-            [OperationIds.PackageManagementPush] = ServiceResourceAccess.PackagePublish,
-            [OperationIds.PackageManagementPushSymbols] = ServiceResourceAccess.Write,
-            [OperationIds.VulnerabilitiesGetIndex] = ServiceResourceAccess.Read
-        };
+    { get; } = new Dictionary<string, ServiceResourceAccess>(StringComparer.Ordinal)
+    {
+        [OperationIds.FlatContainerGetVersions] = ServiceResourceAccess.Read,
+        [OperationIds.RegistrationGetIndex] = ServiceResourceAccess.Read,
+        [OperationIds.SearchQuery] = ServiceResourceAccess.Read,
+        [OperationIds.PackageManagementPush] = ServiceResourceAccess.PackagePublish,
+        [OperationIds.PackageManagementPushSymbols] = ServiceResourceAccess.Write,
+        [OperationIds.VulnerabilitiesGetIndex] = ServiceResourceAccess.Read
+    };
 
     private enum VisitState
     {
@@ -654,26 +654,7 @@ internal static class BuiltInExtensionCatalog
     public static ImmutableArray<ExtensionManifest> Manifests { get; } =
     [
         Manifest(
-            BuiltInExtensionIds.Protocol,
-            operations: Operations(OperationFamily.Registration),
-            endpoints: RegistrationEndpoints.All,
-            resources:
-            [
-                Resource(
-                    "RegistrationsBaseUrl",
-                    "3.6.0",
-                    OperationIds.RegistrationGetIndex,
-                    "/registration/",
-                    producesUrlsFor: ["PackageBaseAddress/3.0.0"],
-                    requiresResourceTypes: ["PackageBaseAddress/3.0.0"],
-                    order: 20)
-            ],
-            capabilities:
-            [
-                Required(BuiltInCapabilityNames.PackagesIdentityRead),
-                Required(BuiltInCapabilityNames.PackagesMetadataRead),
-                Required(BuiltInCapabilityNames.VulnerabilityStateRead)
-            ]),
+            BuiltInExtensionIds.Protocol),
         Manifest(
             BuiltInExtensionIds.ServiceIndex,
             operations: Operations(OperationFamily.ServiceIndex),

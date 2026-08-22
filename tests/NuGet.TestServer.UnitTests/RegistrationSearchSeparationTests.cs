@@ -13,8 +13,7 @@ public sealed class RegistrationSearchSeparationTests
             RepositoryRoot,
             "src",
             "NuGet.TestServer",
-            "Kernel",
-            "Owners",
+            "Extensions",
             "Registration");
         var searchRoot = Path.Combine(
             RepositoryRoot,
@@ -22,14 +21,6 @@ public sealed class RegistrationSearchSeparationTests
             "NuGet.TestServer",
             "Extensions",
             "Search");
-        var neutralRoot = Path.Combine(
-            RepositoryRoot,
-            "src",
-            "NuGet.TestServer",
-            "Kernel",
-            "Owners",
-            "PackageMetadata");
-
         Assert.True(Directory.Exists(registrationRoot));
         Assert.True(Directory.Exists(searchRoot));
         Assert.DoesNotContain(
@@ -42,18 +33,6 @@ public sealed class RegistrationSearchSeparationTests
             file => File.ReadAllText(file).Contains(
                 "NuGet.TestServer.Kernel.Owners.Registration",
                 StringComparison.Ordinal));
-        Assert.DoesNotContain(
-            EnumerateSource(neutralRoot),
-            file =>
-            {
-                var text = File.ReadAllText(file);
-                return text.Contains(
-                           "NuGet.TestServer.Kernel.Owners.Registration",
-                           StringComparison.Ordinal) ||
-                       text.Contains(
-                           "NuGet.TestServer.Kernel.Owners.Search",
-                           StringComparison.Ordinal);
-            });
         Assert.False(File.Exists(Path.Combine(
             RepositoryRoot,
             "src",
@@ -70,12 +49,12 @@ public sealed class RegistrationSearchSeparationTests
             RepositoryRoot,
             "src",
             "NuGet.TestServer.Extensions.Abstractions");
-        var endpoints = Path.Combine(
+        var registration = Path.Combine(
             RepositoryRoot,
             "src",
             "NuGet.TestServer",
-            "Hosting",
-            "Endpoints");
+            "Extensions",
+            "Registration");
         var searchRoot = Path.Combine(
             RepositoryRoot,
             "src",
@@ -88,11 +67,17 @@ public sealed class RegistrationSearchSeparationTests
         var legacyContracts = File.ReadAllText(
             Path.Combine(abstractions, "ProtocolContracts.cs"));
         var legacyEndpoints = File.ReadAllText(
-            Path.Combine(endpoints, "ProtocolEndpoints.cs"));
+            Path.Combine(
+                RepositoryRoot,
+                "src",
+                "NuGet.TestServer",
+                "Hosting",
+                "Endpoints",
+                "ProtocolEndpoints.cs"));
 
         Assert.True(File.Exists(Path.Combine(abstractions, "RegistrationContracts.cs")));
         Assert.True(File.Exists(Path.Combine(abstractions, "SearchContracts.cs")));
-        Assert.True(File.Exists(Path.Combine(endpoints, "RegistrationEndpoints.cs")));
+        Assert.True(File.Exists(Path.Combine(registration, "RegistrationEndpoints.cs")));
         Assert.True(File.Exists(searchEndpoints));
         Assert.DoesNotContain("Registration", neutralContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("Search", neutralContracts, StringComparison.Ordinal);
@@ -103,7 +88,7 @@ public sealed class RegistrationSearchSeparationTests
     }
 
     [Fact]
-    public void Registration_keeps_its_protocol_owner_while_search_is_extracted()
+    public void Registration_and_search_are_owned_by_their_official_modules()
     {
         using var host = TestServerApplication.Build(ServerProfiles.Embedded);
         string[] registrationOperationIds =
@@ -122,18 +107,18 @@ public sealed class RegistrationSearchSeparationTests
         Assert.All(
             registrationOperationIds,
             operationId => Assert.Equal(
-                BuiltInExtensionIds.Protocol,
+                "builtin.registration",
                 host.Graph.Operations.Single(
                     operation => operation.OperationId == operationId).ExtensionId));
-        Assert.All(
-            registrationRoutePaths,
-            routePath => Assert.All(
-                host.Graph.Routes.Where(route => route.Path == routePath),
-                route => Assert.Equal(BuiltInExtensionIds.Protocol, route.ExtensionId)));
         Assert.Equal(
             SearchExtractionTests.SearchExtensionId,
             host.Graph.Operations.Single(
                 operation => operation.OperationId == OperationIds.SearchQuery).ExtensionId);
+        Assert.All(
+            registrationRoutePaths,
+            routePath => Assert.All(
+                host.Graph.Routes.Where(route => route.Path == routePath),
+                route => Assert.Equal("builtin.registration", route.ExtensionId)));
         Assert.All(
             host.Graph.Routes.Where(route => route.Path == "/query"),
             route => Assert.Equal(SearchExtractionTests.SearchExtensionId, route.ExtensionId));

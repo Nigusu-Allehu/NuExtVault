@@ -1,6 +1,6 @@
 using NuGet.TestServer.Extensions.Abstractions;
 
-namespace NuGet.TestServer.Kernel.Owners.Registration;
+namespace NuGet.TestServer.Extensions.Registration;
 
 internal static class RegistrationDocumentRenderer
 {
@@ -89,6 +89,14 @@ internal static class RegistrationDocumentRenderer
                     severity = advisory.Severity
                 })
                 .ToArray();
+        }
+
+        if (leaf.Extensions.Count > 0)
+        {
+            catalogEntry["extensions"] = leaf.Extensions.ToDictionary(
+                item => item.Key,
+                item => (object?)item.Value.Value,
+                StringComparer.Ordinal);
         }
 
         return new Dictionary<string, object?>

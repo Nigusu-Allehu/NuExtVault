@@ -11,8 +11,7 @@ namespace NuGet.TestServer.UnitTests;
 /// <summary>
 /// Step 13 extraction gates. The five flat-container and symbol read operations, their
 /// typed routes, and the package-base-address resource have exactly one owner: the
-/// official <c>NuGet.FlatContainer</c> extension. Registration ownership is unchanged,
-/// while search has its own independently extracted owner.
+/// official <c>NuGet.FlatContainer</c> extension.
 /// </summary>
 public sealed class FlatContainerExtractionTests
 {
@@ -27,13 +26,6 @@ public sealed class FlatContainerExtractionTests
         "NuGet.FlatContainer.GetPackage",
         "NuGet.FlatContainer.GetSymbol",
         "NuGet.FlatContainer.GetVersions"
-    ];
-
-    private static readonly string[] RegistrationOperations =
-    [
-        "NuGet.Registration.GetIndex",
-        "NuGet.Registration.GetLeaf",
-        "NuGet.Registration.GetPage"
     ];
 
     [Fact]
@@ -53,11 +45,6 @@ public sealed class FlatContainerExtractionTests
             Assert.Equal(FlatContainerExtensionId, registration!.ExtensionId);
         }
 
-        Assert.All(
-            RegistrationOperations,
-            operationId => Assert.Equal(
-                ProtocolExtensionId,
-                host.Registry.Find(operationId)!.ExtensionId));
     }
 
     [Fact]
@@ -85,10 +72,6 @@ public sealed class FlatContainerExtractionTests
         Assert.Equal(FlatContainerExtensionId, resource.ExtensionId);
         Assert.Equal("/flatcontainer/", resource.Contribution.RouteName);
         Assert.Equal(10, resource.Contribution.Order);
-        Assert.All(
-            host.Graph.Routes.Where(route =>
-                route.Path.StartsWith("/registration/", StringComparison.Ordinal)),
-            route => Assert.Equal(ProtocolExtensionId, route.ExtensionId));
     }
 
     [Fact]
@@ -211,6 +194,12 @@ public sealed class FlatContainerExtractionTests
             "NuGet.TestServer",
             "Extensions",
             "OfficialExtensionModules.cs");
+        var registrationRoot = Path.Combine(
+            ExtensionModuleFitnessTests.RepositoryRoot,
+            "src",
+            "NuGet.TestServer",
+            "Extensions",
+            "Registration");
         var pattern = new Regex(
             Regex.Escape(FlatContainerExtensionId) + "|FlatContainerModule|FlatContainerOperations",
             RegexOptions.CultureInvariant);
@@ -222,6 +211,7 @@ public sealed class FlatContainerExtractionTests
                 SearchOption.AllDirectories)
             .Where(file =>
                 !file.StartsWith(extensionRoot, StringComparison.OrdinalIgnoreCase) &&
+                !file.StartsWith(registrationRoot, StringComparison.OrdinalIgnoreCase) &&
                 !file.Equals(moduleList, StringComparison.OrdinalIgnoreCase) &&
                 !file.Contains(
                     $"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
