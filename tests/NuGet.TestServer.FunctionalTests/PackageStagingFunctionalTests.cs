@@ -477,9 +477,14 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
         var client = server.HttpClient;
         await CreateGroupAsync(client, "toolarge");
 
-        using var response = await client.PutAsync(
-            "/staging/groups/toolarge/packages",
-            new ByteArrayContent(new byte[17 * 1024 * 1024]));
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            "/staging/groups/toolarge/packages")
+        {
+            Content = new ByteArrayContent(new byte[17 * 1024 * 1024])
+        };
+        request.Headers.ExpectContinue = true;
+        using var response = await client.SendAsync(request);
 
         Assert.True(
             response.StatusCode is HttpStatusCode.RequestEntityTooLarge
