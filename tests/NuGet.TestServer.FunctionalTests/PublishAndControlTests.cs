@@ -339,6 +339,8 @@ public sealed class PublishAndControlTests
     public async Task Fault_delay_honors_cancellation_and_consumes_the_selected_rule()
     {
         await using var server = await NuGetTestServerHost.StartAsync();
+        using var warmup = await server.HttpClient.GetAsync("/v3/index.json");
+        Assert.Equal(HttpStatusCode.OK, warmup.StatusCode);
         await server.Faults.AddAsync(new FaultRule(
             Id: "cancel-delay",
             Method: "GET",

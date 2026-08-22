@@ -15,6 +15,21 @@ internal sealed class DocumentContributorRegistry :
 
     private readonly Dictionary<(string Point, string Contract, Type Context, Type Value), List<object>>
         _registrations = new();
+    private readonly HashSet<RegistrationKey> _declared;
+    private readonly HashSet<RegistrationKey> _registered = [];
+
+    private DocumentContributorRegistry(IEnumerable<(string ExtensionId, DocumentContributorDescriptor Descriptor)> declared)
+    {
+        _declared =
+        [
+            .. declared.Select(item => new RegistrationKey(
+                item.ExtensionId,
+                item.Descriptor.Point,
+                item.Descriptor.Contract,
+                item.Descriptor.Namespace,
+                item.Descriptor.Priority))
+        ];
+    }
 
     public void Register<TContext, TContribution>(
         string extensionId,
@@ -29,6 +44,26 @@ internal sealed class DocumentContributorRegistry :
         ArgumentException.ThrowIfNullOrWhiteSpace(contract);
         ArgumentException.ThrowIfNullOrWhiteSpace(@namespace);
         ArgumentNullException.ThrowIfNull(contributor);
+        var registrationKey = new RegistrationKey(
+            extensionId,
+            point,
+            contract,
+            @namespace,
+            priority);
+        if (!_declared.Contains(registrationKey))
+        {
+            throw new ServerHostingConfigurationException(
+                $"document-contributor-undeclared: Extension '{extensionId}' registered " +
+                $"undeclared namespace '{@namespace}' for contribution point '{point}'.");
+        }
+
+        if (!_registered.Add(registrationKey))
+        {
+            throw new ServerHostingConfigurationException(
+                $"document-contributor-duplicate-registration: Extension '{extensionId}' " +
+                $"registered namespace '{@namespace}' more than once for '{point}'.");
+        }
+
         var key = (point, contract, typeof(TContext), typeof(TContribution));
         if (!_registrations.TryGetValue(key, out var registrations))
         {
@@ -83,9 +118,16 @@ internal sealed class DocumentContributorRegistry :
         var selected = graph.Extensions
             .Select(extension => extension.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var registry = new DocumentContributorRegistry();
-        foreach (var module in modules
-                     .Where(module => selected.Contains(module.Contribution.Manifest.Id))
+        var activeModules = modules
+            .Where(module => selected.Contains(module.Contribution.Manifest.Id))
+            .OrderBy(
+                module => module.Contribution.Manifest.Id,
+                StringComparer.Ordinal)
+            .ToArray();
+        var registry = new DocumentContributorRegistry(activeModules.SelectMany(module =>
+            module.Contribution.DocumentContributors.Select(
+                descriptor => (module.Contribution.Manifest.Id, descriptor))));
+        foreach (var module in activeModules
                      .OrderBy(
                          module => module.Contribution.Manifest.Id,
                          StringComparer.Ordinal))
@@ -95,8 +137,24 @@ internal sealed class DocumentContributorRegistry :
                 broker.ForOwner(module.Contribution.Manifest.Id));
         }
 
+        var missing = registry._declared.Except(registry._registered).FirstOrDefault();
+        if (missing is not null)
+        {
+            throw new ServerHostingConfigurationException(
+                $"document-contributor-missing-registration: Extension " +
+                $"'{missing.ExtensionId}' did not register namespace '{missing.Namespace}' " +
+                $"for contribution point '{missing.Point}'.");
+        }
+
         return registry;
     }
+
+    private sealed record RegistrationKey(
+        string ExtensionId,
+        string Point,
+        string Contract,
+        string Namespace,
+        int Priority);
 
     private sealed class BoundedContributor<TContext, TContribution>(
         IDocumentContributor<TContext, TContribution> inner)

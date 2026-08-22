@@ -225,6 +225,28 @@ package-type, rich-metadata, HEAD, body-free, durable restart, parallel-host, an
 NuGet.Protocol behavior remain unchanged. No schema, registration owner, mutation,
 policy, SDK/loading, or sidecar behavior changes.
 
+### Step 14 implementation update
+
+Registration index, page, and leaf operations, their typed GET/HEAD routes, and the
+`RegistrationsBaseUrl` resource are now owned solely by the internal official
+`NuGet.Registration` module through the generic module seam. The former
+`builtin.protocol` owner retains search only.
+
+The module reads registration-visible metadata and vulnerability advisories through
+narrow, audited capabilities and returns only typed route references for kernel URL
+projection. A generic typed document-contributor registry supports deterministic,
+bounded leaf contributions under exclusive contributor namespaces. Duplicate
+namespaces fail composition; contributor failures and oversized output fail the
+registration response rather than silently degrading it. A separately compiled fixture
+proves contribution without registration-specific kernel composition.
+
+Wire URLs, aliases, GET/HEAD behavior, paging and bounds, metadata shape and ordering,
+listed/deprecation/vulnerability behavior, authoritative visibility, body-free indexed
+queries, immediate read-your-writes behavior, durable restart, and real NuGet.Protocol
+queries remain unchanged when no contributor is selected. No schema, search
+implementation, policy, mutation, loading, SDK, or sidecar behavior changes. Rollback
+restores the characterized legacy registration owner without data migration.
+
 ## Step 12B implementation update
 
 Lane A operational ownership now flows through the same generic module seam as a
