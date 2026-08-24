@@ -686,7 +686,9 @@ public sealed class DocumentationExampleTests
                 return document.Descendants("ProjectReference")
                     .Select(reference => reference.Attribute("Include")?.Value)
                     .Where(include => include is not null)
-                    .Select(include => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, include!)))
+                    .Select(include => Path.GetFullPath(Path.Combine(
+                        Path.GetDirectoryName(path)!,
+                        include!.Replace('\\', Path.DirectorySeparatorChar))))
                     .Where(projects.ContainsKey)
                     .Select(reference => $"{projects[path]} -> {projects[reference]}");
             })
