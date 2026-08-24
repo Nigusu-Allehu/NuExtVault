@@ -159,7 +159,7 @@ public static class ExternalExtensionPackageBuilder
     public static async Task<ContosoFlavorsAssets> BuildContosoFlavorsAssetsAsync(
         CancellationToken cancellationToken = default)
     {
-        const string id = "Contoso.NuTestServer.Flavors";
+        const string id = "Contoso.Flavors";
         const string version = "1.2.3";
         const string publisher = "Contoso";
         const string entryAssemblyFileName = "NuGet.TestServer.SdkFixture.dll";
@@ -192,6 +192,14 @@ public static class ExternalExtensionPackageBuilder
             "Release",
             "net10.0",
             "NuGet.TestServer.Extensions.Sdk.dll");
+        var dependencyAssemblyPath = Path.Combine(
+            RepositoryPaths.RepositoryRoot,
+            "tests",
+            "NuGet.TestServer.SdkFixture.Dependency",
+            "bin",
+            "Release",
+            "net10.0",
+            "Contoso.Flavors.Dependency.dll");
 
         return new ContosoFlavorsAssets(
             id,
@@ -201,7 +209,12 @@ public static class ExternalExtensionPackageBuilder
             entryType,
             manifestBytes,
             entries[$"{LibDirectory}{entryAssemblyFileName}"],
-            File.Exists(sdkAssemblyPath) ? File.ReadAllBytes(sdkAssemblyPath) : null);
+            File.Exists(sdkAssemblyPath) ? File.ReadAllBytes(sdkAssemblyPath) : null,
+            new Dictionary<string, byte[]>(StringComparer.Ordinal)
+            {
+                ["Contoso.Flavors.Dependency.dll"] =
+                    File.ReadAllBytes(dependencyAssemblyPath)
+            });
     }
 
     /// <summary>Builds the default, fully valid Step 20 package for
@@ -233,6 +246,10 @@ public static class ExternalExtensionPackageBuilder
         {
             [assets.EntryAssemblyFileName] = assets.EntryAssemblyBytes
         };
+        foreach (var (fileName, bytes) in assets.PrivateAssemblyBytes)
+        {
+            libFiles[fileName] = bytes;
+        }
         if (bundlePrivateSdkCopy && assets.SdkAssemblyBytes is not null)
         {
             libFiles["NuGet.TestServer.Extensions.Sdk.dll"] = assets.SdkAssemblyBytes;
@@ -358,4 +375,5 @@ public sealed record ContosoFlavorsAssets(
     string EntryType,
     byte[] ManifestJsonBytes,
     byte[] EntryAssemblyBytes,
-    byte[]? SdkAssemblyBytes);
+    byte[]? SdkAssemblyBytes,
+    IReadOnlyDictionary<string, byte[]> PrivateAssemblyBytes);

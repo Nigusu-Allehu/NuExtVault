@@ -45,6 +45,7 @@ public static class PackageStagingAssets
             EntryType,
             entries[ExternalExtensionPackageBuilder.ManifestEntryName],
             entries[$"{ExternalExtensionPackageBuilder.LibDirectory}{EntryAssemblyFileName}"],
-            null);
+            null,
+            new Dictionary<string, byte[]>());
     }
 }
