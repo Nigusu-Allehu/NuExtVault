@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using NuGet.TestServer.Authentication;
@@ -474,29 +475,18 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
     public async Task A_body_above_the_declared_route_limit_is_rejected_by_the_gateway()
     {
         await using var server = await StartAsync();
-        var client = server.HttpClient;
-        await CreateGroupAsync(client, "toolarge");
+        await CreateGroupAsync(server.HttpClient, "toolarge");
 
-        using var request = new HttpRequestMessage(
-            HttpMethod.Put,
-            "/staging/groups/toolarge/packages")
+        for (var attempt = 1; attempt <= 100; attempt++)
         {
-            Content = new ByteArrayContent(new byte[17 * 1024 * 1024])
-        };
-        request.Headers.ExpectContinue = true;
-        using var response = await client.SendAsync(request);
+            var response = await SendOversizedHeadersAsync(server);
 
-        Assert.True(
-            response.StatusCode is HttpStatusCode.RequestEntityTooLarge
-                or HttpStatusCode.BadRequest
-                or HttpStatusCode.OK,
-            $"Expected a bounded rejection but got {response.StatusCode}.");
-        if (response.StatusCode == HttpStatusCode.OK)
-        {
-            using var document = await ReadAsync(response);
-            Assert.Contains(
-                document.RootElement.GetProperty("outcome").GetString(),
-                new[] { "ContentTooLarge", "InvalidContent" });
+            Assert.Contains(" 413 ", response, StringComparison.Ordinal);
+            Assert.True(
+                response.Contains(
+                    "The request body exceeds the declared route limit.",
+                    StringComparison.Ordinal),
+                $"Attempt {attempt} did not return the gateway rejection detail.");
         }
     }
 
@@ -667,6 +657,38 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
         var client = new HttpClient { BaseAddress = server.BaseUrl };
         client.DefaultRequestHeaders.Add("X-NuGet-ApiKey", ApiKey);
         return client;
+    }
+
+    private static async Task<string> SendOversizedHeadersAsync(NuGetTestServerHost server)
+    {
+        using var client = new TcpClient();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await client.ConnectAsync(IPAddress.Loopback, server.Port, timeout.Token);
+        await using var stream = client.GetStream();
+        var headers = Encoding.ASCII.GetBytes(
+            $"PUT /staging/groups/toolarge/packages HTTP/1.1\r\n" +
+            $"Host: 127.0.0.1:{server.Port}\r\n" +
+            $"Content-Length: {17 * 1024 * 1024}\r\n" +
+            "Content-Type: application/octet-stream\r\n" +
+            "Connection: close\r\n\r\n");
+        await stream.WriteAsync(headers, timeout.Token);
+        await stream.FlushAsync(timeout.Token);
+        var response = new StringBuilder();
+        var buffer = new byte[4096];
+        while (!response.ToString().Contains(
+                   "The request body exceeds the declared route limit.",
+                   StringComparison.Ordinal))
+        {
+            var read = await stream.ReadAsync(buffer, timeout.Token);
+            if (read == 0)
+            {
+                break;
+            }
+
+            response.Append(Encoding.ASCII.GetString(buffer, 0, read));
+        }
+
+        return response.ToString();
     }
 
     private static string CreateStorage()
