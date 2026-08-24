@@ -301,6 +301,255 @@ public sealed class ExtensionStateHardeningTests
             Text((await reopened.ReadAsync(Owner, "b", CancellationToken.None))!.Value));
     }
 
+    [Fact]
+    public async Task A_locked_authoritative_record_leaves_a_committed_delete_for_recovery()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        long eTag;
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            eTag = (await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None)).ETag;
+            var authoritative = Assert.Single(Directory.EnumerateFiles(
+                Path.Combine(root, TransactionalStateStore.ActiveDirectoryName),
+                $"*{TransactionalStateStore.RecordExtension}",
+                SearchOption.AllDirectories));
+            await using var locked = new FileStream(
+                authoritative,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.DeleteAsync(Owner, "key", eTag, CancellationToken.None).AsTask());
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        Assert.Null(await new ExtensionStateStore(root).ReadRawAsync(
+            Owner, "key", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_locked_compatibility_record_cannot_revive_a_reported_delete()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        long eTag;
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            eTag = (await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None)).ETag;
+            var compatibility = new ExtensionStateStore(root).GetCompatibilityPath(Owner, "key");
+            await using var locked = new FileStream(
+                compatibility,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.DeleteAsync(Owner, "key", eTag, CancellationToken.None).AsTask());
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        Assert.Null(await new ExtensionStateStore(root).ReadRawAsync(
+            Owner, "key", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task A_delete_failure_before_the_commit_journal_retains_the_value_and_etag()
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        long eTag;
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            eTag = (await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None)).ETag;
+            store.WriteFaultInjector = point =>
+            {
+                if (point == StateWriteFailPoint.BeforeDeleteCommitJournal)
+                {
+                    throw new IOException("Injected pre-commit failure.");
+                }
+            };
+
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.DeleteAsync(Owner, "key", eTag, CancellationToken.None).AsTask());
+
+            store.WriteFaultInjector = null;
+            var retained = await store.ReadAsync(Owner, "key", CancellationToken.None);
+            Assert.Equal("original", Text(retained!.Value));
+            Assert.Equal(eTag, retained.ETag);
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        var durable = await reopened.ReadAsync(Owner, "key", CancellationToken.None);
+        Assert.Equal("original", Text(durable!.Value));
+        Assert.Equal(eTag, durable.ETag);
+        AssertNoPendingWork(root);
+    }
+
+    [Fact]
+    public async Task A_delete_cancelled_before_commit_retains_the_value_and_etag()
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        using var cancellation = new CancellationTokenSource();
+        long eTag;
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            eTag = (await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None)).ETag;
+            store.WriteFaultInjector = point =>
+            {
+                if (point == StateWriteFailPoint.BeforeDeleteCommitJournal)
+                {
+                    cancellation.Cancel();
+                }
+            };
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => store.DeleteAsync(Owner, "key", eTag, cancellation.Token).AsTask());
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        var retained = await reopened.ReadAsync(Owner, "key", CancellationToken.None);
+        Assert.Equal("original", Text(retained!.Value));
+        Assert.Equal(eTag, retained.ETag);
+        AssertNoPendingWork(root);
+    }
+
+    [Fact]
+    public async Task Cancellation_after_the_delete_commit_point_rolls_forward()
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        using var cancellation = new CancellationTokenSource();
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            var record = await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None);
+            store.WriteFaultInjector = point =>
+            {
+                if (point == StateWriteFailPoint.AfterDeleteCommitJournal)
+                {
+                    cancellation.Cancel();
+                }
+            };
+
+            await store.DeleteAsync(Owner, "key", record.ETag, cancellation.Token);
+            Assert.Null(await store.ReadAsync(Owner, "key", CancellationToken.None));
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        AssertNoPendingWork(root);
+    }
+
+    [Theory]
+    [InlineData(nameof(StateWriteFailPoint.AfterDeleteCommitJournal))]
+    [InlineData(nameof(StateWriteFailPoint.BeforeDeleteAuthoritativeRemoval))]
+    [InlineData(nameof(StateWriteFailPoint.AfterDeleteAuthoritativeRemoval))]
+    [InlineData(nameof(StateWriteFailPoint.BeforeDeleteMirrorRemoval))]
+    [InlineData(nameof(StateWriteFailPoint.AfterDeleteMirrorRemoval))]
+    public async Task An_interrupted_committed_delete_recovers_idempotently(string failPointName)
+    {
+        var failPoint = Enum.Parse<StateWriteFailPoint>(failPointName);
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        long deletedETag;
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            deletedETag = (await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None)).ETag;
+            store.WriteFaultInjector = point =>
+            {
+                if (point == failPoint)
+                {
+                    throw new IOException("Injected committed delete interruption.");
+                }
+            };
+
+            var failure = await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.DeleteAsync(
+                    Owner, "key", deletedETag, CancellationToken.None).AsTask());
+            Assert.Contains("committed", failure.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Null(await store.ReadAsync(Owner, "key", CancellationToken.None));
+            Assert.True(File.Exists(Path.Combine(
+                root, TransactionalStateStore.WriteJournalFileName)));
+        }
+
+        TransactionalStateStore.Recover(root);
+        TransactionalStateStore.Recover(root);
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        Assert.Null(await new ExtensionStateStore(root).ReadRawAsync(
+            Owner, "key", CancellationToken.None));
+        var recreated = await reopened.WriteAsync(
+            Owner, "key", Utf8("recreated"), null, CancellationToken.None);
+        Assert.True(recreated.ETag > deletedETag);
+        AssertNoPendingWork(root);
+    }
+
+    [Fact]
+    public async Task Checkpoint_and_restore_refuse_a_committed_delete_awaiting_recovery()
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            var original = await store.WriteAsync(
+                Owner, "key", Utf8("original"), null, CancellationToken.None);
+            var restoreData = new StateCheckpointData(
+                StateCheckpointData.CurrentManifestVersion,
+                1,
+                DateTimeOffset.UnixEpoch,
+                [
+                    new StateCheckpointParticipant(
+                        Owner,
+                        "1.0.0",
+                        KernelStateParticipants.VulnerabilitySchemaName,
+                        1,
+                        Required: false,
+                        [new StateCheckpointRecord("key", Utf8("restored"), original.ETag + 1)])
+                ]);
+            using var staged = await store.StageRestoreAsync(
+                restoreData, CancellationToken.None);
+            store.WriteFaultInjector = point =>
+            {
+                if (point == StateWriteFailPoint.BeforeDeleteAuthoritativeRemoval)
+                {
+                    throw new IOException("Injected committed delete interruption.");
+                }
+            };
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.DeleteAsync(
+                    Owner, "key", original.ETag, CancellationToken.None).AsTask());
+
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.CreateCheckpointAsync(CancellationToken.None).AsTask());
+            await Assert.ThrowsAsync<ExtensionStateException>(
+                () => store.CommitRestoreAsync(staged, CancellationToken.None).AsTask());
+        }
+
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        AssertNoPendingWork(root);
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]
@@ -332,6 +581,47 @@ public sealed class ExtensionStateHardeningTests
         Assert.True(
             File.Exists(Path.Combine(victim, "payload.txt")),
             "A crafted journal must never touch an external directory.");
+        File.Delete(journalPath);
+        using var reopened = new TransactionalStateStore(root, Participants());
+        Assert.Equal(
+            "original",
+            Text((await reopened.ReadAsync(Owner, "key", CancellationToken.None))!.Value));
+        Assert.Equal("original", await ReadDowngradedAsync(root, "key"));
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("[\"../../victim\"]")]
+    [InlineData("[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"," +
+                "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]")]
+    public async Task A_crafted_delete_journal_is_rejected_and_removes_nothing(
+        string deletedRecordsJson)
+    {
+        using var temporary = new TemporaryDirectory();
+        var root = Path.Combine(temporary.Path, "extension-state");
+        using (var store = new TransactionalStateStore(root, Participants()))
+        {
+            await store.WriteAsync(Owner, "key", Utf8("original"), null, CancellationToken.None);
+        }
+
+        var victim = CreateExternalDirectory(temporary.Path, "victim");
+        var journalPath = Path.Combine(root, TransactionalStateStore.WriteJournalFileName);
+        File.WriteAllText(
+            journalPath,
+            $$"""
+            {"Version":2,"StagingDirectory":".staging-1",
+             "OwnerDirectory":"{{new string('a', 64)}}","BatchId":1,"Records":[],
+             "DeletedRecords":{{deletedRecordsJson}}}
+            """);
+
+        var exception = Assert.Throws<ExtensionStateException>(
+            () => new TransactionalStateStore(root, Participants()).Dispose());
+
+        Assert.Contains("journal", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            File.Exists(Path.Combine(victim, "payload.txt")),
+            "A crafted delete journal must never touch an external file.");
         File.Delete(journalPath);
         using var reopened = new TransactionalStateStore(root, Participants());
         Assert.Equal(
