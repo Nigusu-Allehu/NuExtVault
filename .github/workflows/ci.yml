@@ -55,6 +55,7 @@ jobs:
           --no-restore
           --no-build
           --configuration Release
+          --filter "FullyQualifiedName!~NuGet.TestServer.FunctionalTests.DocumentationContractTests&FullyQualifiedName!~NuGet.TestServer.FunctionalTests.DocumentationExampleTests"
           --logger "trx;LogFilePrefix=test-results-${{ matrix.os }}"
           --results-directory TestResults
 

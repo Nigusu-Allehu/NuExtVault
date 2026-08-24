@@ -1,6 +1,7 @@
 # NuGet Test Server
 
 [![CI](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/ci.yml/badge.svg)](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/ci.yml)
+[![Documentation examples](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/documentation.yml/badge.svg)](https://github.com/Nigusu-Allehu/NuTestServer/actions/workflows/documentation.yml)
 
 NuGet Test Server is a local NuGet-compatible server for integration tests and
 development workflows.

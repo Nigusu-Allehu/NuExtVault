@@ -27,9 +27,11 @@ rationale, and deferred behavior. Nontrivial claims link to source, tests,
 structural snapshots, or an approved design section. Fenced examples have stable
 IDs and are either executed unchanged with ephemeral substitutions or asserted
 structurally by `DocumentationContractTests` and `DocumentationExampleTests`.
+Executable examples run on Windows, Ubuntu, and macOS. Reference examples are
+intentionally non-executable structural evidence; the manual currently has no
+platform-specific examples.
 
 Sidecars, network-feed discovery, dynamic extension reload, in-process sandboxing,
 distributed operation, and external package publication are not implemented.
 
 Start with [Chapter 1](01-architecture-and-assemblies.md).
-

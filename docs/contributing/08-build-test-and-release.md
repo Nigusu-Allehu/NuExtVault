@@ -71,17 +71,21 @@ publication workflow or production signing service exists.
 ## Cross-platform CI
 
 [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) restores, performs a
-warning-as-error Release build, and tests the full solution on
-`windows-latest`, `ubuntu-latest`, and `macos-latest`. Code changes covered by
-that workflow should keep all three legs green. Avoid shell-only setup, path
-separator, filename-casing, and locked-file assumptions.
+warning-as-error Release build, and tests the solution on `windows-latest`,
+`ubuntu-latest`, and `macos-latest`. It excludes
+`DocumentationContractTests` and `DocumentationExampleTests`, which have one
+owner in the dedicated
+[documentation workflow](../../.github/workflows/documentation.yml). That
+workflow restores and builds the functional-test project with warnings as
+errors, then validates both manuals and their examples on the same three
+platforms. Both workflows upload failed TRX results.
 
-The full solution includes SDK/TestKit packaging contracts, the documentation
-CLI pack/install example, and Package Staging loading/functional smoke, so those
-documented checks run in the current CI matrix. External publication, production
-signing, and release automation remain absent. Cross-platform documentation CI
-automation and reporting are tracked separately in issue #97; this change is
-validated locally and does not claim a new CI gate.
+The general matrix retains SDK/TestKit packaging contracts and Package Staging
+loading/functional smoke. The documentation matrix owns link/navigation,
+stable-ID, evidence/drift, SDK compilation, root quick-start, and CLI
+pack/install checks. Avoid shell-only setup, path separator, filename-casing,
+and locked-file assumptions. External publication, production signing, and
+release automation remain absent.
 
 ## Review, rollback, and release
 
