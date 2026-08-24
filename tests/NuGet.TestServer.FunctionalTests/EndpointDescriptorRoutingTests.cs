@@ -108,9 +108,15 @@ public sealed class EndpointDescriptorRoutingTests
         using var invalidBase64 = await server.HttpClient.PostAsJsonAsync(
             "/__test/packages",
             new { content = "not-base64!!" });
-        using var oversized = await server.HttpClient.PostAsJsonAsync(
-            "/__test/packages",
-            new { content = Convert.ToBase64String(new byte[5 * 1024 * 1024]) });
+        using var oversizedRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/__test/packages")
+        {
+            Content = JsonContent.Create(
+                new { content = Convert.ToBase64String(new byte[5 * 1024 * 1024]) })
+        };
+        oversizedRequest.Headers.ExpectContinue = true;
+        using var oversized = await server.HttpClient.SendAsync(oversizedRequest);
         using var missingContent = await server.HttpClient.PostAsJsonAsync(
             "/__test/packages",
             new { other = "value" });

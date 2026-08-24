@@ -53,6 +53,18 @@ internal sealed class OperationGateway(
             endpoint.Limits.MaxRequestBytes > 0)
         {
             request.LimitRequestBody(endpoint.Limits.MaxRequestBytes);
+            if (request.ContentLength is { } declaredLength &&
+                declaredLength > endpoint.Limits.MaxRequestBytes)
+            {
+                return OperationResults.Render(
+                    new OperationResult(
+                        OperationResultStatus.PayloadTooLarge,
+                        new OperationProblemBody(
+                            "The request body exceeds the declared route limit.")),
+                    execution,
+                    urls,
+                    () => PublicUrlOrigin.FromRequest(context, transport));
+            }
         }
 
         EndpointInvocation invocation;
