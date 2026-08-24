@@ -30,6 +30,9 @@ Every fenced example has a stable ID and an evidence classification.
 only ephemeral ports, paths, and generated credentials. `evidence: reference`
 means the block is intentionally non-executable and tests assert its exact
 structure against the implemented contract. Link, navigation, and example-ID
-checks run with the complete test suite on Windows, Ubuntu, and macOS.
+checks run in the dedicated
+[documentation workflow](../../.github/workflows/documentation.yml) on Windows,
+Ubuntu, and macOS. Every executable example is cross-platform and runs on all
+three systems; the manual currently has no platform-specific examples.
 
 Start with [Chapter 1](01-installation-and-quick-start.md).

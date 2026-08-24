@@ -55,12 +55,14 @@ settings.
 
 ## Compatibility
 
-NuTestServer targets `net10.0` and requires the .NET 10 SDK to build. CI performs
-a warning-as-error Release build and runs unit and functional tests on Windows,
-Ubuntu, and macOS. Automated evidence covers real loopback Kestrel,
-NuGet.Protocol 7.9.0, `dotnet restore`, `dotnet nuget push`, GET/HEAD behavior,
-ranges, ordering, casing, paging, and immediate visibility transitions. This
-does not claim compatibility with every historical NuGet client.
+NuTestServer targets `net10.0` and requires the .NET 10 SDK to build. General CI
+performs a warning-as-error Release build and runs unit and functional tests on
+Windows, Ubuntu, and macOS. The dedicated documentation workflow runs the
+manual contracts and examples on the same platforms. Automated evidence covers
+real loopback Kestrel, NuGet.Protocol 7.9.0, `dotnet restore`,
+`dotnet nuget push`, GET/HEAD behavior, ranges, ordering, casing, paging, and
+immediate visibility transitions. This does not claim compatibility with every
+historical NuGet client.
 
 Default durable storage uses .NET's local application-data directory. Use an
 explicit per-run `--storage` path for portable automation. Path options consume
