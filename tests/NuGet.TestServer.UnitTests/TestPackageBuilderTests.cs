@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Security.Cryptography;
 using NuGet.Packaging;
 using NuGet.TestServer.Packages;
@@ -6,6 +7,8 @@ namespace NuGet.TestServer.UnitTests;
 
 public sealed class TestPackageBuilderTests
 {
+    private static readonly DateTime FixedZipTimestamp = new(1980, 1, 1);
+
     [Fact]
     public void Build_creates_a_readable_package_with_normalized_identity()
     {
@@ -61,4 +64,25 @@ public sealed class TestPackageBuilderTests
             Convert.ToBase64String(SHA512.HashData(package.Content)),
             package.PackageHash);
     }
+
+    [Fact]
+    public void Build_is_deterministic_for_identical_inputs()
+    {
+        using var first = BuildDeterministicPackage();
+        using var second = BuildDeterministicPackage();
+
+        Assert.Equal(first.Content, second.Content);
+        Assert.Equal(first.PackageHash, second.PackageHash);
+
+        using var archive = new ZipArchive(new MemoryStream(first.Content), ZipArchiveMode.Read);
+        Assert.All(
+            archive.Entries,
+            entry => Assert.Equal(FixedZipTimestamp, entry.LastWriteTime.DateTime));
+    }
+
+    private static TestPackage BuildDeterministicPackage() =>
+        TestPackageBuilder.Create("Example.Deterministic", "1.0.0")
+            .WithDependency("Dependency.Package", "[2.0.0, 3.0.0)")
+            .WithFile("lib/net10.0/example.txt", "content")
+            .Build();
 }

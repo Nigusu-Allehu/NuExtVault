@@ -7,6 +7,9 @@ namespace NuGet.TestServer.Packages;
 
 public sealed class TestPackageBuilder
 {
+    private static readonly DateTimeOffset ZipEntryTimestamp =
+        new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     private readonly string _id;
     private readonly NuGetVersion _version;
     private readonly List<(string Id, string Range)> _dependencies = [];
@@ -207,6 +210,7 @@ public sealed class TestPackageBuilder
     private static void WriteEntry(ZipArchive archive, string path, byte[] content)
     {
         var entry = archive.CreateEntry(path, CompressionLevel.Fastest);
+        entry.LastWriteTime = ZipEntryTimestamp;
         using var stream = entry.Open();
         stream.Write(content);
     }
