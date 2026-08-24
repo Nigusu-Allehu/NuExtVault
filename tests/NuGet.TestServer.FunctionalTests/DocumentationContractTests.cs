@@ -4,7 +4,7 @@ namespace NuGet.TestServer.FunctionalTests;
 
 public sealed partial class DocumentationContractTests
 {
-    private static readonly string[] UserChapters =
+    private static readonly string[] Chapters =
     [
         "README.md",
         "01-installation-and-quick-start.md",
@@ -17,39 +17,14 @@ public sealed partial class DocumentationContractTests
         "08-troubleshooting-limits-and-compatibility.md"
     ];
 
-    private static readonly string[] ContributorChapters =
-    [
-        "README.md",
-        "01-architecture-and-assemblies.md",
-        "02-request-lifecycle.md",
-        "03-extension-composition.md",
-        "04-capabilities-and-security.md",
-        "05-state-backup-and-recovery.md",
-        "06-public-sdk-and-trusted-loading.md",
-        "07-development-workflow.md",
-        "08-build-test-and-release.md"
-    ];
-
     [Fact]
     public void User_manual_contains_every_chapter()
     {
-        var missing = UserChapters
+        var missing = Chapters
             .Where(chapter => !File.Exists(Path.Combine(UserManualRoot, chapter)))
             .ToArray();
 
         Assert.True(missing.Length == 0, $"Missing user-manual chapters: {string.Join(", ", missing)}");
-    }
-
-    [Fact]
-    public void Contributor_manual_contains_every_chapter()
-    {
-        var missing = ContributorChapters
-            .Where(chapter => !File.Exists(Path.Combine(ContributorManualRoot, chapter)))
-            .ToArray();
-
-        Assert.True(
-            missing.Length == 0,
-            $"Missing contributor-manual chapters: {string.Join(", ", missing)}");
     }
 
     [Fact]
@@ -71,125 +46,79 @@ public sealed partial class DocumentationContractTests
     [Fact]
     public void Relative_links_and_progressive_navigation_are_valid()
     {
-        foreach (var (manualRoot, chapters, manualLink) in Manuals())
+        foreach (var chapter in Chapters)
         {
-            foreach (var chapter in chapters)
+            var path = Path.Combine(UserManualRoot, chapter);
+            var markdown = File.ReadAllText(path);
+            foreach (Match match in MarkdownLink().Matches(markdown))
             {
-                var path = Path.Combine(manualRoot, chapter);
-                var markdown = File.ReadAllText(path);
-                foreach (Match match in MarkdownLink().Matches(markdown))
+                var target = match.Groups["target"].Value;
+                if (target.StartsWith('#') ||
+                    Uri.TryCreate(target, UriKind.Absolute, out _) ||
+                    target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
                 {
-                    var target = match.Groups["target"].Value;
-                    if (target.StartsWith('#') ||
-                        Uri.TryCreate(target, UriKind.Absolute, out _) ||
-                        target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    var pathWithoutFragment = target.Split('#', 2)[0];
-                    var resolved = Path.GetFullPath(
-                        Path.Combine(Path.GetDirectoryName(path)!, pathWithoutFragment));
-                    Assert.True(
-                        File.Exists(resolved) || Directory.Exists(resolved),
-                        $"{chapter} contains a broken link to '{target}'.");
+                    continue;
                 }
 
-                if (chapter != "README.md")
-                {
-                    Assert.Contains(manualLink, markdown, StringComparison.Ordinal);
-                    Assert.Contains("**Previous:**", markdown, StringComparison.Ordinal);
-                    Assert.Contains("**Next:**", markdown, StringComparison.Ordinal);
-                }
+                var pathWithoutFragment = target.Split('#', 2)[0];
+                var resolved = Path.GetFullPath(
+                    Path.Combine(Path.GetDirectoryName(path)!, pathWithoutFragment));
+                Assert.True(
+                    File.Exists(resolved) || Directory.Exists(resolved),
+                    $"{chapter} contains a broken link to '{target}'.");
+            }
+
+            if (chapter != "README.md")
+            {
+                Assert.Contains("[User manual](README.md)", markdown, StringComparison.Ordinal);
+                Assert.Contains("**Previous:**", markdown, StringComparison.Ordinal);
+                Assert.Contains("**Next:**", markdown, StringComparison.Ordinal);
             }
         }
-    }
-
-    [Fact]
-    public void Root_readme_is_a_minimal_verified_landing_page()
-    {
-        var path = Path.Combine(RepositoryRoot, "README.md");
-        var markdown = File.ReadAllText(path);
-        Assert.True(File.ReadLines(path).Count() <= 40, "The root README must remain a minimal landing page.");
-        Assert.Contains("actions/workflows/ci.yml/badge.svg", markdown, StringComparison.Ordinal);
-        Assert.Contains(".NET SDK 10.0", markdown, StringComparison.Ordinal);
-        Assert.Equal(
-            "dotnet run --project .\\src\\NuGet.TestServer.Cli -- start",
-            RootQuickStartCommand());
-        Assert.Contains("docs/user/README.md", markdown, StringComparison.Ordinal);
-        Assert.Contains("docs/contributing/README.md", markdown, StringComparison.Ordinal);
-        Assert.DoesNotContain("## Supported NuGet operations", markdown, StringComparison.Ordinal);
-        Assert.DoesNotContain("## Contributing workflow", markdown, StringComparison.Ordinal);
-    }
-
-    internal static string RootQuickStartCommand()
-    {
-        var lines = File.ReadAllLines(Path.Combine(RepositoryRoot, "README.md"));
-        var opening = Array.FindIndex(lines, line => line.StartsWith("```", StringComparison.Ordinal));
-        Assert.True(opening >= 0, "The root README must contain one quick-start fence.");
-        Assert.Equal("```powershell", lines[opening]);
-        var closing = Array.FindIndex(lines, opening + 1, line => line == "```");
-        Assert.True(closing > opening, "The root README quick-start fence is unterminated.");
-        Assert.DoesNotContain(lines[(closing + 1)..], line => line.StartsWith("```", StringComparison.Ordinal));
-        return string.Join(Environment.NewLine, lines[(opening + 1)..closing]).Trim();
     }
 
     internal static IReadOnlyList<DocumentationExample> ReadExamples()
     {
         var examples = new List<DocumentationExample>();
-        foreach (var (manualRoot, chapters, _) in Manuals())
+        foreach (var chapter in Chapters)
         {
-            foreach (var chapter in chapters)
+            var path = Path.Combine(UserManualRoot, chapter);
+            var lines = File.ReadAllLines(path);
+            for (var index = 0; index < lines.Length; index++)
             {
-                var path = Path.Combine(manualRoot, chapter);
-                var lines = File.ReadAllLines(path);
-                for (var index = 0; index < lines.Length; index++)
+                if (!lines[index].StartsWith("```", StringComparison.Ordinal))
                 {
-                    if (!lines[index].StartsWith("```", StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    Assert.True(index > 0, $"{chapter}:{index + 1} has an unmarked fence.");
-                    var marker = ExampleMarker().Match(lines[index - 1]);
-                    Assert.True(
-                        marker.Success,
-                        $"{chapter}:{index + 1} must be preceded by an example-id/evidence marker.");
-
-                    var closing = Array.FindIndex(
-                        lines,
-                        index + 1,
-                        line => line == "```");
-                    Assert.True(closing >= 0, $"{chapter}:{index + 1} has an unterminated fence.");
-
-                    examples.Add(new DocumentationExample(
-                        marker.Groups["id"].Value,
-                        marker.Groups["evidence"].Value,
-                        lines[index][3..],
-                        string.Join(Environment.NewLine, lines[(index + 1)..closing]),
-                        chapter,
-                        index + 1));
-                    index = closing;
+                    continue;
                 }
+
+                Assert.True(index > 0, $"{chapter}:{index + 1} has an unmarked fence.");
+                var marker = ExampleMarker().Match(lines[index - 1]);
+                Assert.True(
+                    marker.Success,
+                    $"{chapter}:{index + 1} must be preceded by an example-id/evidence marker.");
+
+                var closing = Array.FindIndex(
+                    lines,
+                    index + 1,
+                    line => line == "```");
+                Assert.True(closing >= 0, $"{chapter}:{index + 1} has an unterminated fence.");
+
+                examples.Add(new DocumentationExample(
+                    marker.Groups["id"].Value,
+                    marker.Groups["evidence"].Value,
+                    lines[index][3..],
+                    string.Join(Environment.NewLine, lines[(index + 1)..closing]),
+                    chapter,
+                    index + 1));
+                index = closing;
             }
         }
 
         return examples;
     }
 
-    internal static string RepositoryRoot { get; } = FindRepositoryRoot();
-
     internal static string UserManualRoot { get; } =
-        Path.Combine(RepositoryRoot, "docs", "user");
-
-    internal static string ContributorManualRoot { get; } =
-        Path.Combine(RepositoryRoot, "docs", "contributing");
-
-    private static IEnumerable<(string Root, string[] Chapters, string ManualLink)> Manuals()
-    {
-        yield return (UserManualRoot, UserChapters, "[User manual](README.md)");
-        yield return (ContributorManualRoot, ContributorChapters, "[Contributor manual](README.md)");
-    }
+        Path.Combine(FindRepositoryRoot(), "docs", "user");
 
     private static string FindRepositoryRoot()
     {

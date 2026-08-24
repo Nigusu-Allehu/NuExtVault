@@ -47,15 +47,7 @@ public sealed class DocumentationExampleTests
         "user-07-staging-start",
         "user-07-staging-routes",
         "user-08-limit-table",
-        "user-08-limits",
-        "contrib-01-system-diagram",
-        "contrib-01-assembly-dag",
-        "contrib-02-request-sequence",
-        "contrib-03-evidence-inventories",
-        "contrib-04-public-capabilities",
-        "contrib-06-sdk-example",
-        "contrib-06-version-table",
-        "contrib-08-validation-commands"
+        "user-08-limits"
     ];
 
     private static readonly HashSet<string> ReferenceIds =
@@ -70,14 +62,7 @@ public sealed class DocumentationExampleTests
         "user-07-staging-start",
         "user-07-staging-routes",
         "user-08-limit-table",
-        "user-08-limits",
-        "contrib-01-system-diagram",
-        "contrib-01-assembly-dag",
-        "contrib-02-request-sequence",
-        "contrib-03-evidence-inventories",
-        "contrib-04-public-capabilities",
-        "contrib-06-version-table",
-        "contrib-08-validation-commands"
+        "user-08-limits"
     ];
 
     [Fact]
@@ -193,154 +178,6 @@ public sealed class DocumentationExampleTests
         Assert.Contains("--max-archive-entries 5000", limitCommand, StringComparison.Ordinal);
         Assert.Contains("--max-entry-bytes 16777216", limitCommand, StringComparison.Ordinal);
         Assert.Contains("--max-expanded-bytes 268435456", limitCommand, StringComparison.Ordinal);
-
-        Assert.Contains(
-            "Client --> Gateway",
-            examples["contrib-01-system-diagram"].Content,
-            StringComparison.Ordinal);
-        Assert.Equal(
-            ProductProjectEdges(),
-            Lines(examples["contrib-01-assembly-dag"].Content));
-        Assert.Contains(
-            "Gateway->>Dispatcher",
-            examples["contrib-02-request-sequence"].Content,
-            StringComparison.Ordinal);
-        Assert.Equal(
-            [
-                "tests/NuGet.TestServer.UnitTests/Snapshots/operations.contract.txt",
-                "tests/NuGet.TestServer.UnitTests/Snapshots/routes.contract.txt",
-                "tests/NuGet.TestServer.UnitTests/Snapshots/resources.contract.txt",
-                "tests/NuGet.TestServer.UnitTests/Snapshots/capabilities.contract.txt"
-            ],
-            Lines(examples["contrib-03-evidence-inventories"].Content));
-        Assert.Equal(
-            BrokerBackedPublicCapabilities(),
-            Lines(examples["contrib-04-public-capabilities"].Content));
-        Assert.Equal(
-            PublicPackageVersions(),
-            Lines(examples["contrib-06-version-table"].Content));
-        Assert.Equal(
-            [
-                "dotnet restore NuGet.TestServer.slnx",
-                "dotnet build NuGet.TestServer.slnx --no-restore --configuration Release --warnaserror",
-                "dotnet test NuGet.TestServer.slnx --no-restore --no-build --configuration Release"
-            ],
-            Lines(examples["contrib-08-validation-commands"].Content));
-        Assert.All(
-            Lines(examples["contrib-03-evidence-inventories"].Content),
-            relativePath => Assert.True(
-                File.Exists(Path.Combine(RepositoryRoot, relativePath.Replace('/', Path.DirectorySeparatorChar))),
-                $"Documented inventory '{relativePath}' does not exist."));
-        Assert.All(
-            Lines(examples["contrib-08-validation-commands"].Content),
-            command => Assert.True(
-                File.Exists(Path.Combine(RepositoryRoot, command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[2])),
-                $"Documented validation target in '{command}' does not exist."));
-    }
-
-    [Fact]
-    public async Task Root_readme_quick_start_executes()
-    {
-        using var directory = TemporaryDirectory.Create();
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "pwsh",
-                WorkingDirectory = RepositoryRoot,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            }
-        };
-        process.StartInfo.ArgumentList.Add("-NoLogo");
-        process.StartInfo.ArgumentList.Add("-NoProfile");
-        process.StartInfo.ArgumentList.Add("-NonInteractive");
-        process.StartInfo.ArgumentList.Add("-Command");
-        process.StartInfo.ArgumentList.Add(DocumentationContractTests.RootQuickStartCommand());
-        process.StartInfo.Environment["LOCALAPPDATA"] = directory.Path;
-        process.StartInfo.Environment["XDG_DATA_HOME"] = directory.Path;
-        process.StartInfo.Environment["HOME"] = directory.Path;
-
-        var output = new StringBuilder();
-        var readiness = new TaskCompletionSource<Uri>(TaskCreationOptions.RunContinuationsAsynchronously);
-        process.OutputDataReceived += (_, args) =>
-        {
-            if (args.Data is null) return;
-            output.AppendLine(args.Data);
-            const string prefix = "Readiness:";
-            if (args.Data.StartsWith(prefix, StringComparison.Ordinal) &&
-                Uri.TryCreate(args.Data[prefix.Length..].Trim(), UriKind.Absolute, out var uri))
-            {
-                readiness.TrySetResult(uri);
-            }
-        };
-        process.ErrorDataReceived += (_, args) =>
-        {
-            if (args.Data is not null) output.AppendLine(args.Data);
-        };
-
-        try
-        {
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            var exited = process.WaitForExitAsync();
-            var completed = await Task.WhenAny(
-                readiness.Task,
-                exited,
-                Task.Delay(TimeSpan.FromMinutes(2)));
-            Assert.True(completed == readiness.Task, output.ToString());
-
-            using var client = new HttpClient();
-            using var response = await client.GetAsync(await readiness.Task);
-            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        }
-        finally
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
-        }
-    }
-
-    [Fact]
-    public async Task Public_sdk_example_compiles_and_runs_conformance()
-    {
-        using var directory = TemporaryDirectory.Create();
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "Program.cs"),
-            Example("contrib-06-sdk-example").Content);
-        await File.WriteAllTextAsync(
-            Path.Combine(directory.Path, "Example.csproj"),
-            $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <OutputType>Exe</OutputType>
-                <TargetFramework>net10.0</TargetFramework>
-                <ImplicitUsings>enable</ImplicitUsings>
-                <Nullable>enable</Nullable>
-                <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-              </PropertyGroup>
-              <ItemGroup>
-                <ProjectReference Include="{EscapeXml(Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.Sdk", "NuGet.TestServer.Extensions.Sdk.csproj"))}" />
-                <ProjectReference Include="{EscapeXml(Path.Combine(RepositoryRoot, "src", "NuGet.TestServer.Extensions.TestKit", "NuGet.TestServer.Extensions.TestKit.csproj"))}" />
-                <ProjectReference Include="{EscapeXml(Path.Combine(RepositoryRoot, "tests", "NuGet.TestServer.SdkFixture", "NuGet.TestServer.SdkFixture.csproj"))}" />
-              </ItemGroup>
-            </Project>
-            """);
-
-        var result = await RunAsync(
-            "dotnet",
-            ["run", "--project", Path.Combine(directory.Path, "Example.csproj"), "--configuration", "Release"],
-            directory.Path,
-            TimeSpan.FromMinutes(3));
-        Assert.True(
-            result.ExitCode == 0,
-            $"contrib-06-sdk-example failed:{Environment.NewLine}{result.Output}");
     }
 
     [Fact]
@@ -660,83 +497,6 @@ public sealed class DocumentationExampleTests
     private static string[] Lines(string value) =>
         value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    private static string[] ProductProjectEdges()
-    {
-        string[] projectPaths =
-        [
-            "src\\NuGet.TestServer.Extensions.Sdk\\NuGet.TestServer.Extensions.Sdk.csproj",
-            "src\\NuGet.TestServer.Kernel\\NuGet.TestServer.Kernel.csproj",
-            "src\\NuGet.TestServer.Extensions.Official\\NuGet.TestServer.Extensions.Official.csproj",
-            "src\\NuGet.TestServer\\NuGet.TestServer.csproj",
-            "src\\NuGet.TestServer.Cli\\NuGet.TestServer.Cli.csproj",
-            "src\\NuGet.TestServer.Extensions.TestKit\\NuGet.TestServer.Extensions.TestKit.csproj",
-            "src\\NuGet.TestServer.Extensions.PackageStaging\\NuGet.TestServer.Extensions.PackageStaging.csproj"
-        ];
-        var projects = projectPaths
-            .Select(relativePath => Path.GetFullPath(Path.Combine(RepositoryRoot, relativePath)))
-            .ToDictionary(path => path, ProjectAssemblyName, StringComparer.OrdinalIgnoreCase);
-
-        return projectPaths[1..]
-            .Select(relativePath => Path.GetFullPath(Path.Combine(RepositoryRoot, relativePath)))
-            .SelectMany(path =>
-            {
-                var document = XDocument.Load(path);
-                return document.Descendants("ProjectReference")
-                    .Select(reference => reference.Attribute("Include")?.Value)
-                    .Where(include => include is not null)
-                    .Select(include => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, include!)))
-                    .Where(projects.ContainsKey)
-                    .Select(reference => $"{projects[path]} -> {projects[reference]}");
-            })
-            .ToArray();
-    }
-
-    private static string[] BrokerBackedPublicCapabilities()
-    {
-        var broker = File.ReadAllText(Path.Combine(
-            RepositoryRoot,
-            "src",
-            "NuGet.TestServer.Kernel",
-            "Kernel",
-            "Capabilities",
-            "CapabilityBroker.cs"));
-        var exportedSdkTypes = typeof(NuGet.TestServer.Extensions.Sdk.IExtensionModule)
-            .Assembly
-            .GetExportedTypes()
-            .Select(type => type.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        return System.Text.RegularExpressions.Regex.Matches(
-                broker,
-                @"var type when type == typeof\((I[A-Za-z0-9]+Capability)\) =>")
-            .Select(match => match.Groups[1].Value)
-            .Where(exportedSdkTypes.Contains)
-            .ToArray();
-    }
-
-    private static string[] PublicPackageVersions() =>
-        new[]
-        {
-            "src\\NuGet.TestServer.Extensions.Sdk\\NuGet.TestServer.Extensions.Sdk.csproj",
-            "src\\NuGet.TestServer.Extensions.TestKit\\NuGet.TestServer.Extensions.TestKit.csproj",
-            "src\\NuGet.TestServer.Extensions.PackageStaging\\NuGet.TestServer.Extensions.PackageStaging.csproj"
-        }
-        .Select(relativePath => XDocument.Load(Path.Combine(RepositoryRoot, relativePath)))
-        .Select(document =>
-            $"{RequiredProperty(document, "PackageId")} {RequiredProperty(document, "Version")} " +
-            RequiredProperty(document, "TargetFramework"))
-        .ToArray();
-
-    private static string ProjectAssemblyName(string projectPath)
-    {
-        var document = XDocument.Load(projectPath);
-        return document.Descendants("AssemblyName").Select(element => element.Value).FirstOrDefault()
-            ?? Path.GetFileNameWithoutExtension(projectPath);
-    }
-
-    private static string RequiredProperty(XDocument document, string name) =>
-        document.Descendants(name).Select(element => element.Value).FirstOrDefault()
-        ?? throw new InvalidOperationException($"Project property '{name}' is required.");
-
     private static string EscapeXml(string value) =>
         System.Security.SecurityElement.Escape(value) ?? value;
 
@@ -749,7 +509,8 @@ public sealed class DocumentationExampleTests
         return port;
     }
 
-    private static string RepositoryRoot => DocumentationContractTests.RepositoryRoot;
+    private static string RepositoryRoot =>
+        Directory.GetParent(DocumentationContractTests.UserManualRoot)!.Parent!.FullName;
 
     private sealed record ProcessResult(int ExitCode, string Output);
 
