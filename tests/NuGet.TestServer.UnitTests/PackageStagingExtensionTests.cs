@@ -771,14 +771,15 @@ public sealed class StagedPublicationCoordinatorTests
         string contentId;
         await using (var harness = Harness.Create(storageRoot: root))
         {
-            var staged = await harness.StageAsync("Contoso.Sample", "1.2.3");
+            var package = Nupkg("Contoso.Sample", "1.2.3");
+            var staged = await harness.StageAsync(package);
             contentId = staged.Handle!.HandleId;
             await harness.WriteStateAsync("group.one", "{\"v\":1}", null);
 
             // A crash between the package transaction and the dependent state: the
             // journal records the intent and the package is published, nothing else ran.
             await harness.JournalPendingAsync(contentId, "group.one", "{\"v\":2}");
-            await harness.PublishDirectlyAsync("Contoso.Sample", "1.2.3");
+            await harness.PublishDirectlyAsync(package);
         }
 
         await using var restarted = Harness.Create(storageRoot: root);
@@ -918,9 +919,12 @@ public sealed class StagedPublicationCoordinatorTests
         }
 
         public ValueTask<StagedContentWriteResult> StageAsync(string id, string version) =>
+            StageAsync(Nupkg(id, version));
+
+        public ValueTask<StagedContentWriteResult> StageAsync(byte[] package) =>
             Coordinator.StagePackageAsync(
                 Owner,
-                new MemoryStream(Nupkg(id, version)),
+                new MemoryStream(package),
                 16 * 1024 * 1024,
                 CancellationToken.None);
 
@@ -964,9 +968,9 @@ public sealed class StagedPublicationCoordinatorTests
                     DateTimeOffset.UnixEpoch),
                 CancellationToken.None);
 
-        public async ValueTask PublishDirectlyAsync(string id, string version)
+        public async ValueTask PublishDirectlyAsync(byte[] content)
         {
-            var package = TestPackage.FromContent(Nupkg(id, version));
+            var package = TestPackage.FromContent(content);
             var result = await SupplyChain.PublishAsync(
                 new PackagePublicationRequest(package, Owner, "staging", Administrator: true),
                 CancellationToken.None);
