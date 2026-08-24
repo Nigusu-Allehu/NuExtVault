@@ -319,13 +319,75 @@ internal sealed class TransactionalStateStore : IDisposable
             throw new StateConcurrencyException(key, expectedETag, entry?.ETag);
         }
 
-        if (_root is not null)
+        if (_root is null)
         {
-            TryDelete(GetRecordPath(_root, ownerId, key));
-            TryDelete(_compatibility.GetCompatibilityPath(ownerId, key));
+            SetOwner(ownerId, owner.Without(key));
+            return;
         }
 
-        SetOwner(ownerId, owner.Without(key));
+        var batchId = NextSequence();
+        var journal = new WriteJournal(
+            2,
+            $"{StagingPrefix}{batchId:x}",
+            OwnerDirectoryName(ownerId),
+            batchId,
+            [],
+            [KeyFileName(key)]);
+
+        await _commitGate.WaitAsync(token);
+        try
+        {
+            EnsureWritable();
+            try
+            {
+                WriteFaultInjector?.Invoke(StateWriteFailPoint.BeforeDeleteCommitJournal);
+                token.ThrowIfCancellationRequested();
+                await WriteFileAtomicAsync(
+                    Path.Combine(_root, WriteJournalFileName),
+                    JsonSerializer.SerializeToUtf8Bytes(journal),
+                    CancellationToken.None);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                throw new ExtensionStateException(
+                    "Extension state delete could not be committed.",
+                    exception);
+            }
+
+            // The journal is the commit point. Cancellation is deliberately ignored from
+            // here: recovery must converge on the committed tombstone before compatibility
+            // state can be imported, and memory reflects that committed outcome immediately.
+            SetOwner(ownerId, owner.Without(key));
+            try
+            {
+                WriteFaultInjector?.Invoke(StateWriteFailPoint.AfterDeleteCommitJournal);
+                RemoveDeletedRecords(_root, journal, WriteFaultInjector);
+                CompleteWriteJournal(_root, journal);
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException)
+            {
+                Volatile.Write(ref _publishFailed, 1);
+                throw new ExtensionStateException(
+                    "Extension state delete was committed but could not be published; the " +
+                    "pending write journal completes it when the store is next opened.",
+                    exception);
+            }
+            catch
+            {
+                Volatile.Write(ref _publishFailed, 1);
+                throw;
+            }
+        }
+        finally
+        {
+            _commitGate.Release();
+        }
     }
 
     /// <summary>
@@ -344,6 +406,7 @@ internal sealed class TransactionalStateStore : IDisposable
 
         ReleaseExpiredCheckpoints();
         using var _ = await LockAllAsync(token);
+        EnsureWritable();
         var checkpointId = NextCheckpointId();
         var createdAt = _clock.GetUtcNow();
         string? frozenDirectory = null;
@@ -578,6 +641,7 @@ internal sealed class TransactionalStateStore : IDisposable
         {
             staged.MarkCompleted();
             using var _ = await LockAllAsync(token);
+            EnsureWritable();
             if (_root is not null && staged.StagingDirectory is not null)
             {
                 var journal = new RestoreJournal(
@@ -728,13 +792,17 @@ internal sealed class TransactionalStateStore : IDisposable
     /// </summary>
     private static void ValidateWriteJournal(WriteJournal journal)
     {
-        if (journal.Version != 1 ||
+        var records = journal.Records ?? [];
+        var deletedRecords = journal.DeletedRecords ?? [];
+        var names = records.Concat(deletedRecords).ToArray();
+        if (journal.Version is not (1 or 2) ||
             journal.BatchId < 0 ||
             !IsGeneratedDirectoryName(journal.StagingDirectory, StagingPrefix) ||
             !IsOwnerDirectoryName(journal.OwnerDirectory) ||
-            journal.Records is not { Count: > 0 } records ||
-            records.Any(name => !IsHashName(name)) ||
-            records.Distinct(StringComparer.Ordinal).Count() != records.Count)
+            names.Length == 0 ||
+            names.Any(name => !IsHashName(name)) ||
+            names.Distinct(StringComparer.Ordinal).Count() != names.Length ||
+            journal.Version == 1 && deletedRecords.Count != 0)
         {
             throw new ExtensionStateException(
                 "The extension state write journal is not a journal this store wrote. " +
@@ -1410,6 +1478,7 @@ internal sealed class TransactionalStateStore : IDisposable
         {
             try
             {
+                EnsureWritable();
                 await WriteFileAtomicAsync(
                     Path.Combine(_root, WriteJournalFileName),
                     JsonSerializer.SerializeToUtf8Bytes(journal),
@@ -1422,6 +1491,11 @@ internal sealed class TransactionalStateStore : IDisposable
                 throw new ExtensionStateException(
                     "Extension state could not be committed.",
                     exception);
+            }
+            catch
+            {
+                TryDeleteDirectory(staging);
+                throw;
             }
 
             // The batch is authoritative from here: publishing only materializes it, and an
@@ -1477,6 +1551,7 @@ internal sealed class TransactionalStateStore : IDisposable
     private static void ApplyWriteJournal(string root, WriteJournal journal)
     {
         PublishWriteJournal(root, journal);
+        RemoveDeletedRecords(root, journal);
         RefreshCompatibilityMirror(root, journal);
         CompleteWriteJournal(root, journal);
     }
@@ -1507,6 +1582,35 @@ internal sealed class TransactionalStateStore : IDisposable
         {
             faultInjector?.Invoke(StateWriteFailPoint.BeforePublishRecord);
             File.Move(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+        }
+    }
+
+    /// <summary>
+    /// Materializes committed tombstones. The compatibility projection is removed before
+    /// the authoritative record so a completed first step can never be imported as stale
+    /// state, and the pending journal makes every interruption idempotently recoverable.
+    /// </summary>
+    private static void RemoveDeletedRecords(
+        string root,
+        WriteJournal journal,
+        Action<StateWriteFailPoint>? faultInjector = null)
+    {
+        ValidateWriteJournal(journal);
+        foreach (var name in journal.DeletedRecords ?? [])
+        {
+            var mirror = Path.Combine(root, journal.OwnerDirectory, $"{name}.json");
+            faultInjector?.Invoke(StateWriteFailPoint.BeforeDeleteMirrorRemoval);
+            DeleteFileIfExists(mirror);
+            faultInjector?.Invoke(StateWriteFailPoint.AfterDeleteMirrorRemoval);
+
+            var record = Path.Combine(
+                root,
+                ActiveDirectoryName,
+                journal.OwnerDirectory,
+                $"{name}{RecordExtension}");
+            faultInjector?.Invoke(StateWriteFailPoint.BeforeDeleteAuthoritativeRemoval);
+            DeleteFileIfExists(record);
+            faultInjector?.Invoke(StateWriteFailPoint.AfterDeleteAuthoritativeRemoval);
         }
     }
 
@@ -2263,7 +2367,9 @@ internal sealed class TransactionalStateStore : IDisposable
     private void SetOwner(string ownerId, OwnerRecords records) =>
         ImmutableInterlocked.Update(
             ref _owners,
-            (owners, change) => owners.SetItem(change.OwnerId, change.Records),
+            (owners, change) => change.Records.Records.Count == 0
+                ? owners.Remove(change.OwnerId)
+                : owners.SetItem(change.OwnerId, change.Records),
             (OwnerId: ownerId, Records: records));
 
     private static void ApplyJournal(string root, RestoreJournal journal)
@@ -2696,6 +2802,11 @@ internal sealed class TransactionalStateStore : IDisposable
         }
     }
 
+    private static void DeleteFileIfExists(string path)
+    {
+        File.Delete(path);
+    }
+
     private static void TryDeleteDirectory(string path)
     {
         try
@@ -2750,5 +2861,6 @@ internal sealed class TransactionalStateStore : IDisposable
         string StagingDirectory,
         string OwnerDirectory,
         long BatchId,
-        IReadOnlyList<string>? Records);
+        IReadOnlyList<string>? Records,
+        IReadOnlyList<string>? DeletedRecords = null);
 }

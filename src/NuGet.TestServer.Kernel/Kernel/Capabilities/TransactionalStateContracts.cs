@@ -38,7 +38,13 @@ internal enum StateWriteFailPoint
     AfterCommitJournal,
     BeforePublishRecord,
     BeforeMirrorRefresh,
-    AfterMirrorRefresh
+    AfterMirrorRefresh,
+    BeforeDeleteCommitJournal,
+    AfterDeleteCommitJournal,
+    BeforeDeleteAuthoritativeRemoval,
+    AfterDeleteAuthoritativeRemoval,
+    BeforeDeleteMirrorRemoval,
+    AfterDeleteMirrorRemoval
 }
 
 internal sealed record StateParticipantDescriptor(

@@ -160,6 +160,51 @@ public sealed class ExtensionStateIntegrationTests
         Assert.Equal("frozen", Text(record.Value));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Delete_keeps_durable_and_in_memory_state_in_parity(bool durable)
+    {
+        using var directory = new TemporaryDirectory();
+        using var store = new TransactionalStateStore(
+            durable ? directory.Path : null, Participants());
+        var record = await store.WriteAsync(
+            Owner, "key", Utf8("value"), null, CancellationToken.None);
+
+        await store.DeleteAsync(Owner, "key", record.ETag, CancellationToken.None);
+
+        Assert.Null(await store.ReadAsync(Owner, "key", CancellationToken.None));
+        if (durable)
+        {
+            Assert.Empty(Directory.EnumerateFiles(
+                Path.Combine(directory.Path, TransactionalStateStore.ActiveDirectoryName),
+                $"*{TransactionalStateStore.RecordExtension}",
+                SearchOption.AllDirectories));
+            Assert.Null(await new ExtensionStateStore(directory.Path).ReadRawAsync(
+                Owner, "key", CancellationToken.None));
+        }
+    }
+
+    [Fact]
+    public async Task Checkpoints_before_and_after_a_delete_describe_their_committed_state()
+    {
+        using var directory = new TemporaryDirectory();
+        using var store = new TransactionalStateStore(directory.Path, Participants());
+        var record = await store.WriteAsync(
+            Owner, "key", Utf8("frozen"), null, CancellationToken.None);
+        using var beforeDelete = await store.CreateCheckpointAsync(CancellationToken.None);
+
+        await store.DeleteAsync(Owner, "key", record.ETag, CancellationToken.None);
+        using var afterDelete = await store.CreateCheckpointAsync(CancellationToken.None);
+        var before = await store.ExportCheckpointAsync(beforeDelete, CancellationToken.None);
+        var after = await store.ExportCheckpointAsync(afterDelete, CancellationToken.None);
+
+        Assert.Equal(
+            "frozen",
+            Text(Assert.Single(Assert.Single(before.Participants).Records).Value));
+        Assert.Empty(Assert.Single(after.Participants).Records);
+    }
+
     [Fact]
     public async Task Released_checkpoints_cannot_be_exported()
     {
@@ -520,6 +565,46 @@ public sealed class ExtensionStateIntegrationTests
     }
 
     [Fact]
+    public async Task Parallel_owners_can_delete_without_replacing_each_others_journal()
+    {
+        const string secondOwner = "second.extension";
+        using var directory = new TemporaryDirectory();
+        var participants = ImmutableArray.Create(
+            new StateParticipantDescriptor(Owner, "1.0.0", "first", 1),
+            new StateParticipantDescriptor(secondOwner, "1.0.0", "second", 1));
+        using (var store = new TransactionalStateStore(directory.Path, participants))
+        {
+            var first = await store.WriteAsync(
+                Owner, "key", Utf8("first"), null, CancellationToken.None);
+            var second = await store.WriteAsync(
+                secondOwner, "key", Utf8("second"), null, CancellationToken.None);
+            using var start = new ManualResetEventSlim(false);
+            var deletes = new[]
+            {
+                Task.Run(async () =>
+                {
+                    start.Wait();
+                    await store.DeleteAsync(
+                        Owner, "key", first.ETag, CancellationToken.None);
+                }),
+                Task.Run(async () =>
+                {
+                    start.Wait();
+                    await store.DeleteAsync(
+                        secondOwner, "key", second.ETag, CancellationToken.None);
+                })
+            };
+
+            start.Set();
+            await Task.WhenAll(deletes);
+        }
+
+        using var reopened = new TransactionalStateStore(directory.Path, participants);
+        Assert.Null(await reopened.ReadAsync(Owner, "key", CancellationToken.None));
+        Assert.Null(await reopened.ReadAsync(secondOwner, "key", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Atomic_multi_key_edits_apply_or_fail_together()
     {
         using var directory = new TemporaryDirectory();
@@ -580,6 +665,59 @@ public sealed class ExtensionStateIntegrationTests
         await Assert.ThrowsAsync<StateQuotaExceededException>(
             () => store.WriteAsync(
                 "second.owner", "a", new byte[1], null, CancellationToken.None).AsTask());
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Delete_releases_record_and_byte_quota(bool durable)
+    {
+        using var directory = new TemporaryDirectory();
+        using var store = new TransactionalStateStore(
+            durable ? directory.Path : null,
+            Participants(),
+            new StateStoreQuotas(
+                MaximumRecordBytes: 64,
+                MaximumRecordsPerOwner: 2,
+                MaximumOwnerBytes: 64));
+        var first = await store.WriteAsync(
+            Owner, "a", new byte[32], null, CancellationToken.None);
+        await store.WriteAsync(Owner, "b", new byte[32], null, CancellationToken.None);
+
+        await store.DeleteAsync(Owner, "a", first.ETag, CancellationToken.None);
+        var replacement = await store.WriteAsync(
+            Owner, "c", new byte[32], null, CancellationToken.None);
+
+        Assert.True(replacement.ETag > first.ETag);
+        Assert.Null(await store.ReadAsync(Owner, "a", CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Deleting_an_owners_final_record_releases_owner_quota(bool durable)
+    {
+        const string secondOwner = "second.extension";
+        using var directory = new TemporaryDirectory();
+        using var store = new TransactionalStateStore(
+            durable ? directory.Path : null,
+            [
+                new StateParticipantDescriptor(Owner, "1.0.0", "first", 1),
+                new StateParticipantDescriptor(secondOwner, "1.0.0", "second", 1)
+            ],
+            new StateStoreQuotas(MaximumOwners: 1));
+        var first = await store.WriteAsync(
+            Owner, "key", Utf8("first"), null, CancellationToken.None);
+
+        await store.DeleteAsync(Owner, "key", first.ETag, CancellationToken.None);
+        var second = await store.WriteAsync(
+            secondOwner, "key", Utf8("second"), null, CancellationToken.None);
+
+        Assert.Equal(
+            "second",
+            Text((await store.ReadAsync(
+                secondOwner, "key", CancellationToken.None))!.Value));
+        Assert.True(second.ETag > first.ETag);
     }
 
     [Fact]
