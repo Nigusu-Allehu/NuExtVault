@@ -675,11 +675,11 @@ public sealed class DocumentationExampleTests
             "src\\NuGet.TestServer.Extensions.PackageStaging\\NuGet.TestServer.Extensions.PackageStaging.csproj"
         ];
         var projects = projectPaths
-            .Select(relativePath => Path.GetFullPath(Path.Combine(RepositoryRoot, relativePath)))
+            .Select(ResolveRepositoryPath)
             .ToDictionary(path => path, ProjectAssemblyName, StringComparer.OrdinalIgnoreCase);
 
         return projectPaths[1..]
-            .Select(relativePath => Path.GetFullPath(Path.Combine(RepositoryRoot, relativePath)))
+            .Select(ResolveRepositoryPath)
             .SelectMany(path =>
             {
                 var document = XDocument.Load(path);
@@ -722,7 +722,7 @@ public sealed class DocumentationExampleTests
             "src\\NuGet.TestServer.Extensions.TestKit\\NuGet.TestServer.Extensions.TestKit.csproj",
             "src\\NuGet.TestServer.Extensions.PackageStaging\\NuGet.TestServer.Extensions.PackageStaging.csproj"
         }
-        .Select(relativePath => XDocument.Load(Path.Combine(RepositoryRoot, relativePath)))
+        .Select(relativePath => XDocument.Load(ResolveRepositoryPath(relativePath)))
         .Select(document =>
             $"{RequiredProperty(document, "PackageId")} {RequiredProperty(document, "Version")} " +
             RequiredProperty(document, "TargetFramework"))
@@ -738,6 +738,11 @@ public sealed class DocumentationExampleTests
     private static string RequiredProperty(XDocument document, string name) =>
         document.Descendants(name).Select(element => element.Value).FirstOrDefault()
         ?? throw new InvalidOperationException($"Project property '{name}' is required.");
+
+    private static string ResolveRepositoryPath(string relativePath) =>
+        Path.GetFullPath(Path.Combine(
+            RepositoryRoot,
+            relativePath.Replace('\\', Path.DirectorySeparatorChar)));
 
     private static string EscapeXml(string value) =>
         System.Security.SecurityElement.Escape(value) ?? value;
