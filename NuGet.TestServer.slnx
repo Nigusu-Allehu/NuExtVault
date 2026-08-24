@@ -13,6 +13,7 @@
     <Project Path="tests/NuGet.TestServer.RouteFixture/NuGet.TestServer.RouteFixture.csproj" />
     <Project Path="tests/NuGet.TestServer.Extensions.Sdk.Tests/NuGet.TestServer.Extensions.Sdk.Tests.csproj" />
     <Project Path="tests/NuGet.TestServer.SdkFixture/NuGet.TestServer.SdkFixture.csproj" />
+    <Project Path="tests/NuGet.TestServer.SdkFixture.Dependency/NuGet.TestServer.SdkFixture.Dependency.csproj" />
     <Project Path="tests/NuGet.TestServer.ExternalExtensionTestKit/NuGet.TestServer.ExternalExtensionTestKit.csproj" />
     <Project Path="tests/NuGet.TestServer.ForbiddenReferenceFixture/NuGet.TestServer.ForbiddenReferenceFixture.csproj" />
     <Project Path="tests/NuGet.TestServer.UnitTests/NuGet.TestServer.UnitTests.csproj" />

@@ -63,7 +63,7 @@ public sealed class PackagingContractTests
             "artifacts",
             "step19-sdk-tests",
             "fixture",
-            "Contoso.NuTestServer.Flavors.1.2.3.nupkg")));
+            "Contoso.Flavors.1.2.3.nupkg")));
     }
 
     [Fact]

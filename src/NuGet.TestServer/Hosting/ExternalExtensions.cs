@@ -38,13 +38,36 @@ internal sealed record ExternalExtensionLoadResult(
     string Version,
     bool Succeeded,
     string? FailureCode,
-    string? RedactedMessage);
+    string? RedactedMessage,
+    ValidatedExtensionActivationIdentity? ActivationIdentity = null);
+
+internal sealed record ValidatedExtensionActivationIdentity(
+    string PackageId,
+    string PackageVersion,
+    string ManifestId,
+    string ManifestVersion,
+    string ModuleAssemblyIdentity,
+    string Publisher,
+    string PublisherKeyId,
+    string ManifestDigest,
+    string ClosureDigest,
+    ContractVersionSet SelectedContracts,
+    string StagedContentIdentity);
 
 internal sealed record ExternalExtensionDiagnostics(
     ImmutableArray<ExternalExtensionLoadResult> Results)
 {
     public static ExternalExtensionDiagnostics Empty { get; } = new([]);
 }
+
+internal sealed record ExternalExtensionStagedPackage(
+    string PackageId,
+    string Version,
+    string StageDirectory,
+    string EntryAssemblyPath);
+
+internal sealed record ExternalExtensionLoadTestHooks(
+    Action<ExternalExtensionStagedPackage>? AfterValidation = null);
 
 internal sealed class ExternalExtensionRuntime : IDisposable, IHostedService
 {
@@ -96,7 +119,9 @@ internal static class ExternalExtensionPackageLoader
         "NuGet.TestServer.Extensions.Official"
     ];
 
-    public static ExternalExtensionRuntime Load(ExternalExtensionConfiguration configuration)
+    public static ExternalExtensionRuntime Load(
+        ExternalExtensionConfiguration configuration,
+        ExternalExtensionLoadTestHooks? testHooks = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         if (!configuration.IsEnabled)
@@ -122,13 +147,29 @@ internal static class ExternalExtensionPackageLoader
         }
         var staged = new List<StagedPackage>();
         var failures = new List<ExternalExtensionLoadResult>();
+        long retainedAssemblyBytes = 0;
         try
         {
             foreach (var packagePath in packagePaths)
             {
                 try
                 {
-                    staged.Add(Stage(packagePath, configuration, limits));
+                    var package = Stage(
+                        packagePath,
+                        configuration,
+                        limits,
+                        limits.MaximumTotalBytes - retainedAssemblyBytes);
+                    retainedAssemblyBytes = checked(retainedAssemblyBytes + package.RetainedAssemblyBytes);
+                    if (retainedAssemblyBytes > limits.MaximumTotalBytes)
+                    {
+                        package.Dispose();
+                        throw new ExternalExtensionException(
+                            package.Id,
+                            package.Version,
+                            "external-extension.memory-limit-exceeded",
+                            "Validated extension assembly bytes exceed the configured total size limit.");
+                    }
+                    staged.Add(package);
                 }
                 catch (ExternalExtensionException exception)
                 {
@@ -174,15 +215,39 @@ internal static class ExternalExtensionPackageLoader
                 return Failed(staged, failures);
             }
 
+            if (testHooks?.AfterValidation is { } afterValidation)
+            {
+                foreach (var package in ordered)
+                {
+                    afterValidation(new ExternalExtensionStagedPackage(
+                        package.Id,
+                        package.Version,
+                        package.StageDirectory,
+                        package.EntryAssemblyPath));
+                }
+            }
+
             var modules = ImmutableArray.CreateBuilder<IExtensionModule>();
             var contexts = ImmutableArray.CreateBuilder<PackageLoadContext>();
             var results = ImmutableArray.CreateBuilder<ExternalExtensionLoadResult>();
             foreach (var package in ordered)
             {
+                PackageLoadContext? context = null;
                 try
                 {
-                    var context = new PackageLoadContext(package.StageDirectory);
-                    var assembly = context.LoadEntryAssembly(package.EntryAssemblyPath);
+                    context = new PackageLoadContext(
+                        package.StageDirectory,
+                        package.Assemblies);
+                    var assembly = context.LoadEntryAssembly(package.EntryAssembly);
+                    if (!AssemblyName.ReferenceMatchesDefinition(
+                            assembly.GetName(),
+                            package.EntryAssembly.Identity))
+                    {
+                        throw Failure(
+                            package,
+                            "external-extension.module-identity-mismatch",
+                            "The activated module assembly identity does not match the validated identity.");
+                    }
                     var type = assembly.GetType(package.Metadata.EntryType, throwOnError: true)
                         ?? throw new TypeLoadException(package.Metadata.EntryType);
                     if (!typeof(IExtensionModule).IsAssignableFrom(type))
@@ -203,21 +268,26 @@ internal static class ExternalExtensionPackageLoader
                             "The module contribution does not exactly match the validated package manifest.");
                     }
 
-                    contexts.Add(context);
-                    modules.Add(PublicExtensionModuleAdapter.Materialize(
+                    var materialized = PublicExtensionModuleAdapter.Materialize(
                         module,
-                        package.ManifestDigest,
-                        package.StageDigest));
+                        package.Identity.ManifestDigest,
+                        package.Identity.StagedContentIdentity);
+                    contexts.Add(context);
+                    modules.Add(materialized);
                     results.Add(new ExternalExtensionLoadResult(
                         package.Id,
                         package.Version,
                         true,
                         null,
                         $"Loaded trusted package '{package.Id}' version '{package.Version}' " +
-                        $"with staged digest '{package.StageDigest}'."));
+                        $"with manifest digest '{package.Identity.ManifestDigest}', closure digest " +
+                        $"'{package.Identity.ClosureDigest}', and staged content identity " +
+                        $"'{package.Identity.StagedContentIdentity}'.",
+                        package.Identity));
                 }
                 catch (ExternalExtensionException exception)
                 {
+                    context?.UnloadAndDelete();
                     failures.Add(new ExternalExtensionLoadResult(
                         exception.PackageId,
                         exception.Version,
@@ -232,6 +302,7 @@ internal static class ExternalExtensionPackageLoader
                     MissingMethodException or TargetInvocationException or
                     InvalidOperationException)
                 {
+                    context?.UnloadAndDelete();
                     failures.Add(new ExternalExtensionLoadResult(
                         package.Id,
                         package.Version,
@@ -357,7 +428,8 @@ internal static class ExternalExtensionPackageLoader
     private static StagedPackage Stage(
         string packagePath,
         ExternalExtensionConfiguration configuration,
-        ExternalExtensionLimits limits)
+        ExternalExtensionLimits limits,
+        long remainingAssemblyBytes)
     {
         var packageLength = new FileInfo(packagePath).Length;
         if (packageLength > limits.MaximumPackageBytes)
@@ -455,7 +527,10 @@ internal static class ExternalExtensionPackageLoader
                     code,
                     $"Package '{packageId}' has an invalid manifest.");
             }
-            if (!string.Equals(packageVersion, manifest.Identity.Version, StringComparison.Ordinal))
+            // Extension package identity is deliberately stricter than NuGet lookup
+            // identity: no case folding, trimming, or version normalization is allowed.
+            if (!string.Equals(packageId, manifest.Identity.Id, StringComparison.Ordinal) ||
+                !string.Equals(packageVersion, manifest.Identity.Version, StringComparison.Ordinal))
             {
                 throw new ExternalExtensionException(
                     packageId, packageVersion, "external-extension.package-identity-mismatch",
@@ -464,7 +539,7 @@ internal static class ExternalExtensionPackageLoader
 
             var metadata = ReadPackageMetadata(RequiredRootFile(stage, PackageMetadataName));
             ValidateManifest(manifest);
-            ValidateAttestation(
+            var publisherKeyId = ValidateAttestation(
                 RequiredRootFile(stage, AttestationName),
                 packageId,
                 packageVersion,
@@ -489,15 +564,85 @@ internal static class ExternalExtensionPackageLoader
                     $"Package '{packageId}' bundles the host SDK assembly.");
             }
 
+            var assemblies = ImmutableDictionary.CreateBuilder<string, VerifiedAssemblyImage>(
+                StringComparer.OrdinalIgnoreCase);
+            long retainedBytes = 0;
             foreach (var assemblyPath in Directory.EnumerateFiles(
-                         libRoot,
-                         "*.dll",
-                         SearchOption.TopDirectoryOnly))
+                         libRoot, "*.dll", SearchOption.TopDirectoryOnly)
+                     .OrderBy(Path.GetFileName, StringComparer.Ordinal))
             {
-                ValidateAssemblyReferences(assemblyPath, packageId, packageVersion);
+                var symbolsPath = Path.ChangeExtension(assemblyPath, ".pdb");
+                var assemblyLength = new FileInfo(assemblyPath).Length;
+                var symbolsLength = File.Exists(symbolsPath) ? new FileInfo(symbolsPath).Length : 0;
+                retainedBytes = checked(retainedBytes + assemblyLength + symbolsLength);
+                if (retainedBytes > remainingAssemblyBytes)
+                {
+                    throw new ExternalExtensionException(
+                        packageId,
+                        packageVersion,
+                        "external-extension.memory-limit-exceeded",
+                        "Validated extension assembly bytes exceed the configured total size limit.");
+                }
+                var assemblyBytes = File.ReadAllBytes(assemblyPath);
+                var assemblyName = ReadAndValidateAssembly(
+                    assemblyBytes,
+                    packageId,
+                    packageVersion,
+                    requireSdkReference: string.Equals(
+                        Path.GetFileName(assemblyPath),
+                        metadata.EntryAssembly,
+                        StringComparison.Ordinal));
+                if (ForbiddenAssemblies.Contains(assemblyName.Name ?? string.Empty) ||
+                    PackageLoadContext.IsPlatformAssembly(assemblyName.Name))
+                {
+                    throw new ExternalExtensionException(
+                        packageId,
+                        packageVersion,
+                        "external-extension.duplicate-host-assembly",
+                        $"Package '{packageId}' bundles a host or framework assembly identity.");
+                }
+                if (string.Equals(assemblyName.Name, SdkName, StringComparison.Ordinal))
+                {
+                    throw new ExternalExtensionException(
+                        packageId, packageVersion, "external-extension.duplicate-sdk-identity",
+                        $"Package '{packageId}' bundles the host SDK assembly.");
+                }
+
+                var symbolsBytes = File.Exists(symbolsPath) ? File.ReadAllBytes(symbolsPath) : null;
+                var image = new VerifiedAssemblyImage(
+                    Path.GetFileName(assemblyPath),
+                    assemblyName,
+                    assemblyBytes,
+                    symbolsBytes);
+                if (!assemblies.TryAdd(assemblyName.Name!, image))
+                {
+                    throw new ExternalExtensionException(
+                        packageId,
+                        packageVersion,
+                        "external-extension.duplicate-assembly-identity",
+                        $"Package '{packageId}' contains duplicate private assembly identities.");
+                }
             }
+            var entryAssembly = assemblies.Values.SingleOrDefault(image =>
+                string.Equals(image.FileName, metadata.EntryAssembly, StringComparison.Ordinal))
+                ?? throw new ExternalExtensionException(
+                    packageId, packageVersion, "external-extension.entry-assembly-invalid",
+                    $"Package '{packageId}' has an invalid entry assembly.");
             var manifestDigest = Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
             var stageDigest = ComputeStageDigest(stage);
+            var closureDigest = ComputeClosureDigest(assemblies.Values);
+            var identity = new ValidatedExtensionActivationIdentity(
+                packageId,
+                packageVersion,
+                manifest.Identity.Id,
+                manifest.Identity.Version,
+                entryAssembly.Identity.FullName!,
+                manifest.Identity.Publisher,
+                publisherKeyId,
+                manifestDigest,
+                closureDigest,
+                manifest.Contracts,
+                stageDigest);
             return new StagedPackage(
                 packageId,
                 packageVersion,
@@ -505,8 +650,9 @@ internal static class ExternalExtensionPackageLoader
                 metadata,
                 stage,
                 entryAssemblyPath,
-                manifestDigest,
-                stageDigest);
+                entryAssembly,
+                assemblies.ToImmutable(),
+                identity);
         }
         catch
         {
@@ -580,7 +726,7 @@ internal static class ExternalExtensionPackageLoader
         }
     }
 
-    private static void ValidateAttestation(
+    private static string ValidateAttestation(
         string path,
         string packageId,
         string packageVersion,
@@ -644,6 +790,7 @@ internal static class ExternalExtensionPackageLoader
                 code,
                 $"Package '{packageId}' failed attestation verification ({verification.Failure}).");
         }
+        return envelope.KeyId;
     }
 
     private static PackageMetadata ReadPackageMetadata(string path)
@@ -756,12 +903,13 @@ internal static class ExternalExtensionPackageLoader
         }
     }
 
-    private static void ValidateAssemblyReferences(
-        string entryAssemblyPath,
+    private static AssemblyName ReadAndValidateAssembly(
+        byte[] assemblyBytes,
         string packageId,
-        string packageVersion)
+        string packageVersion,
+        bool requireSdkReference)
     {
-        using var stream = File.OpenRead(entryAssemblyPath);
+        using var stream = new MemoryStream(assemblyBytes, writable: false);
         using var pe = new PEReader(stream, PEStreamOptions.LeaveOpen);
         if (!pe.HasMetadata)
         {
@@ -793,7 +941,8 @@ internal static class ExternalExtensionPackageLoader
         var sdkReference = references.SingleOrDefault(reference =>
             string.Equals(reference.Name, SdkName, StringComparison.Ordinal));
         var hostSdk = typeof(IExtensionModule).Assembly.GetName();
-        if (string.IsNullOrEmpty(sdkReference.Name) || sdkReference.Version != hostSdk.Version)
+        if (requireSdkReference &&
+            (string.IsNullOrEmpty(sdkReference.Name) || sdkReference.Version != hostSdk.Version))
         {
             throw new ExternalExtensionException(
                 packageId,
@@ -801,6 +950,19 @@ internal static class ExternalExtensionPackageLoader
                 "external-extension.sdk-identity-mismatch",
                 $"Package '{packageId}' does not reference the exact host SDK identity.");
         }
+
+        var definition = metadata.GetAssemblyDefinition();
+        var identity = new AssemblyName
+        {
+            Name = metadata.GetString(definition.Name),
+            Version = definition.Version,
+            CultureName = definition.Culture.IsNil ? null : metadata.GetString(definition.Culture)
+        };
+        if (!definition.PublicKey.IsNil)
+        {
+            identity.SetPublicKey(metadata.GetBlobBytes(definition.PublicKey));
+        }
+        return identity;
     }
 
     private static (string Id, string Version) ReadNuspec(string path)
@@ -835,6 +997,23 @@ internal static class ExternalExtensionPackageLoader
             hash.AppendData(System.Text.Encoding.UTF8.GetBytes(relative));
             hash.AppendData([0]);
             hash.AppendData(File.ReadAllBytes(file));
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+
+    private static string ComputeClosureDigest(IEnumerable<VerifiedAssemblyImage> assemblies)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var assembly in assemblies.OrderBy(image => image.FileName, StringComparer.Ordinal))
+        {
+            hash.AppendData(System.Text.Encoding.UTF8.GetBytes(assembly.FileName));
+            hash.AppendData([0]);
+            hash.AppendData(assembly.AssemblyBytes);
+            if (assembly.SymbolsBytes is { } symbols)
+            {
+                hash.AppendData([0]);
+                hash.AppendData(symbols);
+            }
         }
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
@@ -918,6 +1097,15 @@ internal static class ExternalExtensionPackageLoader
         Version Minimum,
         Version MaximumExclusive);
 
+    internal sealed record VerifiedAssemblyImage(
+        string FileName,
+        AssemblyName Identity,
+        byte[] AssemblyBytes,
+        byte[]? SymbolsBytes)
+    {
+        public long RetainedBytes => AssemblyBytes.LongLength + (SymbolsBytes?.LongLength ?? 0);
+    }
+
     private sealed class StagedPackage(
         string id,
         string version,
@@ -925,8 +1113,9 @@ internal static class ExternalExtensionPackageLoader
         PackageMetadata metadata,
         string stageDirectory,
         string entryAssemblyPath,
-        string manifestDigest,
-        string stageDigest) : IDisposable
+        VerifiedAssemblyImage entryAssembly,
+        ImmutableDictionary<string, VerifiedAssemblyImage> assemblies,
+        ValidatedExtensionActivationIdentity identity) : IDisposable
     {
         public string Id { get; } = id;
         public string Version { get; } = version;
@@ -934,8 +1123,10 @@ internal static class ExternalExtensionPackageLoader
         public PackageMetadata Metadata { get; } = metadata;
         public string StageDirectory { get; } = stageDirectory;
         public string EntryAssemblyPath { get; } = entryAssemblyPath;
-        public string ManifestDigest { get; } = manifestDigest;
-        public string StageDigest { get; } = stageDigest;
+        public VerifiedAssemblyImage EntryAssembly { get; } = entryAssembly;
+        public ImmutableDictionary<string, VerifiedAssemblyImage> Assemblies { get; } = assemblies;
+        public ValidatedExtensionActivationIdentity Identity { get; } = identity;
+        public long RetainedAssemblyBytes { get; } = assemblies.Values.Sum(image => image.RetainedBytes);
         public bool DisposeStageOnFailure { get; set; } = true;
 
         public void Dispose()
@@ -959,28 +1150,46 @@ internal static class ExternalExtensionPackageLoader
     }
 }
 
-internal sealed class PackageLoadContext(string packageDirectory)
+internal sealed class PackageLoadContext(
+    string packageDirectory,
+    ImmutableDictionary<string, ExternalExtensionPackageLoader.VerifiedAssemblyImage> assemblies)
     : AssemblyLoadContext(isCollectible: true)
 {
     private static readonly Assembly SdkAssembly = typeof(IExtensionModule).Assembly;
-    private static readonly ImmutableHashSet<string> PlatformAssemblies =
-        ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty)
+    private static readonly ImmutableHashSet<string> PlatformAssemblies = BuildPlatformAssemblies();
+    private readonly string _packageDirectory = packageDirectory;
+    private ImmutableDictionary<string, ExternalExtensionPackageLoader.VerifiedAssemblyImage> _assemblies =
+        assemblies;
+
+    private static ImmutableHashSet<string> BuildPlatformAssemblies()
+    {
+        var frameworkRoots = new[]
+        {
+            Path.GetDirectoryName(typeof(object).Assembly.Location)!,
+            Path.GetDirectoryName(typeof(IHostedService).Assembly.Location)!
+        }.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        return ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? string.Empty)
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Where(path => frameworkRoots.Contains(Path.GetDirectoryName(path)!))
             .Select(Path.GetFileNameWithoutExtension)
             .Where(name => name is not null)
             .Select(name => name!)
             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-    private readonly string _packageDirectory = packageDirectory;
+    }
 
-    internal Assembly LoadEntryAssembly(string path)
+    internal static bool IsPlatformAssembly(string? name) =>
+        PlatformAssemblies.Contains(name ?? string.Empty);
+
+    internal Assembly LoadEntryAssembly(
+        ExternalExtensionPackageLoader.VerifiedAssemblyImage image)
     {
-        using var stream = File.OpenRead(path);
-        return LoadFromStream(stream);
+        return LoadVerifiedImage(image);
     }
 
     internal void UnloadAndDelete()
     {
         Unload();
+        _assemblies = ImmutableDictionary<string, ExternalExtensionPackageLoader.VerifiedAssemblyImage>.Empty;
         if (Directory.Exists(_packageDirectory))
         {
             Directory.Delete(_packageDirectory, recursive: true);
@@ -1004,14 +1213,29 @@ internal sealed class PackageLoadContext(string packageDirectory)
             return null;
         }
 
-        var path = Path.Combine(_packageDirectory, "lib", "net10.0", assemblyName.Name + ".dll");
-        if (!File.Exists(path))
+        if (!_assemblies.TryGetValue(assemblyName.Name ?? string.Empty, out var image))
         {
             throw new FileNotFoundException(
                 $"Private dependency '{assemblyName.Name}' is not present in the staged package.");
         }
+        if (!AssemblyName.ReferenceMatchesDefinition(assemblyName, image.Identity))
+        {
+            throw new FileLoadException(
+                $"Private dependency '{assemblyName.Name}' does not match its validated identity.");
+        }
+        return LoadVerifiedImage(image);
+    }
 
-        using var stream = File.OpenRead(path);
-        return LoadFromStream(stream);
+    private Assembly LoadVerifiedImage(
+        ExternalExtensionPackageLoader.VerifiedAssemblyImage image)
+    {
+        using var assemblyStream = new MemoryStream(image.AssemblyBytes, writable: false);
+        if (image.SymbolsBytes is not { } symbols)
+        {
+            return LoadFromStream(assemblyStream);
+        }
+
+        using var symbolsStream = new MemoryStream(symbols, writable: false);
+        return LoadFromStream(assemblyStream, symbolsStream);
     }
 }

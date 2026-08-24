@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using NuGet.TestServer.Extensions.Sdk;
+using NuGet.TestServer.SdkFixture.Dependency;
 
 namespace NuGet.TestServer.SdkFixture;
 
@@ -35,7 +36,7 @@ public sealed class FlavorsExtension : IExtensionModule
             {
                 var now = await clock.GetUtcNowAsync(token);
                 return OperationResponse<GetFlavorIndexResponse>.Success(
-                    new GetFlavorIndexResponse(["vanilla"], now));
+                    new GetFlavorIndexResponse([FlavorDependency.Name], now));
             });
     }
 }

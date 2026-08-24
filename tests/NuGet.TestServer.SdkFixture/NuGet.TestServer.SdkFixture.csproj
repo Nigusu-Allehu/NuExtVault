@@ -4,13 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <PackageId>Contoso.NuTestServer.Flavors</PackageId>
+    <PackageId>Contoso.Flavors</PackageId>
     <Version>1.2.3</Version>
     <Description>Separately compiled Step 19 public SDK conformance fixture.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj" />
+    <ProjectReference Include="..\NuGet.TestServer.SdkFixture.Dependency\NuGet.TestServer.SdkFixture.Dependency.csproj" />
   </ItemGroup>
 
   <ItemGroup>

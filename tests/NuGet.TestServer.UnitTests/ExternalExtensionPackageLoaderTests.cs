@@ -81,10 +81,126 @@ public sealed class ExternalExtensionPackageLoaderTests(ExternalExtensionAssetsF
         using var runtime = ExternalExtensionPackageLoader.Load(Configuration(roots, trustRoot));
 
         var result = Assert.Single(runtime.Diagnostics.Results);
-        Assert.True(result.Succeeded);
+        Assert.True(result.Succeeded, result.RedactedMessage);
         Assert.Null(result.FailureCode);
+        var identity = Assert.IsType<ValidatedExtensionActivationIdentity>(
+            result.ActivationIdentity);
+        Assert.Equal(Assets.Id, identity.PackageId);
+        Assert.Equal(Assets.Id, identity.ManifestId);
+        Assert.Equal(Assets.Version, identity.PackageVersion);
+        Assert.Equal(Assets.Version, identity.ManifestVersion);
+        Assert.Equal(Assets.Publisher, identity.Publisher);
+        Assert.Equal(ConformanceAttestationFixture.DefaultKeyId, identity.PublisherKeyId);
+        Assert.Matches("^[0-9a-f]{64}$", identity.ManifestDigest);
+        Assert.Matches("^[0-9a-f]{64}$", identity.ClosureDigest);
+        Assert.Matches("^[0-9a-f]{64}$", identity.StagedContentIdentity);
+        Assert.Contains("NuGet.TestServer.SdkFixture", identity.ModuleAssemblyIdentity);
         var module = Assert.Single(runtime.Modules);
         Assert.Equal("Contoso.Flavors", module.Contribution.Manifest.Identity.Id);
+    }
+
+    [Theory]
+    [InlineData("contoso.flavors", "1.2.3")]
+    [InlineData("Contoso.Flavors ", "1.2.3")]
+    [InlineData("Contoso.Flavors", "1.2.3.0")]
+    public void NuGet_identity_must_ordinally_and_textually_equal_the_manifest_identity(
+        string packageId,
+        string packageVersion)
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var packageJson = ExternalExtensionPackageJson.Build(
+            Assets.EntryAssemblyFileName,
+            Assets.EntryType,
+            []);
+        var payload = ConformanceAttestationFixture.BuildPayload(
+            packageId,
+            packageVersion,
+            Assets.Publisher,
+            ExternalExtensionPackageBuilder.Sha256Hex(Assets.ManifestJsonBytes),
+            ExternalExtensionPackageBuilder.StructuralSha256());
+        var attestation = ConformanceAttestationFixture.SignToAttestationJson(payload, key);
+        roots.WritePackage(
+            "identity-mismatch.nupkg",
+            ExternalExtensionPackageBuilder.BuildNupkg(
+                packageId,
+                packageVersion,
+                Assets.ManifestJsonBytes,
+                packageJson,
+                attestation,
+                new Dictionary<string, byte[]>
+                {
+                    [Assets.EntryAssemblyFileName] = Assets.EntryAssemblyBytes
+                }));
+
+        using var runtime = ExternalExtensionPackageLoader.Load(Configuration(roots, trustRoot));
+
+        AssertFailed(runtime, "external-extension.package-identity-mismatch");
+    }
+
+    [Fact]
+    public void Activation_loads_the_exact_entry_assembly_bytes_captured_during_validation()
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "flavors.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            Configuration(roots, trustRoot),
+            new ExternalExtensionLoadTestHooks(
+                staged => File.WriteAllBytes(staged.EntryAssemblyPath, "mutated"u8.ToArray())));
+
+        Assert.True(Assert.Single(runtime.Diagnostics.Results).Succeeded);
+        Assert.Single(runtime.Modules);
+    }
+
+    [Fact]
+    public void Activation_loads_exact_private_dependency_bytes_captured_during_validation()
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "flavors.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            Configuration(roots, trustRoot),
+            new ExternalExtensionLoadTestHooks(
+                staged => File.WriteAllBytes(
+                    Path.Combine(
+                        staged.StageDirectory,
+                        "lib",
+                        "net10.0",
+                        "Contoso.Flavors.Dependency.dll"),
+                    "mutated"u8.ToArray())));
+
+        Assert.True(Assert.Single(runtime.Diagnostics.Results).Succeeded);
+        Assert.Single(runtime.Modules);
+    }
+
+    [Theory]
+    [InlineData("extension-manifest.json")]
+    [InlineData("extension-package.json")]
+    [InlineData("extension-attestation.json")]
+    public void Activation_identity_does_not_reopen_validated_root_metadata(string relativePath)
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "flavors.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            Configuration(roots, trustRoot),
+            new ExternalExtensionLoadTestHooks(
+                staged => File.WriteAllBytes(
+                    Path.Combine(staged.StageDirectory, relativePath),
+                    "mutated"u8.ToArray())));
+
+        Assert.True(Assert.Single(runtime.Diagnostics.Results).Succeeded);
+        Assert.Single(runtime.Modules);
     }
 
     // ---- trust root ------------------------------------------------------------
@@ -617,6 +733,23 @@ public sealed class ExternalExtensionPackageLoaderTests(ExternalExtensionAssetsF
         using var runtime = ExternalExtensionPackageLoader.Load(Configuration(roots, trustRoot));
 
         AssertFailed(runtime, "external-extension.duplicate-sdk-identity");
+    }
+
+    [Fact]
+    public void A_package_that_bundles_a_framework_assembly_identity_is_rejected()
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var frameworkAssembly = typeof(Microsoft.Extensions.Hosting.IHostedService).Assembly;
+        var nupkg = ExternalExtensionPackageBuilder.WithEntry(
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key),
+            $"{ExternalExtensionPackageBuilder.LibDirectory}{Path.GetFileName(frameworkAssembly.Location)}",
+            File.ReadAllBytes(frameworkAssembly.Location));
+        roots.WritePackage("flavors.nupkg", nupkg);
+
+        using var runtime = ExternalExtensionPackageLoader.Load(Configuration(roots, trustRoot));
+
+        AssertFailed(runtime, "external-extension.duplicate-host-assembly");
     }
 
     // ---- deterministic diagnostics / redaction ---------------------------------------
