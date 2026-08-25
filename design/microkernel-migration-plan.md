@@ -10,8 +10,8 @@ pass Windows, Ubuntu, and macOS CI. Step 11A generates every active route from
 validated, startup-frozen endpoint descriptors and is merged through PR #65. Step 11B
 projects absolute URLs in the kernel from typed route references and is merged through
 PR #67. Step 11C moved the transport-neutral extension contracts into the assembly
-then named `NuGet.TestServer.Extensions.Abstractions` (renamed by Step 19 to
-`NuGet.TestServer.Extensions.Sdk`), proved closed-world composition with a
+then named `NuExtVault.Extensions.Abstractions` (renamed by Step 19 to
+`NuExtVault.Extensions.Sdk`), proved closed-world composition with a
 separately compiled conformance module, and enforces the architecture fitness gates; it
 is merged through PR #69. Step 11D establishes the measured scalability and
 backpressure baseline and is merged through PR #71. Lane C Step 16 is merged through
@@ -20,7 +20,7 @@ PR #75, and Lane A Step 12B is merged through PR #78. The Lane B Step 13A prereq
 mechanically separates registration and search and is merged through PR #77. Lane B
 Step 15 is merged through PR #79, Step 14 through PR #80, Step 17 through PR #81,
 and Step 18 through PR #82. Step 19 is implemented in this workspace: the former
-abstractions project is the public `NuGet.TestServer.Extensions.Sdk`, the separate
+abstractions project is the public `NuExtVault.Extensions.Sdk`, the separate
 TestKit and conformance fixture are locally packable, and strict manifests, version
 identities, structural fingerprints, and ES256 attestations are frozen by focused
 tests. Step 12A replaces the temporary extension-state store with
@@ -39,7 +39,7 @@ deliver participant state its manifest never declared. It
 is implemented and covered by integrated capability, composition, backup,
 boundedness, and hardening tests and is merged through PR #75. Step 12B moves health,
 readiness, storage diagnostics, host diagnostics, backup, and restore ownership into
-the official `NuTest.Operations` module through the generic module seam. Kernel
+the official `NuExtVault.Operations` module through the generic module seam. Kernel
 capabilities retain health aggregation, integrity, bounded stream-handle resolution,
 and the version 2 checkpoint/restore commit authority. Step 12B is implemented and
 covered by ownership, route, capability-fitness, compatibility, checkpoint,
@@ -56,8 +56,8 @@ not published externally. Filesystem discovery, assembly load contexts, and
 activation begin in Step 20.
 
 Step 22 implements Package Staging as the reference external extension. It lives in
-`src/NuGet.TestServer.Extensions.PackageStaging`, is independently packable as
-`NuTest.PackageStaging`, references only the public SDK (v1.3.0), ships a strict
+`src/NuExtVault.Extensions.PackageStaging`, is independently packable as
+`NuExtVault.PackageStaging`, references only the public SDK (v1.3.0), ships a strict
 manifest with a signed ES256 conformance attestation, and loads through the Step 20
 trusted in-process package loader. It is absent from every official catalog, kernel
 catalog, and default profile: an administrator must supply extension roots, trust
@@ -98,7 +98,7 @@ Target architecture:
 
 ## Objective
 
-Migrate NuTestServer from a single host that directly composes all NuGet V3,
+Migrate NuExtVault from a single host that directly composes all NuGet V3,
 control, security, storage, and operations behavior into a microkernel where:
 
 - The kernel owns safety, consistency, lifecycle, routing, and package invariants.
@@ -130,10 +130,10 @@ The primary migration hotspots are:
   - Owns middleware.
   - Generates the frozen route table from the resolved endpoint descriptors.
   - Builds service-index, registration, and search documents.
-- `Hosting/NuGetTestServerHost.cs`
+- `Hosting/NuExtVaultHost.cs`
   - Exposes many direct construction overloads.
   - Resolves concrete control services directly from dependency injection.
-- `NuGet.TestServer.Cli/Program.cs`
+- `NuExtVault.Cli/Program.cs`
   - Parses configuration.
   - Constructs storage, vulnerability, security, and hosting services directly.
   - Owns backup, restore, startup, initial package loading, and refresh behavior.
@@ -284,7 +284,7 @@ configuration model while preserving all overloads.
 
 - Add internal `ServerProfile`, `ExtensionSelection`, and capability-grant models.
 - Define `embedded`, `standard`, and `production` built-in profiles.
-- Make existing `NuGetTestServerHost.StartAsync` overloads translate to the embedded
+- Make existing `NuExtVaultHost.StartAsync` overloads translate to the embedded
   profile.
 - Make CLI options translate to standard or production profiles.
 - Do not load external extensions yet.
@@ -460,7 +460,7 @@ low-risk read-only feature.
 
 **Changes:**
 
-- Move control endpoint ownership into `NuTest.Control`.
+- Move control endpoint ownership into `NuExtVault.Control`.
 - Access package generation, reset, faults, and recordings through capabilities.
 - Keep actual request interception in the kernel.
 - Use only the host-scoped `control.packages.manage` and
@@ -534,8 +534,8 @@ contracts use route references.
 
 ### Step 11C: Prove closed-world composition and enforce fitness gates
 
-**Status:** Implemented. `tests/NuGet.TestServer.RouteFixture` references only the
-contracts project, now `src/NuGet.TestServer.Extensions.Sdk`, and contributes
+**Status:** Implemented. `tests/NuExtVault.RouteFixture` references only the
+contracts project, now `src/NuExtVault.Extensions.Sdk`, and contributes
 `/flavors/index.json` through `IExtensionModule`.
 
 **Goal:** Demonstrate composition independently of built-in registration before more
@@ -696,7 +696,7 @@ checkpoint path is proven.
 
 ### Step 12B: Extract operations, health, backup, and restore
 
-**Status:** Implemented. The official `NuTest.Operations` module is the sole owner of
+**Status:** Implemented. The official `NuExtVault.Operations` module is the sole owner of
 the existing liveness, readiness, storage-health, diagnostics, backup, and restore
 operations. It contributes its manifest, generated health routes, required capabilities,
 and owners through the generic Step 11C module seam. Query, backup, and restore use
@@ -710,7 +710,7 @@ checkpoint/restore commit.
 
 **Changes:**
 
-- Move operation endpoint ownership into `NuTest.Operations`.
+- Move operation endpoint ownership into `NuExtVault.Operations`.
 - Keep health aggregation and atomic checkpoint authority in the kernel.
 - Use the Step 12A checkpoint contract.
 - Mark projections rebuildable rather than authoritative backup state.
@@ -861,7 +861,7 @@ the advertised `SearchQueryService/3.0.0-beta` and `3.5.0` resources.
 
 ### Step 16: Extract supply-chain policy participation
 
-**Status:** Implemented. The internal official `NuTest.SupplyChain` module contributes
+**Status:** Implemented. The internal official `NuExtVault.SupplyChain` module contributes
 signature, scanner, ownership, namespace, and quota participants through the generic
 module seam. Admission and validation are separate fail-closed policy points.
 
@@ -869,7 +869,7 @@ module seam. Admission and validation are separate fail-closed policy points.
 
 **Changes:**
 
-- Create `NuTest.SupplyChain` policy participants.
+- Create `NuExtVault.SupplyChain` policy participants.
 - Keep state transitions, publication visibility, and moderation authority in the
   kernel.
 - Define required authoritative participants for production.
@@ -939,9 +939,9 @@ compatible.
 **Changes:**
 
 - Create the contracts assembly initially named
-  `NuGet.TestServer.Extensions.Abstractions` (renamed to
-  `NuGet.TestServer.Extensions.Sdk` in Step 19).
-- Create one initial `NuGet.TestServer.Extensions.Official` assembly.
+  `NuExtVault.Extensions.Abstractions` (renamed to
+  `NuExtVault.Extensions.Sdk` in Step 19).
+- Create one initial `NuExtVault.Extensions.Official` assembly.
 - Move contracts and official implementations without changing profile behavior.
 - Add project-reference and namespace boundary checks.
 - Enforce a one-way assembly dependency graph and typed capability injection without
@@ -960,8 +960,8 @@ through abstractions.
 
 ### Step 19: Stabilize manifests and SDK contracts
 
-**Status:** Implemented in this workspace. `NuGet.TestServer.Extensions.Sdk` and
-`NuGet.TestServer.Extensions.TestKit` are independent, locally packable `1.0.0`
+**Status:** Implemented in this workspace. `NuExtVault.Extensions.Sdk` and
+`NuExtVault.Extensions.TestKit` are independent, locally packable `1.0.0`
 packages targeting `net10.0`. The SDK contains the strict deterministic JSON schema
 and parser, typed independently versioned identities, public new-operation and route
 binding surfaces, bounded capability contracts, canonical UTF-8/SHA-256 identities,
@@ -1203,7 +1203,7 @@ Resolve these questions before the named gate:
 
 - Answered in Step 18: the enforceable one-way graph is
   `Abstractions <- Kernel`, `Abstractions <- Official`, and
-  `Kernel + Official <- NuGet.TestServer` composition root.
+  `Kernel + Official <- NuExtVault` composition root.
 - Answered in Step 18: typed capabilities are declared in the abstractions,
   implemented by the kernel, and resolved by declared capability identity.
 

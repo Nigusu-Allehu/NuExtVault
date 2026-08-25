@@ -29,7 +29,7 @@ assume the kernel can run extension-supplied transforms.
 
 ## Internal store behavior
 
-[`TransactionalStateStore`](../../src/NuGet.TestServer.Kernel/Kernel/Capabilities/TransactionalStateStore.cs)
+[`TransactionalStateStore`](../../src/NuExtVault.Kernel/Kernel/Capabilities/TransactionalStateStore.cs)
 owns persistence, schema validation, atomic internal multi-key edits, quotas,
 fixed-cardinality locks, checkpoints, and crash recovery. Internal participant
 migrations must form complete adjacent `n -> n+1` chains. Newer schemas, changed
@@ -41,9 +41,9 @@ Default bounds are 128 characters per key, 64 MiB per record, 256 records and
 and an 8 KiB record-header read bound. Opening and checkpoint capture inspect
 bounded metadata and stream payloads rather than loading the whole store.
 
-[`ExtensionStateIntegrationTests`](../../tests/NuGet.TestServer.UnitTests/ExtensionStateIntegrationTests.cs),
-[`ExtensionStateBoundednessTests`](../../tests/NuGet.TestServer.UnitTests/ExtensionStateBoundednessTests.cs),
-and [`ExtensionStateHardeningTests`](../../tests/NuGet.TestServer.UnitTests/ExtensionStateHardeningTests.cs)
+[`ExtensionStateIntegrationTests`](../../tests/NuExtVault.UnitTests/ExtensionStateIntegrationTests.cs),
+[`ExtensionStateBoundednessTests`](../../tests/NuExtVault.UnitTests/ExtensionStateBoundednessTests.cs),
+and [`ExtensionStateHardeningTests`](../../tests/NuExtVault.UnitTests/ExtensionStateHardeningTests.cs)
 cover concurrency, restart monotonicity, quotas, lock cardinality, migration,
 corruption, and recovery.
 
@@ -56,7 +56,7 @@ alter exported content.
 
 Backup/restore operations are owned by the official `builtin.operations` module,
 but the kernel retains file-handle, checkpoint, validation, and commit authority.
-[`StorageBackup`](../../src/NuGet.TestServer.Kernel/Operations/StorageBackup.cs)
+[`StorageBackup`](../../src/NuExtVault.Kernel/Operations/StorageBackup.cs)
 creates version-2 manifests containing participant identity, schema,
 requiredness, record count, and SHA-256 integrity.
 
@@ -89,7 +89,7 @@ Four journals have distinct scopes:
 State commit journals are control files and are excluded from backups. The
 publication journal is authoritative staged-publication recovery state and is
 included. [Storage backup
-tests](../../tests/NuGet.TestServer.UnitTests/StorageBackupTests.cs) exercise the
+tests](../../tests/NuExtVault.UnitTests/StorageBackupTests.cs) exercise the
 capture/restore matrix, archive smuggling, interruption points, and bounded
 streaming.
 

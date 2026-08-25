@@ -52,22 +52,22 @@ jobs:
             documentation-nuget-${{ runner.os }}-
 
       - name: Restore functional tests
-        run: dotnet restore tests/NuGet.TestServer.FunctionalTests/NuGet.TestServer.FunctionalTests.csproj
+        run: dotnet restore tests/NuExtVault.FunctionalTests/NuExtVault.FunctionalTests.csproj
 
       - name: Build functional tests
         run: >-
-          dotnet build tests/NuGet.TestServer.FunctionalTests/NuGet.TestServer.FunctionalTests.csproj
+          dotnet build tests/NuExtVault.FunctionalTests/NuExtVault.FunctionalTests.csproj
           --no-restore
           --configuration Release
           --warnaserror
 
       - name: Run documentation examples
         run: >-
-          dotnet test tests/NuGet.TestServer.FunctionalTests/NuGet.TestServer.FunctionalTests.csproj
+          dotnet test tests/NuExtVault.FunctionalTests/NuExtVault.FunctionalTests.csproj
           --no-restore
           --no-build
           --configuration Release
-          --filter "FullyQualifiedName~NuGet.TestServer.FunctionalTests.DocumentationContractTests|FullyQualifiedName~NuGet.TestServer.FunctionalTests.DocumentationExampleTests"
+          --filter "FullyQualifiedName~NuExtVault.FunctionalTests.DocumentationContractTests|FullyQualifiedName~NuExtVault.FunctionalTests.DocumentationExampleTests"
           --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=documentation-${{ matrix.os }}"
           --results-directory TestResults

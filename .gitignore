@@ -11,7 +11,7 @@ coverage.*
 
 # Local tools and server data
 .tools/
-.nuget-test-server/
+.nuextvault/
 server-data/
 .design/
 

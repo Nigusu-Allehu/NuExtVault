@@ -55,7 +55,7 @@ settings.
 
 ## Compatibility
 
-NuTestServer targets `net10.0` and requires the .NET 10 SDK to build. General CI
+NuExtVault targets `net10.0` and requires the .NET 10 SDK to build. General CI
 performs a warning-as-error Release build and runs unit and functional tests on
 Windows, Ubuntu, and macOS. The dedicated documentation workflow runs the
 manual contracts and examples on the same platforms. Automated evidence covers

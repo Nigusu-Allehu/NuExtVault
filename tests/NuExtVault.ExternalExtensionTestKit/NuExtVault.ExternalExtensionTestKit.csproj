@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Step 20 (trusted third-party in-process loading) tests-first red phase.
+    Test-only package-building helpers. This project intentionally has no
+    reference to NuExtVault, NuExtVault.Kernel, or
+    NuExtVault.Extensions.Official: it builds raw `.nupkg` byte content
+    for the not-yet-implemented external extension package loader and must
+    remain usable from any test project without granting it access to
+    internal host types.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>

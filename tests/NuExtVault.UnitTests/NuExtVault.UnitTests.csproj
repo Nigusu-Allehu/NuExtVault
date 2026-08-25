@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="NuGet.Packaging" Version="7.9.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\NuExtVault\NuExtVault.csproj" />
+    <ProjectReference Include="..\NuExtVault.RouteFixture\NuExtVault.RouteFixture.csproj" />
+    <ProjectReference Include="..\NuExtVault.SdkFixture\NuExtVault.SdkFixture.csproj" />
+    <ProjectReference Include="..\NuExtVault.ExternalExtensionTestKit\NuExtVault.ExternalExtensionTestKit.csproj" />
+    <ProjectReference Include="..\NuExtVault.ForbiddenReferenceFixture\NuExtVault.ForbiddenReferenceFixture.csproj" />
+  </ItemGroup>
+
+</Project>

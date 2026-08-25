@@ -2,7 +2,7 @@
 
 [User manual](README.md)
 
-NuTestServer is test infrastructure, not a hardened hosted feed. The default
+NuExtVault is test infrastructure, not a hardened hosted feed. The default
 test profile is anonymous and includes destructive test controls. Production
 mode removes those controls and requires authentication configuration, but
 operators still own network isolation, certificates, secrets, monitoring, and
@@ -21,13 +21,13 @@ directly so credentials and shutdown remain deterministic.
 
 <!-- example-id: user-04-production-start; evidence: reference -->
 ```powershell
-$env:NUTEST_IDENTITIES = "{{IDENTITY_JSON}}"
-& "{{TOOL_COMMAND}}" start --production --identity-config-env NUTEST_IDENTITIES `
+$env:NUEXTVAULT_IDENTITIES = "{{IDENTITY_JSON}}"
+& "{{TOOL_COMMAND}}" start --production --identity-config-env NUEXTVAULT_IDENTITIES `
   --trusted-proxy 127.0.0.1 --port "{{PORT}}" --storage "{{STORAGE}}"
 ```
 
 Scoped identities require `--production` and secure transport evidence. Direct
-HTTPS uses normal Kestrel certificate configuration; NuTestServer has no
+HTTPS uses normal Kestrel certificate configuration; NuExtVault has no
 certificate-provisioning CLI. A reverse proxy is trusted only by exact configured
 IP, and the immediate peer must supply one `X-Forwarded-Proto: https` value.
 Proxy chains, hostnames, and CIDR trust are not supported.
@@ -75,7 +75,7 @@ Clear the identity environment variable after stopping the example:
 
 <!-- example-id: user-04-cleanup; evidence: executable -->
 ```powershell
-Remove-Item Env:NUTEST_IDENTITIES -ErrorAction SilentlyContinue
+Remove-Item Env:NUEXTVAULT_IDENTITIES -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force "{{STORAGE}}" -ErrorAction SilentlyContinue
 ```
 

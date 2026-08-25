@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Step 20 (trusted third-party in-process loading) tests-first red phase.
+    A deliberately non-conformant separately compiled extension module used only
+    to prove the not-yet-implemented external extension loader must reject a
+    package whose entry assembly references the host, the kernel, or the
+    official extensions assembly. This project must never be referenced by
+    production code or by the host at runtime.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\NuExtVault.Kernel\NuExtVault.Kernel.csproj" />
+    <ProjectReference Include="..\..\src\NuExtVault.Extensions.Official\NuExtVault.Extensions.Official.csproj" />
+    <ProjectReference Include="..\..\src\NuExtVault\NuExtVault.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -18,13 +18,13 @@ startup. No network feed, hot reload, sidecar, security sandbox, Package Staging
 multi-node behavior is claimed.
 
 This design supersedes the core-first proposal as the intended long-term
-architecture. Most NuTestServer features, including the default NuGet V3
+architecture. Most NuExtVault features, including the default NuGet V3
 implementation, will be built through the same public extension contracts available
 to third parties.
 
 ## Executive summary
 
-NuTestServer becomes a small, policy-enforcing kernel surrounded by extensions.
+NuExtVault becomes a small, policy-enforcing kernel surrounded by extensions.
 The kernel owns only the behavior that cannot safely be delegated:
 
 - Process and host lifecycle.
@@ -297,7 +297,7 @@ The closed-world proof is a separately compiled test module that contributes an
 operation, route, codec or binder, service-index resource, and requested capabilities
 without kernel source edits. The sample route is `/flavors/index.json`. This is an
 internal conformance proof, not public SDK publication or external package discovery.
-If this proof requires a kernel edit, NuTestServer must describe the design as a
+If this proof requires a kernel edit, NuExtVault must describe the design as a
 modular monolith rather than a third-party extension platform.
 
 ### URL projection
@@ -448,15 +448,15 @@ The repository ships official extensions that provide the familiar server.
 | `NuGet.Search` | Search resources and paging |
 | `NuGet.PackageManagement` | Push, unlist, relist, and delete operations |
 | `NuGet.Vulnerabilities` | Vulnerability index/page resources and refresh |
-| `NuTest.Control` | Reset, fault injection, request recording, and generation |
-| `NuTest.Operations` | Health, diagnostics, backup, restore, and integrity |
-| `NuTest.SupplyChain` | Validation, quarantine, moderation, and ownership policy |
+| `NuExtVault.Control` | Reset, fault injection, request recording, and generation |
+| `NuExtVault.Operations` | Health, diagnostics, backup, restore, and integrity |
+| `NuExtVault.SupplyChain` | Validation, quarantine, moderation, and ownership policy |
 
 Package staging is initially optional:
 
 | Extension | Primary contributions |
 | --- | --- |
-| `NuTest.PackageStaging` | Staging groups, staged content, and publication requests |
+| `NuExtVault.PackageStaging` | Staging groups, staged content, and publication requests |
 
 Official extensions receive no internal database handles or private routing APIs.
 If a required capability is missing from the public SDK, the SDK must be improved
@@ -464,7 +464,7 @@ rather than adding a private escape hatch.
 
 Fault matching, delay/status injection, and request capture execute in a
 profile-gated kernel test-instrumentation stage before operation binding. The
-`NuTest.Control` extension owns only the authenticated control operations used to
+`NuExtVault.Control` extension owns only the authenticated control operations used to
 configure and query that stage through `control.faults.inject` and
 `control.requests.read` capabilities. The production profile cannot grant these
 capabilities. Captured requests are redacted by the kernel before storage or
@@ -485,11 +485,11 @@ The CLI composes extensions through named profiles.
 
 ### Standard profile
 
-Activates all official extensions needed for current NuTestServer compatibility.
+Activates all official extensions needed for current NuExtVault compatibility.
 This remains the default:
 
 ```text
-nutestserver start
+nuextvault start
 ```
 
 ### Minimal profile
@@ -497,7 +497,7 @@ nutestserver start
 Activates the kernel plus an explicitly selected resource set:
 
 ```text
-nutestserver start --profile minimal \
+nuextvault start --profile minimal \
   --extension NuGet.ServiceIndex \
   --extension NuGet.FlatContainer
 ```
@@ -508,7 +508,7 @@ Requires production identity, TLS, persistent storage, operations, supply-chain
 policy, and fail-closed configuration:
 
 ```text
-nutestserver start --profile production
+nuextvault start --profile production
 ```
 
 ### Custom profile
@@ -516,7 +516,7 @@ nutestserver start --profile production
 Loads a deployment-owned manifest:
 
 ```text
-nutestserver start --profile-file server-profile.json
+nuextvault start --profile-file server-profile.json
 ```
 
 Profile validation occurs before listeners accept traffic. The CLI prints the
@@ -524,7 +524,7 @@ resolved extension graph, versions, capabilities, routes, and resource types.
 
 ### Embedded profile and programmatic host
 
-`NuGetTestServerHost.StartAsync(profile, cancellationToken)` is a first-class
+`NuExtVaultHost.StartAsync(profile, cancellationToken)` is a first-class
 composition entry point. Its default `embedded` profile:
 
 - Uses in-memory package and extension state.
@@ -543,7 +543,7 @@ unguessable host-instance identifier and are cleaned up with the host.
 
 ```text
 src/
-  NuGet.TestServer.Kernel/
+  NuExtVault.Kernel/
     Hosting/
     Extensions/
     Gateway/
@@ -553,7 +553,7 @@ src/
     State/
     Diagnostics/
 
-  NuGet.TestServer.Extensions.Sdk/
+  NuExtVault.Extensions.Sdk/
     Manifest/
     Contributions/
     Operations/
@@ -561,12 +561,12 @@ src/
     Lifecycle/
     Contracts/
 
-  NuGet.TestServer.Extensions.TestKit/
+  NuExtVault.Extensions.TestKit/
     Builders/
     Fakes/
     Conformance/
 
-  NuGet.TestServer.Extensions.Official/
+  NuExtVault.Extensions.Official/
     ServiceIndex/
     FlatContainer/
     Registration/
@@ -577,7 +577,7 @@ src/
     Operations/
     SupplyChain/
 
-  NuGet.TestServer.Cli/
+  NuExtVault.Cli/
     Profiles/
     ExtensionConfiguration/
 
@@ -585,10 +585,10 @@ extensions/
   PackageStaging/
 ```
 
-Official extensions currently remain one `NuGet.TestServer.Extensions.Official`
+Official extensions currently remain one `NuExtVault.Extensions.Official`
 assembly. The supported contract assembly/package is
-`NuGet.TestServer.Extensions.Sdk`; authoring and conformance helpers are isolated in
-`NuGet.TestServer.Extensions.TestKit`. Both locally pack as version `1.0.0` and target
+`NuExtVault.Extensions.Sdk`; authoring and conformance helpers are isolated in
+`NuExtVault.Extensions.TestKit`. Both locally pack as version `1.0.0` and target
 only `net10.0`. See
 [`public-extension-sdk-v1.md`](public-extension-sdk-v1.md) for the authoritative v1
 policy.
@@ -616,7 +616,7 @@ Manifest rules:
 8. Duplicate ownership claims fail validation.
 9. Manifest paths cannot escape the extension installation root.
 10. Code does not run until the complete graph validates.
-11. `NuGet.*` and `NuTest.*` identifiers and reserved route prefixes are available
+11. `NuGet.*` and `NuExtVault.*` identifiers and reserved route prefixes are available
     only to signed first-party packages.
 12. Production extension identity is the tuple of verified publisher signing key and
     extension ID; the display `publisher` string is not proof of identity.
@@ -637,7 +637,7 @@ NuGet.FlatContainer.GetPackage
 NuGet.Registration.GetIndex
 NuGet.Search.Query
 NuGet.PackageManagement.Push
-NuTest.Publication.Request
+NuExtVault.Publication.Request
 ```
 
 Exactly one active extension owns an operation. Ownership supplies the primary
@@ -1063,7 +1063,7 @@ dangling links, access mismatches, and advertised owners that are not ready.
 kernel-created resource registry rather than `HttpContext` or mutable JSON. The
 kernel projects absolute URLs and the fixed service-index document fields after
 trusted-proxy and access processing. Supply-chain admission and validation decisions
-are now contributed by the internal official `NuTest.SupplyChain` module through the
+are now contributed by the internal official `NuExtVault.SupplyChain` module through the
 generic participant seam. Authoritative package, ownership, quota, publication,
 visibility, moderation, recovery, and audit state remains kernel-owned. Flat-container,
 registration, search, and package-management workflows are contributed by their
@@ -1073,14 +1073,14 @@ nonreplaceable kernel capabilities retain authoritative mutations.
 
 ## Package Staging example
 
-`NuTest.PackageStaging` proves that substantial features can live outside the
-kernel. It is implemented in `src/NuGet.TestServer.Extensions.PackageStaging`, packs
-independently as `NuTest.PackageStaging`, references only the public SDK, and is
+`NuExtVault.PackageStaging` proves that substantial features can live outside the
+kernel. It is implemented in `src/NuExtVault.Extensions.PackageStaging`, packs
+independently as `NuExtVault.PackageStaging`, references only the public SDK, and is
 absent from every default profile until an administrator installs it.
 
 It contributes:
 
-- A `NuTest.PackageStaging.ServiceIndex/1` service-index resource that references its
+- A `NuExtVault.PackageStaging.ServiceIndex/1` service-index resource that references its
   list-groups route by id; the kernel projects the absolute URL.
 - Create/list/read staging-group operations.
 - Staged package and symbol upload operations bound to streaming request bodies.
@@ -1210,7 +1210,7 @@ Rules:
 ## Developer experience
 
 Step 19 provides a strict packaged manifest schema, public typed contracts,
-`NuGet.TestServer.Extensions.TestKit` builders/fakes/conformance helpers, and a
+`NuExtVault.Extensions.TestKit` builders/fakes/conformance helpers, and a
 separately compiled reference fixture. It does not provide a `dotnet new` template,
 package validator CLI, extension-loading CLI, sidecar harness, or local profile
 runner. Local packing and migration instructions are in
@@ -1457,7 +1457,7 @@ The architecture is successful when:
 | Long-term extensibility | Good | Stronger |
 
 The core-first proposal is preferable when minimizing near-term change is the main
-goal. The microkernel proposal is preferable when NuTestServer is intended to
+goal. The microkernel proposal is preferable when NuExtVault is intended to
 become a long-lived platform with independently developed protocol and workflow
 features.
 

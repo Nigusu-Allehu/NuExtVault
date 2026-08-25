@@ -42,7 +42,7 @@ on `;`, `:`, or `,`.
 
 ## Package Staging
 
-`NuTest.PackageStaging` is independently packable but absent from default
+`NuExtVault.PackageStaging` is independently packable but absent from default
 profiles. A clean repository pack does not create production loading metadata or
 a signed attestation; administrators must supply an already attested package and
 trust root. No public signing/install service or published package exists.

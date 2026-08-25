@@ -1,0 +1,293 @@
+type NuExtVault.Extensions.Sdk.AtomicPublicationRequest<TState>
+  NuExtVault.Extensions.Sdk.ExtensionStateTransition<TState> StateTransition { get; }
+  NuExtVault.Extensions.Sdk.StagedContentHandle PackageContent { get; }
+  NuExtVault.Extensions.Sdk.StagedContentHandle SymbolContent { get; }
+  System.String IdempotencyKey { get; }
+type NuExtVault.Extensions.Sdk.AtomicPublicationResult
+  NuExtVault.Extensions.Sdk.PublicationRequestOutcome Outcome { get; }
+  System.Boolean Replayed { get; }
+  System.Nullable<System.Int64> StateConcurrencyToken { get; }
+  System.String FailureDetail { get; }
+  System.String IdempotencyKey { get; }
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+type NuExtVault.Extensions.Sdk.AttestationFailure
+type NuExtVault.Extensions.Sdk.AttestationVerificationResult
+  NuExtVault.Extensions.Sdk.AttestationFailure Failure { get; }
+  System.Boolean IsValid { get; }
+type NuExtVault.Extensions.Sdk.BoundedDocument
+  System.Int32 ContentLength { get; }
+  System.Int64 MaximumLength { get; }
+  System.ReadOnlyMemory<System.Byte> Content { get; }
+  System.String ContentType { get; }
+type NuExtVault.Extensions.Sdk.CanonicalContractBytes
+  NuExtVault.Extensions.Sdk.ManifestDigest ManifestDigest(NuExtVault.Extensions.Sdk.ExtensionManifest manifest)
+  System.ReadOnlyMemory<System.Byte> Manifest(NuExtVault.Extensions.Sdk.ExtensionManifest manifest)
+  System.ReadOnlyMemory<System.Byte> StructuralContract(System.Reflection.Assembly assembly)
+type NuExtVault.Extensions.Sdk.CapabilityContractVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.CapabilityDeniedException
+  System.String CapabilityName { get; }
+  System.String ExtensionId { get; }
+type NuExtVault.Extensions.Sdk.CapabilityGrantSet
+  NuExtVault.Extensions.Sdk.CapabilityGrantSet Create(System.String extensionId,System.Collections.Generic.IEnumerable<NuExtVault.Extensions.Sdk.CapabilityIdentity> grants)
+  System.Boolean TryGet<TCapability>(NuExtVault.Extensions.Sdk.CapabilityRequest request,TCapability& capability)
+  TCapability GetRequired<TCapability>(NuExtVault.Extensions.Sdk.CapabilityRequest request)
+type NuExtVault.Extensions.Sdk.CapabilityIdentity
+  System.String Value { get; }
+type NuExtVault.Extensions.Sdk.CapabilityRequest
+  NuExtVault.Extensions.Sdk.CapabilityIdentity Identity { get; }
+  NuExtVault.Extensions.Sdk.CapabilityRequirement Requirement { get; }
+type NuExtVault.Extensions.Sdk.CapabilityRequirement
+type NuExtVault.Extensions.Sdk.ConformanceAlgorithms
+  System.String Es256
+type NuExtVault.Extensions.Sdk.ConformanceAttestation
+  NuExtVault.Extensions.Sdk.ConformanceAttestationEnvelope Sign(NuExtVault.Extensions.Sdk.ConformanceAttestationPayload payload,System.ReadOnlyMemory<System.Byte> privateKey,System.String keyId,System.DateTimeOffset issuedAt,System.DateTimeOffset expiresAt,System.String algorithm)
+  System.ReadOnlyMemory<System.Byte> CanonicalPayloadBytes(NuExtVault.Extensions.Sdk.ConformanceAttestationPayload payload)
+type NuExtVault.Extensions.Sdk.ConformanceAttestationEnvelope
+  System.DateTimeOffset ExpiresAt { get; }
+  System.DateTimeOffset IssuedAt { get; }
+  System.ReadOnlyMemory<System.Byte> Payload { get; }
+  System.ReadOnlyMemory<System.Byte> Signature { get; }
+  System.String Algorithm { get; }
+  System.String KeyId { get; }
+type NuExtVault.Extensions.Sdk.ConformanceAttestationPayload
+  NuExtVault.Extensions.Sdk.CapabilityContractVersion CapabilityVersion { get; }
+  NuExtVault.Extensions.Sdk.ContributionContractVersion ContributionVersion { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion ManifestVersion { get; }
+  NuExtVault.Extensions.Sdk.OperationContractVersion OperationVersion { get; }
+  NuExtVault.Extensions.Sdk.RouteContractVersion RouteVersion { get; }
+  NuExtVault.Extensions.Sdk.SdkContractVersion SdkVersion { get; }
+  NuExtVault.Extensions.Sdk.StructuralContractVersion StructuralVersion { get; }
+  System.Int32 PayloadVersion { get; }
+  System.String ManifestSha256 { get; }
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+  System.String Publisher { get; }
+  System.String StructuralSha256 { get; }
+  System.String Suite { get; }
+type NuExtVault.Extensions.Sdk.ConformanceAttestationVerifier
+  NuExtVault.Extensions.Sdk.AttestationVerificationResult Verify(NuExtVault.Extensions.Sdk.ConformanceAttestationEnvelope envelope,NuExtVault.Extensions.Sdk.ConformanceExpectation expectation,System.Collections.Generic.IEnumerable<NuExtVault.Extensions.Sdk.ConformanceTrustRoot> trustRoots,System.DateTimeOffset now)
+type NuExtVault.Extensions.Sdk.ConformanceExpectation
+  NuExtVault.Extensions.Sdk.CapabilityContractVersion CapabilityVersion { get; }
+  NuExtVault.Extensions.Sdk.ContributionContractVersion ContributionVersion { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion ManifestVersion { get; }
+  NuExtVault.Extensions.Sdk.OperationContractVersion OperationVersion { get; }
+  NuExtVault.Extensions.Sdk.RouteContractVersion RouteVersion { get; }
+  NuExtVault.Extensions.Sdk.SdkContractVersion SdkVersion { get; }
+  NuExtVault.Extensions.Sdk.StructuralContractVersion StructuralVersion { get; }
+  System.String ManifestSha256 { get; }
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+  System.String Publisher { get; }
+  System.String StructuralSha256 { get; }
+  System.String Suite { get; }
+type NuExtVault.Extensions.Sdk.ConformanceResult
+  System.Boolean IsValid { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.ManifestValidationError> Errors { get; }
+type NuExtVault.Extensions.Sdk.ConformanceTrustRoot
+  System.ReadOnlyMemory<System.Byte> SubjectPublicKeyInfo { get; }
+  System.String Algorithm { get; }
+  System.String KeyId { get; }
+  System.String Publisher { get; }
+type NuExtVault.Extensions.Sdk.ContractVersionSet
+  NuExtVault.Extensions.Sdk.CapabilityContractVersion Capability { get; }
+  NuExtVault.Extensions.Sdk.ContributionContractVersion Contribution { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion Manifest { get; }
+  NuExtVault.Extensions.Sdk.OperationContractVersion Operation { get; }
+  NuExtVault.Extensions.Sdk.RouteContractVersion Route { get; }
+  NuExtVault.Extensions.Sdk.StructuralContractVersion Structural { get; }
+type NuExtVault.Extensions.Sdk.ContributionContractVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.ContributionDeclaration
+  NuExtVault.Extensions.Sdk.ContributionContractVersion Version { get; }
+  NuExtVault.Extensions.Sdk.ContributionIdentity Identity { get; }
+  System.Nullable<NuExtVault.Extensions.Sdk.RouteIdentity> Route { get; }
+  System.String Kind { get; }
+type NuExtVault.Extensions.Sdk.ContributionIdentity
+  System.String Value { get; }
+type NuExtVault.Extensions.Sdk.EndpointAccessKind
+type NuExtVault.Extensions.Sdk.ExtensionConformance
+  NuExtVault.Extensions.Sdk.ConformanceResult ValidateAssembly(System.Reflection.Assembly assembly)
+  NuExtVault.Extensions.Sdk.ConformanceResult ValidateAssembly(System.Reflection.Assembly assembly,NuExtVault.Extensions.Sdk.SdkContractVersion sdkVersion)
+  NuExtVault.Extensions.Sdk.ConformanceResult ValidateOwnership(System.String extensionId,NuExtVault.Extensions.Sdk.OperationDeclaration declaration)
+type NuExtVault.Extensions.Sdk.ExtensionIdentity
+  System.String Id { get; }
+  System.String Publisher { get; }
+  System.String Version { get; }
+type NuExtVault.Extensions.Sdk.ExtensionManifest
+  NuExtVault.Extensions.Sdk.ContractVersionSet Contracts { get; }
+  NuExtVault.Extensions.Sdk.ExtensionIdentity Identity { get; }
+  NuExtVault.Extensions.Sdk.ExtensionStateDeclaration State { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion SchemaVersion { get; }
+  NuExtVault.Extensions.Sdk.SdkCompatibilityRange Sdk { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.CapabilityRequest> Capabilities { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.ContributionDeclaration> Contributions { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.OperationDeclaration> Operations { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.RouteDeclaration> Routes { get; }
+type NuExtVault.Extensions.Sdk.ExtensionManifestJson
+  NuExtVault.Extensions.Sdk.ExtensionManifest Parse(System.ReadOnlyMemory<System.Byte> utf8Json)
+  NuExtVault.Extensions.Sdk.ManifestDigest ComputeDigest(NuExtVault.Extensions.Sdk.ExtensionManifest manifest)
+  NuExtVault.Extensions.Sdk.ManifestDigest ComputeDigest(System.ReadOnlyMemory<System.Byte> canonicalManifest)
+  NuExtVault.Extensions.Sdk.ManifestValidationResult Validate(System.ReadOnlyMemory<System.Byte> utf8Json)
+  System.ReadOnlyMemory<System.Byte> Canonicalize(NuExtVault.Extensions.Sdk.ExtensionManifest manifest)
+type NuExtVault.Extensions.Sdk.ExtensionModuleContribution
+  NuExtVault.Extensions.Sdk.ExtensionManifest Manifest { get; }
+  NuExtVault.Extensions.Sdk.ExtensionModuleContribution FromManifest(NuExtVault.Extensions.Sdk.ExtensionManifest manifest)
+type NuExtVault.Extensions.Sdk.ExtensionSdkCompatibility
+  System.Boolean SameMajorRequired
+  System.Int32 MinimumPriorMinorReleases
+  System.TimeSpan MinimumSupportDuration
+type NuExtVault.Extensions.Sdk.ExtensionSdkVersions
+  NuExtVault.Extensions.Sdk.CapabilityContractVersion CapabilityV1 { get; }
+  NuExtVault.Extensions.Sdk.ContributionContractVersion ContributionV1 { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion ManifestV1 { get; }
+  NuExtVault.Extensions.Sdk.OperationContractVersion OperationV1 { get; }
+  NuExtVault.Extensions.Sdk.RouteContractVersion RouteV1 { get; }
+  NuExtVault.Extensions.Sdk.SdkContractIdentity Identity { get; }
+  NuExtVault.Extensions.Sdk.SdkContractVersion Current { get; }
+  NuExtVault.Extensions.Sdk.SdkContractVersion OldestSupported { get; }
+  NuExtVault.Extensions.Sdk.StructuralContractVersion StructuralV1 { get; }
+  System.Boolean IsSupported(NuExtVault.Extensions.Sdk.SdkContractVersion version)
+  System.String ConformanceSuiteV1
+type NuExtVault.Extensions.Sdk.ExtensionStateDeclaration
+  System.Boolean Required { get; }
+  System.Int32 SchemaVersion { get; }
+  System.String SchemaName { get; }
+type NuExtVault.Extensions.Sdk.ExtensionStateTransition<TState>
+  System.Nullable<System.Int64> ExpectedConcurrencyToken { get; }
+  System.String Key { get; }
+  TState Value { get; }
+type NuExtVault.Extensions.Sdk.IAtomicPackagePublicationCapability
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.AtomicPublicationResult> PublishAsync<TState>(NuExtVault.Extensions.Sdk.AtomicPublicationRequest<TState> request,System.Threading.CancellationToken cancellationToken)
+type NuExtVault.Extensions.Sdk.IDocumentContributionSource
+type NuExtVault.Extensions.Sdk.IExtensionCapabilities
+  System.Boolean TryGet<TCapability>(NuExtVault.Extensions.Sdk.CapabilityRequest request,TCapability& capability)
+  TCapability GetRequired<TCapability>(NuExtVault.Extensions.Sdk.CapabilityRequest request)
+type NuExtVault.Extensions.Sdk.IExtensionModule
+  NuExtVault.Extensions.Sdk.ExtensionModuleContribution Contribution { get; }
+  System.Void RegisterOperations(NuExtVault.Extensions.Sdk.IOperationOwnerRegistry operations,NuExtVault.Extensions.Sdk.IExtensionCapabilities capabilities,NuExtVault.Extensions.Sdk.IDocumentContributionSource contributions)
+  System.Void RegisterRoutes(NuExtVault.Extensions.Sdk.IRouteBinderRegistry routes)
+type NuExtVault.Extensions.Sdk.IHostClockCapability
+  System.Threading.Tasks.ValueTask<System.DateTimeOffset> GetUtcNowAsync(System.Threading.CancellationToken cancellationToken)
+type NuExtVault.Extensions.Sdk.IOperationOwnerRegistry
+  NuExtVault.Extensions.Sdk.OperationDeclaration RegisterNew<TRequest,TResponse>(System.String extensionId,NuExtVault.Extensions.Sdk.OperationIdentity identity,System.Func<TRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.OperationResponse<TResponse>>> handler)
+type NuExtVault.Extensions.Sdk.IOutboundHttpCapability
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.BoundedDocument> SendAsync(NuExtVault.Extensions.Sdk.OutboundHttpRequest request,System.Threading.CancellationToken cancellationToken)
+type NuExtVault.Extensions.Sdk.IRouteBinderRegistry
+  System.Void Bind<TRequest>(NuExtVault.Extensions.Sdk.RouteIdentity route,System.Func<NuExtVault.Extensions.Sdk.RouteBindingRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<TRequest>> binder)
+type NuExtVault.Extensions.Sdk.IStagedContentWriteCapability
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentReleaseResult> ReleaseAsync(NuExtVault.Extensions.Sdk.StagedContentHandle handle,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentWriteResult> WritePackageAsync(NuExtVault.Extensions.Sdk.StreamHandle content,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentWriteResult> WriteSymbolsAsync(NuExtVault.Extensions.Sdk.StreamHandle content,NuExtVault.Extensions.Sdk.StagedPackageIdentity expectedIdentity,System.Threading.CancellationToken cancellationToken)
+type NuExtVault.Extensions.Sdk.ITransactionalStateCapability
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.TransactionalStateEntry<T>> ReadEntryAsync<T>(System.String key,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.TransactionalStateWriteResult> DeleteAsync(System.String key,System.Int64 expectedConcurrencyToken,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.TransactionalStateWriteResult> WriteAsync<T>(System.String key,T value,System.Nullable<System.Int64> expectedConcurrencyToken,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<System.String>> ListKeysAsync(System.String keyPrefix,System.Int32 take,System.Threading.CancellationToken cancellationToken)
+type NuExtVault.Extensions.Sdk.ManifestDigest
+  System.String Hex { get; }
+type NuExtVault.Extensions.Sdk.ManifestSchemaVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.ManifestValidationError
+  System.String Code { get; }
+  System.String Message { get; }
+  System.String Path { get; }
+type NuExtVault.Extensions.Sdk.ManifestValidationResult
+  NuExtVault.Extensions.Sdk.ExtensionManifest Manifest { get; }
+  System.Boolean IsValid { get; }
+  System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.ManifestValidationError> Errors { get; }
+type NuExtVault.Extensions.Sdk.OperationContractVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.OperationContributor
+  NuExtVault.Extensions.Sdk.OperationDeclaration Define<TRequest,TResponse>(NuExtVault.Extensions.Sdk.OperationIdentity identity,NuExtVault.Extensions.Sdk.OperationContractVersion version,System.Func<TRequest,System.Threading.CancellationToken,System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.OperationResponse<TResponse>>> handler)
+type NuExtVault.Extensions.Sdk.OperationDeclaration
+  NuExtVault.Extensions.Sdk.OperationContractVersion Version { get; }
+  NuExtVault.Extensions.Sdk.OperationIdentity Identity { get; }
+  NuExtVault.Extensions.Sdk.OperationOwnership Ownership { get; }
+  System.Boolean AllowReplacement { get; }
+  System.String RequestContract { get; }
+  System.String ResponseContract { get; }
+type NuExtVault.Extensions.Sdk.OperationIdentity
+  System.String Value { get; }
+type NuExtVault.Extensions.Sdk.OperationOwnership
+type NuExtVault.Extensions.Sdk.OperationReplacementPolicies
+  NuExtVault.Extensions.Sdk.ReplacementPolicy Default { get; }
+  NuExtVault.Extensions.Sdk.ReplacementPolicy For(System.String operationId)
+  NuExtVault.Extensions.Sdk.ReplacementPolicy IdentityMutations { get; }
+  NuExtVault.Extensions.Sdk.ReplacementPolicy OwnershipMutations { get; }
+type NuExtVault.Extensions.Sdk.OperationResponse<TResponse>
+  NuExtVault.Extensions.Sdk.OperationResponse<TResponse> Success(TResponse value)
+type NuExtVault.Extensions.Sdk.OutboundHttpRequest
+type NuExtVault.Extensions.Sdk.PublicationRequestOutcome
+type NuExtVault.Extensions.Sdk.ReplacementPolicy
+type NuExtVault.Extensions.Sdk.RouteBindingRequest
+  NuExtVault.Extensions.Sdk.BoundedDocument ReadBody()
+  NuExtVault.Extensions.Sdk.StreamHandle BindBodyStream()
+  System.Boolean TryGetQuery(System.String name,System.String& value)
+  System.Boolean TryGetRoute(System.String name,System.String& value)
+  System.String FindHeader(System.String name)
+  System.String GetQuery(System.String name)
+  System.String GetRoute(System.String name)
+type NuExtVault.Extensions.Sdk.RouteBodyBinding
+type NuExtVault.Extensions.Sdk.RouteContractVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.RouteDeclaration
+  NuExtVault.Extensions.Sdk.OperationIdentity Operation { get; }
+  NuExtVault.Extensions.Sdk.RouteBodyBinding Body { get; }
+  NuExtVault.Extensions.Sdk.RouteContractVersion Version { get; }
+  NuExtVault.Extensions.Sdk.RouteIdentity Identity { get; }
+  System.Collections.Immutable.ImmutableArray<System.String> Methods { get; }
+  System.Int64 MaximumRequestBytes { get; }
+  System.Int64 MaximumResponseBytes { get; }
+  System.String Path { get; }
+type NuExtVault.Extensions.Sdk.RouteIdentity
+  System.String Value { get; }
+type NuExtVault.Extensions.Sdk.SdkCompatibilityRange
+  NuExtVault.Extensions.Sdk.SdkContractVersion MaximumExclusive { get; }
+  NuExtVault.Extensions.Sdk.SdkContractVersion Minimum { get; }
+type NuExtVault.Extensions.Sdk.SdkContractIdentity
+  System.String Value { get; }
+type NuExtVault.Extensions.Sdk.SdkContractVersion
+  System.Int32 Major { get; }
+  System.Int32 Minor { get; }
+  System.Int32 Patch { get; }
+type NuExtVault.Extensions.Sdk.StagedContentHandle
+  System.DateTimeOffset ExpiresAt { get; }
+  System.Int64 ContentLength { get; }
+  System.String ContentSha256 { get; }
+  System.String ContentType { get; }
+  System.String HandleId { get; }
+type NuExtVault.Extensions.Sdk.StagedContentReleaseOutcome
+type NuExtVault.Extensions.Sdk.StagedContentReleaseResult
+  NuExtVault.Extensions.Sdk.StagedContentReleaseOutcome Outcome { get; }
+  System.String FailureDetail { get; }
+type NuExtVault.Extensions.Sdk.StagedContentWriteOutcome
+type NuExtVault.Extensions.Sdk.StagedContentWriteResult
+  NuExtVault.Extensions.Sdk.StagedContentHandle Handle { get; }
+  NuExtVault.Extensions.Sdk.StagedContentWriteOutcome Outcome { get; }
+  NuExtVault.Extensions.Sdk.StagedPackageIdentity Identity { get; }
+  System.String FailureDetail { get; }
+type NuExtVault.Extensions.Sdk.StagedPackageIdentity
+  System.String PackageId { get; }
+  System.String PackageVersion { get; }
+type NuExtVault.Extensions.Sdk.StreamHandle
+  System.Int64 MaximumLength { get; }
+  System.String ContentType { get; }
+  System.String Id { get; }
+type NuExtVault.Extensions.Sdk.StructuralContractFingerprint
+  NuExtVault.Extensions.Sdk.StructuralContractIdentity Create(System.Reflection.Assembly assembly)
+type NuExtVault.Extensions.Sdk.StructuralContractIdentity
+  NuExtVault.Extensions.Sdk.StructuralContractVersion Version { get; }
+  System.ReadOnlyMemory<System.Byte> CanonicalBytes { get; }
+  System.String Sha256 { get; }
+type NuExtVault.Extensions.Sdk.StructuralContractVersion
+  System.Int32 Value { get; }
+type NuExtVault.Extensions.Sdk.TransactionalStateEntry<T>
+  System.Int64 ConcurrencyToken { get; }
+  T Value { get; }
+type NuExtVault.Extensions.Sdk.TransactionalStateWriteOutcome
+type NuExtVault.Extensions.Sdk.TransactionalStateWriteResult
+  NuExtVault.Extensions.Sdk.TransactionalStateWriteOutcome Outcome { get; }
+  System.Int64 ConcurrencyToken { get; }
+  System.String FailureDetail { get; }

@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NuExtVault.Cli/NuExtVault.Cli.csproj" />
+    <Project Path="src/NuExtVault.Extensions.Sdk/NuExtVault.Extensions.Sdk.csproj" />
+    <Project Path="src/NuExtVault.Extensions.TestKit/NuExtVault.Extensions.TestKit.csproj" />
+    <Project Path="src/NuExtVault.Extensions.Official/NuExtVault.Extensions.Official.csproj" />
+    <Project Path="src/NuExtVault.Extensions.PackageStaging/NuExtVault.Extensions.PackageStaging.csproj" />
+    <Project Path="src/NuExtVault.Kernel/NuExtVault.Kernel.csproj" />
+    <Project Path="src/NuExtVault/NuExtVault.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NuExtVault.FunctionalTests/NuExtVault.FunctionalTests.csproj" />
+    <Project Path="tests/NuExtVault.RouteFixture/NuExtVault.RouteFixture.csproj" />
+    <Project Path="tests/NuExtVault.Extensions.Sdk.Tests/NuExtVault.Extensions.Sdk.Tests.csproj" />
+    <Project Path="tests/NuExtVault.SdkFixture/NuExtVault.SdkFixture.csproj" />
+    <Project Path="tests/NuExtVault.SdkFixture.Dependency/NuExtVault.SdkFixture.Dependency.csproj" />
+    <Project Path="tests/NuExtVault.ExternalExtensionTestKit/NuExtVault.ExternalExtensionTestKit.csproj" />
+    <Project Path="tests/NuExtVault.ForbiddenReferenceFixture/NuExtVault.ForbiddenReferenceFixture.csproj" />
+    <Project Path="tests/NuExtVault.UnitTests/NuExtVault.UnitTests.csproj" />
+  </Folder>
+</Solution>

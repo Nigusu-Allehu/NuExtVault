@@ -2,7 +2,7 @@
 
 [User manual](README.md)
 
-This chapter keeps the surfaces distinct: `nuget-test-server` starts and seeds
+This chapter keeps the surfaces distinct: `nuextvault` starts and seeds
 the server, `dotnet nuget` pushes packages, `dotnet restore` consumes packages,
 and HTTP protocol/control routes change package state.
 
@@ -77,7 +77,7 @@ An exact unlisted version remains restorable.
 
 ## List and change visibility
 
-Inventory is a test-control HTTP call, not a `nuget-test-server` CLI command:
+Inventory is a test-control HTTP call, not a `nuextvault` CLI command:
 
 <!-- example-id: user-02-list; evidence: executable -->
 ```powershell
@@ -89,7 +89,7 @@ Unlisting uses the NuGet package-management HTTP route:
 
 <!-- example-id: user-02-unlist; evidence: executable -->
 ```powershell
-Invoke-WebRequest "{{BASE_URL}}/package/NuTest.Docs.Workflow/1.0.0" -Method Delete
+Invoke-WebRequest "{{BASE_URL}}/package/NuExtVault.Docs.Workflow/1.0.0" -Method Delete
 ```
 
 It returns `204`, removes the version from search, and keeps exact content,
@@ -98,7 +98,7 @@ Relisting is a test-control operation:
 
 <!-- example-id: user-02-relist; evidence: executable -->
 ```powershell
-Invoke-WebRequest "{{BASE_URL}}/__test/packages/NuTest.Docs.Workflow/1.0.0/list" -Method Post
+Invoke-WebRequest "{{BASE_URL}}/__test/packages/NuExtVault.Docs.Workflow/1.0.0/list" -Method Post
 ```
 
 ## Delete
@@ -115,7 +115,7 @@ The test-control form is:
 
 <!-- example-id: user-02-delete; evidence: executable -->
 ```powershell
-Invoke-WebRequest "{{BASE_URL}}/__test/packages/NuTest.Docs.Workflow/1.0.0" -Method Delete
+Invoke-WebRequest "{{BASE_URL}}/__test/packages/NuExtVault.Docs.Workflow/1.0.0" -Method Delete
 ```
 
 Successful mutations return `204`; missing test-control targets return `404`.

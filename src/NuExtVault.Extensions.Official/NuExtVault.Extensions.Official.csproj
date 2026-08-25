@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>NuExtVault.Extensions</RootNamespace>
+    <Description>
+      The official NuExtVault extensions. They are compiled separately from the
+      kernel and may reference only the extension SDK and transport-neutral
+      packages, so the kernel has no compile-time knowledge of them.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NuGet.Versioning" Version="7.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Vulnerabilities\Embedded\*.json" />
+    <InternalsVisibleTo Include="NuExtVault" />
+    <InternalsVisibleTo Include="NuExtVault.Cli" />
+    <InternalsVisibleTo Include="NuExtVault.FunctionalTests" />
+    <InternalsVisibleTo Include="NuExtVault.UnitTests" />
+  </ItemGroup>
+
+</Project>
