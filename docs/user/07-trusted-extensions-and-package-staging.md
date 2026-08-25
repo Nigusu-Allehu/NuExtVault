@@ -58,6 +58,14 @@ packages.content.write-staged
 publication.request
 ```
 
+The current manifest declares its signed predecessor identity,
+`NuTest.PackageStaging`. On first startup against a pre-rename store, the kernel
+upgrades extension-state ownership, staged-content ownership, and publication-journal
+idempotency/recovery ownership to `NuExtVault.PackageStaging` before listening. A
+completed migration retains no runtime alias. If both identities contain data,
+startup fails rather than merging them; restore a coherent backup or select the
+intended storage root.
+
 The following is a non-executable reference because this repository cannot generate an
 administrator's production signing key or installable attestation. The functional
 suite executes the same argument shape with an ephemeral signed fixture.

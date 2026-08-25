@@ -14,6 +14,114 @@ namespace NuExtVault.UnitTests;
 public sealed class StorageBackupTests
 {
     [Fact]
+    public async Task Restore_rejects_an_ambiguous_owner_migration_graph()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+        await StorageBackup.CreateAsync(source.Path, backupPath);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            StorageBackup.RestoreAsync(
+                backupPath,
+                destination.Path,
+                KernelStateParticipants.BuiltIn,
+                [
+                    new OwnerIdentityMigration("Legacy.Owner", "Current.One"),
+                    new OwnerIdentityMigration("Legacy.Owner", "Current.Two")
+                ],
+                CancellationToken.None));
+
+        Assert.Contains("multiple successors", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Legacy_required_staging_state_restores_then_migrates_to_the_current_owner()
+    {
+        const string legacy = "NuTest.PackageStaging";
+        const string current = "NuExtVault.PackageStaging";
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var legacyParticipant = new StateParticipantDescriptor(
+            legacy,
+            "1.0.0",
+            "package-staging",
+            1,
+            true);
+        using (var state = new TransactionalStateStore(
+                   Path.Combine(source.Path, StorageBackup.ExtensionStateDirectoryName),
+                   [legacyParticipant]))
+        {
+            await state.WriteAsync(
+                legacy,
+                "group.backup",
+                """{"groupId":"backup"}"""u8.ToArray(),
+                null,
+                CancellationToken.None);
+        }
+
+        string contentId;
+        using (var content = new StagedContentStore(source.Path, "legacy-host"))
+        {
+            contentId = (await content.WriteAsync(
+                legacy,
+                new MemoryStream("backup-content"u8.ToArray()),
+                "application/octet-stream",
+                1024,
+                "Contoso.Backup",
+                "1.0.0",
+                CancellationToken.None)).Record!.ContentId;
+        }
+        using (var journal = new PublicationJournal(source.Path))
+        {
+            await journal.BeginAsync(
+                new PublicationJournalEntry(
+                    "backup-entry",
+                    legacy,
+                    "backup-key",
+                    contentId,
+                    null,
+                    "group.backup",
+                    1,
+                    "Contoso.Backup",
+                    "1.0.0",
+                    new string('a', 64),
+                    PublicationJournalPhase.Pending,
+                    "Failed",
+                    null,
+                    null,
+                    Convert.ToBase64String("""{"groupId":"backup"}"""u8.ToArray()),
+                    DateTimeOffset.UnixEpoch,
+                    DateTimeOffset.UnixEpoch),
+                CancellationToken.None);
+        }
+        var backupPath = Path.Combine(source.Path, "legacy.zip");
+        await StorageBackup.CreateAsync(source.Path, backupPath);
+        var currentParticipant = legacyParticipant with { ExtensionId = current };
+        var migration = new OwnerIdentityMigration(legacy, current);
+
+        await StorageBackup.RestoreAsync(
+            backupPath,
+            destination.Path,
+            [currentParticipant],
+            [migration],
+            CancellationToken.None);
+        DurableOwnerIdentityMigrator.Migrate(destination.Path, [migration]);
+
+        using var restoredState = new TransactionalStateStore(
+            Path.Combine(destination.Path, StorageBackup.ExtensionStateDirectoryName),
+            [currentParticipant]);
+        using var restoredContent = new StagedContentStore(destination.Path, "restored");
+        using var restoredJournal = new PublicationJournal(destination.Path);
+        Assert.NotNull(await restoredState.ReadAsync(
+            current,
+            "group.backup",
+            CancellationToken.None));
+        Assert.NotNull(restoredContent.Find(current, contentId));
+        Assert.NotNull(restoredJournal.Find(current, "backup-key"));
+    }
+
+    [Fact]
     public async Task Backup_restores_packages_extension_state_and_legacy_cache_into_clean_storage()
     {
         using var source = TemporaryDirectory.Create();

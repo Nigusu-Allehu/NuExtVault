@@ -202,6 +202,12 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
     /// </summary>
     public ExtensionStateDeclaration? State { get; init; }
 
+    /// <summary>
+    /// Previously attested identities whose durable kernel-owned state may be upgraded
+    /// to this identity. These authorize a one-time migration, never runtime aliasing.
+    /// </summary>
+    public ImmutableArray<string> IdentityPredecessors { get; init; } = [];
+
     internal string Id { get; }
 
     internal ExtensionVersion Version { get; }
@@ -234,7 +240,8 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         Contributions.SequenceEqual(other.Contributions) &&
         Routes.SequenceEqual(other.Routes, RouteDeclarationComparer.Instance) &&
         Capabilities.SequenceEqual(other.Capabilities) &&
-        State == other.State;
+        State == other.State &&
+        IdentityPredecessors.SequenceEqual(other.IdentityPredecessors);
 
     public override int GetHashCode() => HashCode.Combine(SchemaVersion, Identity, Sdk, Contracts);
 

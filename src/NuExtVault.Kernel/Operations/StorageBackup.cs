@@ -155,10 +155,33 @@ public static class StorageBackup
         string backupPath,
         string storageDirectory,
         ImmutableArray<StateParticipantDescriptor> expectedParticipants,
+        CancellationToken token) =>
+        await RestoreAsync(backupPath, storageDirectory, expectedParticipants, [], token);
+
+    internal static async Task<StorageBackupManifest> RestoreAsync(
+        string backupPath,
+        string storageDirectory,
+        ImmutableArray<StateParticipantDescriptor> expectedParticipants,
+        ImmutableArray<OwnerIdentityMigration> ownerMigrations,
         CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(backupPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        DurableOwnerIdentityMigrator.ValidateDeclarations(ownerMigrations);
+        foreach (var migration in ownerMigrations)
+        {
+            if (expectedParticipants.Any(participant => string.Equals(
+                    participant.ExtensionId,
+                    migration.PredecessorId,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ArgumentException(
+                    $"Active extension '{migration.PredecessorId}' cannot also be an identity " +
+                    $"predecessor of '{migration.SuccessorId}'.",
+                    nameof(ownerMigrations));
+            }
+        }
+
         var source = Path.GetFullPath(backupPath);
         var destination = Path.GetFullPath(storageDirectory);
         Directory.CreateDirectory(destination);
@@ -210,7 +233,10 @@ public static class StorageBackup
                 throw new InvalidDataException("Backup integrity manifest has no file list.");
             }
 
-            var quarantined = ValidateParticipants(manifest, expectedParticipants);
+            var quarantined = ValidateParticipants(
+                manifest,
+                expectedParticipants,
+                ownerMigrations);
             EnsureFreeSpace(manifest, parent);
             foreach (var file in manifest.Files)
             {
@@ -475,7 +501,8 @@ public static class StorageBackup
 
     private static IReadOnlyList<string> ValidateParticipants(
         StorageBackupManifest manifest,
-        ImmutableArray<StateParticipantDescriptor> expected)
+        ImmutableArray<StateParticipantDescriptor> expected,
+        ImmutableArray<OwnerIdentityMigration> ownerMigrations)
     {
         if (manifest.Participants is null)
         {
@@ -495,14 +522,29 @@ public static class StorageBackup
                     "Backup integrity manifest declares an invalid or repeated extension state " +
                     "participant.");
             }
+
+            foreach (var migration in ownerMigrations)
+            {
+                if (declared.Contains(migration.PredecessorId) &&
+                    declared.Contains(migration.SuccessorId))
+                {
+                    throw new InvalidDataException(
+                        $"Backup declares both predecessor '{migration.PredecessorId}' and successor " +
+                        $"'{migration.SuccessorId}' extension state; refusing to merge them.");
+                }
+            }
         }
 
         var quarantined = new List<string>();
         foreach (var participant in manifest.Participants)
         {
+            var expectedId = ownerMigrations.FirstOrDefault(migration => string.Equals(
+                migration.PredecessorId,
+                participant.ExtensionId,
+                StringComparison.Ordinal))?.SuccessorId ?? participant.ExtensionId;
             var match = expected.FirstOrDefault(candidate => string.Equals(
                 candidate.ExtensionId,
-                participant.ExtensionId,
+                expectedId,
                 StringComparison.Ordinal));
             if (match is null)
             {
@@ -543,10 +585,20 @@ public static class StorageBackup
 
         foreach (var required in expected.Where(participant => participant.Required))
         {
-            if (!manifest.Participants.Any(participant => string.Equals(
-                    participant.ExtensionId,
-                    required.ExtensionId,
-                    StringComparison.Ordinal)))
+            if (!manifest.Participants.Any(participant =>
+                    string.Equals(
+                        participant.ExtensionId,
+                        required.ExtensionId,
+                        StringComparison.Ordinal) ||
+                    ownerMigrations.Any(migration =>
+                        string.Equals(
+                            migration.PredecessorId,
+                            participant.ExtensionId,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            migration.SuccessorId,
+                            required.ExtensionId,
+                            StringComparison.Ordinal))))
             {
                 throw new InvalidDataException(
                     $"Backup is missing required extension state for '{required.ExtensionId}'.");

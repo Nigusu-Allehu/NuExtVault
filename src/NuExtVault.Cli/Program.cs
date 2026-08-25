@@ -25,7 +25,6 @@ if (arguments.Count == 0)
 
 if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 {
-    var backupStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
     var output = ReadOption(arguments, "--output");
     if (output is null)
     {
@@ -35,13 +34,17 @@ if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 
     try
     {
+        var backupStorage = ResolveStorage(arguments);
         var manifest = await StorageBackup.CreateAsync(backupStorage, output);
         Console.WriteLine(
             $"Created backup '{Path.GetFullPath(output)}' with {manifest.Files.Count} files.");
         return 0;
     }
     catch (Exception exception) when (
-        exception is IOException or UnauthorizedAccessException or ArgumentException)
+        exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or InvalidOperationException)
     {
         Console.Error.WriteLine($"Backup failed: {exception.Message}");
         return 1;
@@ -50,7 +53,6 @@ if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 
 if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
 {
-    var restoreStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
     var input = ReadOption(arguments, "--input");
     if (input is null)
     {
@@ -60,6 +62,7 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
 
     try
     {
+        var restoreStorage = ResolveStorage(arguments);
         using var externalRuntime = ExternalExtensionPackageLoader.Load(
             new ExternalExtensionConfiguration(
                 [.. ReadRepeatedPathOption(arguments, "--extension-root")],
@@ -85,6 +88,7 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
             input,
             restoreStorage,
             [.. KernelStateParticipants.BuiltIn, .. participants],
+            CreateOwnerIdentityMigrations(externalRuntime.Modules),
             CancellationToken.None);
         Console.WriteLine(
             $"Restored {manifest.Files.Count} files into '{Path.GetFullPath(restoreStorage)}'.");
@@ -94,6 +98,7 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
         exception is IOException
             or UnauthorizedAccessException
             or ArgumentException
+            or InvalidOperationException
             or CliConfigurationException)
     {
         Console.Error.WriteLine($"Restore failed: {exception.Message}");
@@ -114,10 +119,11 @@ if (!int.TryParse(port, out var parsedPort) || parsedPort is < 0 or > 65535)
     return 2;
 }
 
-var storageDirectory = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+string storageDirectory;
 PackageTransferLimits packageLimits;
 try
 {
+    storageDirectory = ResolveStorage(arguments);
     packageLimits = new PackageTransferLimits
     {
         MaxRequestBodyBytes = ReadPositiveLongOption(
@@ -144,7 +150,10 @@ try
     }.Validate();
 }
 catch (Exception exception) when (
-    exception is ArgumentException or OverflowException or CliConfigurationException)
+    exception is ArgumentException
+        or OverflowException
+        or InvalidOperationException
+        or CliConfigurationException)
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
@@ -278,6 +287,32 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
     }
 
     return null;
+}
+
+static string ResolveStorage(IReadOnlyList<string> arguments) =>
+    ReadOption(arguments, "--storage") ?? LocalStoragePaths.ResolveDefaultRoot();
+
+static ImmutableArray<OwnerIdentityMigration> CreateOwnerIdentityMigrations(
+    ImmutableArray<IExtensionModule> modules)
+{
+    var migrations = ImmutableArray.CreateBuilder<OwnerIdentityMigration>();
+    foreach (var manifest in modules
+                 .Select(module => module.Contribution.Manifest)
+                 .Where(manifest => !manifest.IdentityPredecessors.IsDefaultOrEmpty))
+    {
+        if (manifest.ValidatedManifestDigest is null ||
+            manifest.ValidatedStagedContentDigest is null)
+        {
+            throw new CliConfigurationException(
+                $"Extension '{manifest.Identity.Id}' cannot authorize durable identity " +
+                "migration because its package and signed manifest were not verified.");
+        }
+
+        migrations.AddRange(manifest.IdentityPredecessors.Select(predecessor =>
+            new OwnerIdentityMigration(predecessor, manifest.Identity.Id)));
+    }
+
+    return migrations.ToImmutable();
 }
 
 static ImmutableArray<string> ReadRepeatedPathOption(

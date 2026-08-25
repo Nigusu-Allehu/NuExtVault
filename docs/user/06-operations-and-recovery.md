@@ -37,6 +37,13 @@ Request logs include method, path, status, and elapsed time.
 Stop the server first: a live server owns the exclusive storage lease. The
 output archive must not already exist.
 
+When `--storage` is omitted, `start`, `backup`, and `restore` use
+`%LOCALAPPDATA%/nuextvault`. An existing pre-rename
+`%LOCALAPPDATA%/nuget-test-server` root is adopted in place only when the current root
+does not exist. If both roots exist, the command fails rather than choosing or
+merging; pass `--storage` with the intended repository path. An explicit
+`--storage` path is always used exactly as supplied.
+
 <!-- example-id: user-06-backup; evidence: executable -->
 ```powershell
 & "{{TOOL_COMMAND}}" backup --storage "{{STORAGE}}" --output "{{BACKUP}}"

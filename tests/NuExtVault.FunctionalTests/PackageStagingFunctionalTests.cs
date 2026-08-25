@@ -6,6 +6,7 @@ using NuExtVault.Authentication;
 using NuExtVault.Extensions.Sdk;
 using NuExtVault.ExternalExtensionTestKit;
 using NuExtVault.Hosting;
+using NuExtVault.Kernel.Capabilities;
 using NuExtVault.Packages;
 
 namespace NuExtVault.FunctionalTests;
@@ -518,30 +519,76 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
             await UploadAsync(first.HttpClient, "durable", "Contoso.Durable", "1.0.0");
         }
 
-        await using var restarted = await NuExtVaultHost.StartCompositionAsync(
-            ServerComposition.Create(
-                StagingProfile(ServerProfiles.Standard),
-                storageDirectory: storage,
-                authentication: AuthenticationConfiguration.Anonymous,
-                externalExtensions: new ExternalExtensionConfiguration(
-                    [.. roots.Roots],
-                    [trustRoot],
-                    TimeProvider.System)),
-            CancellationToken.None);
+        var participant = new StateParticipantDescriptor(
+            "NuExtVault.PackageStaging",
+            "1.0.0",
+            "package-staging",
+            1,
+            true);
+        using (var state = new TransactionalStateStore(
+                   Path.Combine(storage, "extension-state"),
+                   [participant]))
+        {
+            var record = (await state.ReadAsync(
+                participant.ExtensionId,
+                "group.durable",
+                CancellationToken.None))!;
+            using var stagedContent = new StagedContentStore(storage, "fixture");
+            var contentId = Assert.Single(stagedContent.Records).ContentId;
+            using var journal = new PublicationJournal(storage);
+            await journal.BeginAsync(
+                new PublicationJournalEntry(
+                    "legacy-recovery",
+                    participant.ExtensionId,
+                    "legacy-recovery",
+                    contentId,
+                    null,
+                    "group.durable",
+                    record.ETag,
+                    "Contoso.Durable",
+                    "1.0.0",
+                    new string('a', 64),
+                    PublicationJournalPhase.Pending,
+                    "Failed",
+                    null,
+                    null,
+                    Convert.ToBase64String(record.Value),
+                    DateTimeOffset.UnixEpoch,
+                    DateTimeOffset.UnixEpoch),
+                CancellationToken.None);
+        }
+        ConvertCurrentStoreToLegacyIdentity(storage);
 
-        using var group = await restarted.HttpClient.GetAsync("/staging/groups/durable");
-        using var document = await ReadAsync(group);
-        Assert.Equal("Succeeded", document.RootElement.GetProperty("outcome").GetString());
-        var staged = Assert.Single(
-            document.RootElement.GetProperty("group").GetProperty("packages").EnumerateArray());
-        Assert.Equal("Staged", staged.GetProperty("status").GetString());
-        await AssertAbsentAsync(restarted.HttpClient, "Contoso.Durable", "1.0.0");
+        await using (var restarted = await NuExtVaultHost.StartCompositionAsync(
+                         ServerComposition.Create(
+                             StagingProfile(ServerProfiles.Standard),
+                             storageDirectory: storage,
+                             authentication: AuthenticationConfiguration.Anonymous,
+                             externalExtensions: new ExternalExtensionConfiguration(
+                                 [.. roots.Roots],
+                                 [trustRoot],
+                                 TimeProvider.System)),
+                         CancellationToken.None))
+        {
+            using var group = await restarted.HttpClient.GetAsync("/staging/groups/durable");
+            using var document = await ReadAsync(group);
+            Assert.Equal("Succeeded", document.RootElement.GetProperty("outcome").GetString());
+            var staged = Assert.Single(
+                document.RootElement.GetProperty("group").GetProperty("packages").EnumerateArray());
+            Assert.Equal("Staged", staged.GetProperty("status").GetString());
+            await AssertAbsentAsync(restarted.HttpClient, "Contoso.Durable", "1.0.0");
 
-        using var promote = await PromoteAsync(
-            restarted.HttpClient, "durable", "Contoso.Durable", "1.0.0", "after-restart");
-        using var promoteDocument = await ReadAsync(promote);
-        Assert.Equal("Succeeded", promoteDocument.RootElement.GetProperty("outcome").GetString());
-        await AssertPresentAsync(restarted.HttpClient, "Contoso.Durable", "1.0.0");
+            using var promote = await PromoteAsync(
+                restarted.HttpClient, "durable", "Contoso.Durable", "1.0.0", "after-restart");
+            using var promoteDocument = await ReadAsync(promote);
+            Assert.Equal("Succeeded", promoteDocument.RootElement.GetProperty("outcome").GetString());
+            await AssertPresentAsync(restarted.HttpClient, "Contoso.Durable", "1.0.0");
+        }
+
+        using var migratedJournal = new PublicationJournal(storage);
+        Assert.All(
+            migratedJournal.Entries,
+            entry => Assert.Equal("NuExtVault.PackageStaging", entry.OwnerId));
     }
 
     // ---- helpers -----------------------------------------------------------
@@ -564,6 +611,44 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
     {
         using var package = TestPackageBuilder.Create(id, version).Build();
         return package.Content;
+    }
+
+    private static void ConvertCurrentStoreToLegacyIdentity(string storage)
+    {
+        const string current = "NuExtVault.PackageStaging";
+        const string legacy = "NuTest.PackageStaging";
+        var currentDirectory = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(current)));
+        var legacyDirectory = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(legacy)));
+        var stateRoot = Path.Combine(storage, "extension-state");
+        foreach (var directory in Directory.EnumerateDirectories(
+                     stateRoot,
+                     currentDirectory,
+                     SearchOption.AllDirectories)
+                 .OrderByDescending(path => path.Length)
+                 .ToArray())
+        {
+            var descriptor = Path.Combine(directory, TransactionalStateStore.ParticipantFileName);
+            if (File.Exists(descriptor))
+            {
+                File.WriteAllText(
+                    descriptor,
+                    File.ReadAllText(descriptor).Replace(current, legacy, StringComparison.Ordinal));
+            }
+            Directory.Move(directory, Path.Combine(Path.GetDirectoryName(directory)!, legacyDirectory));
+        }
+
+        foreach (var file in new[]
+                 {
+                     Path.Combine(storage, "staged-content", "index.json"),
+                     Path.Combine(storage, "staged-content", PublicationJournal.FileName)
+                 })
+        {
+            File.WriteAllText(
+                file,
+                File.ReadAllText(file).Replace(current, legacy, StringComparison.Ordinal));
+        }
     }
 
     private static async Task CreateGroupAsync(

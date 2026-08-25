@@ -22,14 +22,26 @@ public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
     public DurablePackageStore(
         string storageDirectory,
         PackageTransferLimits? limits = null)
+        : this(
+            storageDirectory,
+            limits,
+            AcquirePreparedRootLease(storageDirectory))
+    {
+    }
+
+    internal DurablePackageStore(
+        string storageDirectory,
+        PackageTransferLimits? limits,
+        FileStream rootLease)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        ArgumentNullException.ThrowIfNull(rootLease);
         _root = Path.GetFullPath(storageDirectory);
-        _limits = (limits ?? PackageTransferLimits.Default).Validate();
-        Directory.CreateDirectory(_root);
-        _rootLease = AcquireRootLease(_root);
+        _rootLease = rootLease;
         try
         {
+            _limits = (limits ?? PackageTransferLimits.Default).Validate();
+            Directory.CreateDirectory(_root);
             _blobs = new FilePackageBlobStore(_root);
             _metadata = new SqlitePackageMetadataStore(
                 Path.Combine(_root, "packages.db"),
@@ -449,7 +461,7 @@ public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
         }
     }
 
-    private static FileStream AcquireRootLease(string root)
+    internal static FileStream AcquireRootLease(string root)
     {
         try
         {
@@ -459,12 +471,21 @@ public sealed class DurablePackageStore : IPackageStore, IPackageCandidateStore
                 FileAccess.ReadWrite,
                 FileShare.None);
         }
+
         catch (IOException exception)
         {
             throw new PackageStorageInUseException(
                 $"Package storage root '{root}' is already in use by another server process.",
                 exception);
         }
+    }
+
+    private static FileStream AcquirePreparedRootLease(string storageDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        var root = Path.GetFullPath(storageDirectory);
+        Directory.CreateDirectory(root);
+        return AcquireRootLease(root);
     }
 
     private void RecoverPendingDeletes()

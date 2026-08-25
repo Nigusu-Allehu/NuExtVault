@@ -41,7 +41,8 @@ public static class ExtensionManifestJson
         "contributions",
         "routes",
         "capabilities",
-        "state");
+        "state",
+        "identityPredecessors");
 
     /// <summary>
     /// Headers a route may never declare. Credential, transport, and proxy headers stay
@@ -162,6 +163,7 @@ public static class ExtensionManifestJson
             var contributions = ParseContributions(root, id, routes, errors);
             var capabilities = ParseCapabilities(root, errors);
             var state = ParseState(root, errors);
+            var identityPredecessors = ParseIdentityPredecessors(root, id, errors);
 
             if (errors.Count > 0)
             {
@@ -177,7 +179,10 @@ public static class ExtensionManifestJson
                 contributions,
                 routes,
                 capabilities,
-                state);
+                state)
+            {
+                IdentityPredecessors = identityPredecessors
+            };
             return new ManifestValidationResult(manifest, []);
         }
     }
@@ -254,6 +259,16 @@ public static class ExtensionManifestJson
             writer.WriteEndArray();
 
             writer.WriteString("id", manifest.Identity.Id);
+            if (!manifest.IdentityPredecessors.IsDefaultOrEmpty)
+            {
+                writer.WritePropertyName("identityPredecessors");
+                writer.WriteStartArray();
+                foreach (var predecessor in manifest.IdentityPredecessors.Order(StringComparer.Ordinal))
+                {
+                    writer.WriteStringValue(predecessor);
+                }
+                writer.WriteEndArray();
+            }
             writer.WritePropertyName("operations");
             writer.WriteStartArray();
             foreach (var operation in manifest.Operations
@@ -850,6 +865,75 @@ public static class ExtensionManifestJson
         }
 
         return new ExtensionStateDeclaration(schemaName, schemaVersion, required);
+    }
+
+    private static ImmutableArray<string> ParseIdentityPredecessors(
+        JsonElement root,
+        string currentId,
+        List<ManifestValidationError> errors)
+    {
+        if (!root.TryGetProperty("identityPredecessors", out var value))
+        {
+            return [];
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add(Error(
+                "$.identityPredecessors",
+                "manifest.identity-predecessors.invalid",
+                "Identity predecessors must be an array."));
+            return [];
+        }
+
+        if (value.GetArrayLength() > 16)
+        {
+            errors.Add(Error(
+                "$.identityPredecessors",
+                "manifest.identity-predecessors.too-many",
+                "At most 16 identity predecessors may be declared."));
+        }
+
+        var result = ImmutableArray.CreateBuilder<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+        foreach (var item in value.EnumerateArray())
+        {
+            var path = $"$.identityPredecessors[{index++}]";
+            var predecessor = item.ValueKind == JsonValueKind.String
+                ? item.GetString() ?? string.Empty
+                : string.Empty;
+            if (!StableIdentity.IsStable(predecessor))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.invalid",
+                    "Identity predecessors must be stable extension identities."));
+                continue;
+            }
+
+            if (string.Equals(predecessor, currentId, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.self",
+                    "An extension cannot declare its current identity as a predecessor."));
+                continue;
+            }
+
+            if (!seen.Add(predecessor))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.duplicate",
+                    "Identity predecessors must be distinct."));
+                continue;
+            }
+
+            result.Add(predecessor);
+        }
+
+        return [.. result.Order(StringComparer.Ordinal)];
     }
 
     private static ImmutableArray<CapabilityRequest> ParseCapabilities(

@@ -123,6 +123,7 @@ type NuExtVault.Extensions.Sdk.ExtensionManifest
   NuExtVault.Extensions.Sdk.SdkCompatibilityRange Sdk { get; }
   System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.CapabilityRequest> Capabilities { get; }
   System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.ContributionDeclaration> Contributions { get; }
+  System.Collections.Immutable.ImmutableArray<System.String> IdentityPredecessors { get; }
   System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.OperationDeclaration> Operations { get; }
   System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.RouteDeclaration> Routes { get; }
 type NuExtVault.Extensions.Sdk.ExtensionManifestJson

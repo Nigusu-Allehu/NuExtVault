@@ -366,10 +366,11 @@ public sealed class CommandLineEndToEndTests
     public async Task Cli_production_mode_rejects_anonymous_configuration()
     {
         var cliPath = Path.Combine(AppContext.BaseDirectory, "NuExtVault.Cli.dll");
+        using var storage = TemporaryDirectory.Create();
 
         var result = await RunAsync(
             "dotnet",
-            $"\"{cliPath}\" start --production",
+            $"\"{cliPath}\" start --production --storage \"{storage.Path}\"",
             AppContext.BaseDirectory);
 
         Assert.Equal(2, result.ExitCode);

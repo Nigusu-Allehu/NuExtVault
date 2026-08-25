@@ -145,6 +145,14 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
     }
 
     [Fact]
+    public void The_staging_manifest_declares_its_signed_pre_rename_identity()
+    {
+        var manifest = ExtensionManifestJson.Parse(Assets.ManifestJsonBytes);
+
+        Assert.Equal(["NuTest.PackageStaging"], manifest.IdentityPredecessors.ToArray());
+    }
+
+    [Fact]
     public void The_staging_manifest_binds_uploads_to_streaming_bodies()
     {
         var manifest = ExtensionManifestJson.Parse(Assets.ManifestJsonBytes);
@@ -230,6 +238,54 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
             new ExternalExtensionConfiguration([.. roots.Roots], [trustRoot], TimeProvider.System));
 
         Assert.False(Assert.Single(runtime.Diagnostics.Results).Succeeded);
+    }
+
+    [Fact]
+    public async Task Owner_migration_does_not_run_until_the_storage_lease_is_acquired()
+    {
+        const string legacyOwner = "NuTest.PackageStaging";
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher);
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "staging.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+        using var storage = new TemporaryDirectory();
+        string contentId;
+        using (var content = new StagedContentStore(storage.Path, "legacy-host"))
+        {
+            contentId = (await content.WriteAsync(
+                legacyOwner,
+                new MemoryStream("legacy-content"u8.ToArray()),
+                "application/octet-stream",
+                1024,
+                "Contoso.Legacy",
+                "1.0.0",
+                CancellationToken.None)).Record!.ContentId;
+        }
+
+        using var lease = new FileStream(
+            Path.Combine(storage.Path, ".storage.lock"),
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        Assert.Throws<PackageStorageInUseException>(() =>
+        {
+            _ = ServerApplication.Build(
+                ServerComposition.Create(
+                    StagingProfile(),
+                    storageDirectory: storage.Path,
+                    authentication: AuthenticationConfiguration.Anonymous,
+                    externalExtensions: new ExternalExtensionConfiguration(
+                        [.. roots.Roots],
+                        [trustRoot],
+                        TimeProvider.System)));
+        });
+
+        using var unchanged = new StagedContentStore(storage.Path, "probe");
+        Assert.NotNull(unchanged.Find(legacyOwner, contentId));
+        Assert.Null(unchanged.Find(PackageStagingAssets.Id, contentId));
     }
 
     // ---- generic manifest state registration -------------------------------

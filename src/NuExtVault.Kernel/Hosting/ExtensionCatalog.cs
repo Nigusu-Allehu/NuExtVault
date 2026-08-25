@@ -74,6 +74,7 @@ internal sealed class ExtensionCatalog
             manifest => manifest.Id,
             StringComparer.OrdinalIgnoreCase);
         ValidateManifests(selected);
+        ValidateIdentityPredecessors(selected);
         ValidateDependencies(selectedById);
         var ordered = OrderByDependencies(selectedById);
         ValidateProductionCapabilityPolicy(profile);
@@ -157,6 +158,37 @@ internal sealed class ExtensionCatalog
                     $"'{manifest.HostCompatibility}', but host version '{HostVersion}' is running.");
             }
         }
+    }
+
+    private static void ValidateIdentityPredecessors(IReadOnlyList<ExtensionManifest> manifests)
+        {
+            var active = manifests
+                .Select(manifest => manifest.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var claimed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var manifest in manifests)
+            {
+                foreach (var predecessor in manifest.IdentityPredecessors)
+                {
+                    if (active.Contains(predecessor))
+                    {
+                        throw Failure(
+                            "ambiguous-active-identity-predecessor",
+                            $"Extension '{manifest.Id}' declares active extension '{predecessor}' as " +
+                            "an identity predecessor.");
+                    }
+
+                    if (claimed.TryGetValue(predecessor, out var successor))
+                    {
+                        throw Failure(
+                            "duplicate-identity-predecessor",
+                            $"Extensions '{successor}' and '{manifest.Id}' both claim identity " +
+                            $"predecessor '{predecessor}'.");
+                    }
+
+                    claimed.Add(predecessor, manifest.Id);
+                }
+            }
     }
 
     private static void ValidateDependencies(

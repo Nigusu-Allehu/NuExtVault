@@ -108,6 +108,7 @@ internal static class PublicExtensionModuleAdapter
             OwnedOperations = [.. manifest.Operations.Select(operation => operation.Identity.Value)],
             Resources = resources,
             State = manifest.State,
+            IdentityPredecessors = manifest.IdentityPredecessors,
             ValidatedManifestDigest = manifestDigest,
             ValidatedStagedContentDigest = stagedContentDigest
         };

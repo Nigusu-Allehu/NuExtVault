@@ -23,6 +23,12 @@
     "id": { "$ref": "#/$defs/stableIdentity" },
     "version": { "$ref": "#/$defs/version" },
     "publisher": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "identityPredecessors": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/stableIdentity" }
+    },
     "sdk": {
       "type": "object",
       "additionalProperties": false,
