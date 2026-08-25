@@ -220,10 +220,19 @@ public sealed class PublicationContractTests
             StringComparison.Ordinal);
         Assert.Contains("Validate tag and package version", workflow, StringComparison.Ordinal);
         Assert.Contains("Smoke test exact package", workflow, StringComparison.Ordinal);
-        Assert.Contains("uses: actions/upload-artifact@v4", workflow, StringComparison.Ordinal);
-        Assert.Contains("uses: actions/download-artifact@v4", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1",
+            workflow,
+            StringComparison.Ordinal);
         Assert.Contains("environment: nuget.org", workflow, StringComparison.Ordinal);
-        Assert.Contains("uses: NuGet/login@v1", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0",
+            workflow,
+            StringComparison.Ordinal);
         Assert.Contains("id-token: write", workflow, StringComparison.Ordinal);
         Assert.Contains("steps.login.outputs.NUGET_API_KEY", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("NUGET_API_KEY:", workflow, StringComparison.Ordinal);
@@ -233,6 +242,75 @@ public sealed class PublicationContractTests
         Assert.DoesNotContain(
             "id-token: write",
             workflow[..workflow.IndexOf("  publish:", StringComparison.Ordinal)],
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Release_workflow_pins_every_action_to_a_reviewed_commit()
+    {
+        var path = Path.Combine(RepositoryRoot, ".github", "workflows", "release.yml");
+        var actionReferences = File.ReadLines(path)
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("uses:", StringComparison.Ordinal))
+            .Select(line => line["uses:".Length..].Trim())
+            .ToArray();
+
+        Assert.NotEmpty(actionReferences);
+        Assert.All(
+            actionReferences,
+            reference =>
+            {
+                var commentIndex = reference.IndexOf('#', StringComparison.Ordinal);
+                Assert.True(
+                    commentIndex > 0,
+                    $"Action reference '{reference}' must retain an inline version comment.");
+                var action = reference[..commentIndex].Trim();
+                var separator = action.LastIndexOf('@');
+                Assert.True(separator > 0, $"Action reference '{action}' has no commit separator.");
+                var revision = action[(separator + 1)..];
+                Assert.True(
+                    revision.Length == 40 && revision.All(Uri.IsHexDigit),
+                    $"Action reference '{action}' must use a full 40-character commit SHA.");
+                Assert.StartsWith("v", reference[(commentIndex + 1)..].Trim());
+            });
+    }
+
+    [Fact]
+    public void Release_action_pins_have_dependabot_update_coverage()
+    {
+        var path = Path.Combine(RepositoryRoot, ".github", "dependabot.yml");
+        Assert.True(File.Exists(path), "Missing .github/dependabot.yml.");
+        var configuration = File.ReadAllText(path);
+
+        Assert.Contains("package-ecosystem: \"github-actions\"", configuration, StringComparison.Ordinal);
+        Assert.Contains("directory: \"/\"", configuration, StringComparison.Ordinal);
+        Assert.Contains("interval: \"weekly\"", configuration, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Release_workflow_fails_closed_unless_the_source_is_verified_on_main()
+    {
+        var path = Path.Combine(RepositoryRoot, ".github", "workflows", "release.yml");
+        var workflow = File.ReadAllText(path);
+
+        Assert.Contains("Verify release source", workflow, StringComparison.Ordinal);
+        Assert.Contains("refs/heads/main", workflow, StringComparison.Ordinal);
+        Assert.Contains("git fetch origin main", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "git rev-parse \"$env:GITHUB_SHA^{commit}\"",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains("git merge-base --is-ancestor", workflow, StringComparison.Ordinal);
+        Assert.Contains("$env:GITHUB_REF", workflow, StringComparison.Ordinal);
+        Assert.Contains("$env:GITHUB_REF_NAME", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"${{ github.ref", workflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "release-source-verified: ${{ steps.source.outputs.verified }}",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "needs.build.outputs.release-source-verified == 'true'",
+            workflow,
             StringComparison.Ordinal);
     }
 

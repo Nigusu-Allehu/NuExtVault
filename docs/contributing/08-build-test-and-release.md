@@ -123,13 +123,27 @@ package. Its publish job uses the protected `nuget.org` environment and exchange
 GitHub OIDC for a short-lived credential through `NuGet/login@v1`; no long-lived
 NuGet API key is stored.
 
+Every action in the release workflow is pinned to a reviewed full commit SHA;
+the adjacent version comment records the corresponding upstream release.
+Dependabot checks GitHub Actions weekly and groups action updates into a review
+PR. Review upstream release notes and the old-to-new commit diff, then rerun the
+publication workflow contracts and local package smoke before accepting a pin
+update. Never replace a release-workflow SHA with a mutable tag.
+
 Before the first release, an administrator must create the `nuget.org` GitHub
-environment with required reviewers, add the `NUGET_USER` secret containing the
+environment with required reviewers and prevent self-review where the repository
+plan supports it. Restrict environment deployment refs to the `main` branch and
+protected `v*` tags. Add the `NUGET_USER` environment secret containing the
 NuGet.org profile name, and register a NuGet.org Trusted Publishing policy for
 owner `Nigusu-Allehu`, repository `NuExtVault`, workflow file `release.yml`, and
 environment `nuget.org`. Review repository history and complete Windows, Ubuntu,
 and macOS checks before creating `v1.0.0` or manually dispatching version
-`1.0.0`.
+`1.0.0` from `main`.
+
+The workflow independently fails closed before packaging: manual dispatch is
+accepted only from `refs/heads/main`, while a tag release fetches `origin/main`
+and proves that the tagged commit is contained in it. The OIDC-capable publish
+job requires the resulting verified output in addition to environment approval.
 
 NuGet.org versions are immutable. A bad release cannot be overwritten: stop
 further releases, unlist the affected version on NuGet.org, publish a corrected
