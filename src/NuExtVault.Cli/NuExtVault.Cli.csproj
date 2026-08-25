@@ -15,13 +15,30 @@
     <Nullable>enable</Nullable>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>nuextvault</ToolCommandName>
-    <PackageId>NuExtVault.Cli</PackageId>
-    <Description>Local NuGet V3 server for deterministic client testing.</Description>
+    <PackageId>NuExtVault</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Nigusu Solomon Yenework</Authors>
+    <Description>
+      A NuGet-compatible package server for integration tests, local development,
+      and deterministic client workflows.
+    </Description>
+    <PackageProjectUrl>https://github.com/Nigusu-Allehu/NuExtVault</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Nigusu-Allehu/NuExtVault.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <PackageTags>nuget server testing integration development tool</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReleaseNotes>
+      NuExtVault 1.0.0 introduces the nuextvault .NET global tool for running a
+      local NuGet-compatible server on .NET 10.
+    </PackageReleaseNotes>
+    <Deterministic>true</Deterministic>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="" />
     <InternalsVisibleTo Include="NuExtVault.FunctionalTests" />
   </ItemGroup>
 

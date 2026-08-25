@@ -15,7 +15,7 @@ public sealed class DocumentationExampleTests
 {
     private static readonly string[] ExpectedIds =
     [
-        "user-01-pack-install",
+        "user-01-global-install",
         "user-01-start",
         "user-01-start-output",
         "user-01-readiness",
@@ -55,12 +55,14 @@ public sealed class DocumentationExampleTests
         "contrib-04-public-capabilities",
         "contrib-06-sdk-example",
         "contrib-06-version-table",
-        "contrib-08-validation-commands"
+        "contrib-08-validation-commands",
+        "contrib-08-local-tool-pack-install"
     ];
 
     private static readonly HashSet<string> ReferenceIds =
     [
         "user-01-start-output",
+        "user-01-global-install",
         "user-02-nuget-config",
         "user-04-production-start",
         "user-05-fault-output",
@@ -242,6 +244,30 @@ public sealed class DocumentationExampleTests
     public async Task Root_readme_quick_start_executes()
     {
         using var directory = TemporaryDirectory.Create();
+        var feed = Path.Combine(directory.Path, "feed");
+        var tools = Path.Combine(directory.Path, "tools");
+        AssertSuccess(await RunPowerShellAsync(
+            "contrib-08-local-tool-pack-install",
+            new Dictionary<string, string>
+            {
+                ["ARTIFACTS"] = feed,
+                ["TOOLS"] = tools,
+                ["NUGET_CONFIG"] = Path.Combine(directory.Path, "NuGet.Config")
+            },
+            RepositoryRoot,
+            TimeSpan.FromMinutes(5)));
+        var command = Path.Combine(
+            tools,
+            OperatingSystem.IsWindows() ? "nuextvault.exe" : "nuextvault");
+        var quickStart = DocumentationContractTests.RootQuickStartCommand()
+            .Replace(
+                "dotnet tool install --global NuExtVault",
+                "# Exact local package installed above.",
+                StringComparison.Ordinal)
+            .Replace(
+                "nuextvault start",
+                $"& \"{command}\" start",
+                StringComparison.Ordinal);
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -258,7 +284,7 @@ public sealed class DocumentationExampleTests
         process.StartInfo.ArgumentList.Add("-NoProfile");
         process.StartInfo.ArgumentList.Add("-NonInteractive");
         process.StartInfo.ArgumentList.Add("-Command");
-        process.StartInfo.ArgumentList.Add(DocumentationContractTests.RootQuickStartCommand());
+        process.StartInfo.ArgumentList.Add(quickStart);
         process.StartInfo.Environment["LOCALAPPDATA"] = directory.Path;
         process.StartInfo.Environment["XDG_DATA_HOME"] = directory.Path;
         process.StartInfo.Environment["HOME"] = directory.Path;
@@ -484,10 +510,15 @@ public sealed class DocumentationExampleTests
         {
             ["ARTIFACTS"] = artifacts,
             ["TOOLS"] = tools,
-            ["STORAGE"] = storage
+            ["STORAGE"] = storage,
+            ["NUGET_CONFIG"] = Path.Combine(directory.Path, "NuGet.Config")
         };
 
-        AssertSuccess(await RunPowerShellAsync("user-01-pack-install", common, RepositoryRoot, TimeSpan.FromMinutes(5)));
+        AssertSuccess(await RunPowerShellAsync(
+            "contrib-08-local-tool-pack-install",
+            common,
+            RepositoryRoot,
+            TimeSpan.FromMinutes(5)));
         var installedTool = Path.Combine(
             tools,
             OperatingSystem.IsWindows() ? "nuextvault.exe" : "nuextvault");

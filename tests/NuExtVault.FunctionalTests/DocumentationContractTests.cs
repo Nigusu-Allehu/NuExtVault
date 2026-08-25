@@ -114,8 +114,15 @@ public sealed partial class DocumentationContractTests
         Assert.Contains("actions/workflows/ci.yml/badge.svg", markdown, StringComparison.Ordinal);
         Assert.Contains(".NET SDK 10.0", markdown, StringComparison.Ordinal);
         Assert.Equal(
-            "dotnet run --project .\\src\\NuExtVault.Cli -- start",
+            """
+            dotnet tool install --global NuExtVault
+            nuextvault start
+            """,
             RootQuickStartCommand());
+        Assert.Contains(
+            "`dotnet run --project .\\src\\NuExtVault.Cli -- start`",
+            markdown,
+            StringComparison.Ordinal);
         Assert.Contains("docs/user/README.md", markdown, StringComparison.Ordinal);
         Assert.Contains("docs/contributing/README.md", markdown, StringComparison.Ordinal);
         Assert.DoesNotContain("## Supported NuGet operations", markdown, StringComparison.Ordinal);

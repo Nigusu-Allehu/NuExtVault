@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <PackageId>NuExtVault.Runtime</PackageId>
     <Description>
       The composition root. It is the only assembly allowed to reference both the kernel
       and the official extension assembly: it selects the official bundle, resolves the
