@@ -1,6 +1,6 @@
 # 1. Architecture and compiled assemblies
 
-NuTestServer is a microkernel-style modular monolith with a supported extension
+NuExtVault is a microkernel-style modular monolith with a supported extension
 boundary. Extensions own features and typed operations. The kernel owns the
 invariants that an extension must not bypass: host lifecycle, authentication,
 authorization, routing, limits, capability enforcement, package authority,
@@ -19,10 +19,10 @@ flowchart LR
 ```
 
 The route table and extension graph are validated and frozen before listening.
-See [`ServerApplication`](../../src/NuGet.TestServer/Hosting/ServerApplication.cs),
-[`ExtensionCatalog`](../../src/NuGet.TestServer.Kernel/Hosting/ExtensionCatalog.cs),
+See [`ServerApplication`](../../src/NuExtVault/Hosting/ServerApplication.cs),
+[`ExtensionCatalog`](../../src/NuExtVault.Kernel/Hosting/ExtensionCatalog.cs),
 and the [endpoint composition fitness
-tests](../../tests/NuGet.TestServer.UnitTests/EndpointCompositionFitnessTests.cs).
+tests](../../tests/NuExtVault.UnitTests/EndpointCompositionFitnessTests.cs).
 
 ## Compiled dependency graph
 
@@ -30,22 +30,22 @@ tests](../../tests/NuGet.TestServer.UnitTests/EndpointCompositionFitnessTests.cs
 
 <!-- example-id: contrib-01-assembly-dag; evidence: reference -->
 ```text
-NuGet.TestServer.Kernel -> NuGet.TestServer.Extensions.Sdk
-NuGet.TestServer.Extensions.Official -> NuGet.TestServer.Extensions.Sdk
-NuGet.TestServer -> NuGet.TestServer.Kernel
-NuGet.TestServer -> NuGet.TestServer.Extensions.Official
-NuGet.TestServer.Cli -> NuGet.TestServer
-NuGet.TestServer.Extensions.TestKit -> NuGet.TestServer.Extensions.Sdk
-NuTest.PackageStaging -> NuGet.TestServer.Extensions.Sdk
+NuExtVault.Kernel -> NuExtVault.Extensions.Sdk
+NuExtVault.Extensions.Official -> NuExtVault.Extensions.Sdk
+NuExtVault -> NuExtVault.Kernel
+NuExtVault -> NuExtVault.Extensions.Official
+NuExtVault.Cli -> NuExtVault
+NuExtVault.Extensions.TestKit -> NuExtVault.Extensions.Sdk
+NuExtVault.PackageStaging -> NuExtVault.Extensions.Sdk
 ```
 
 The project files are the primary evidence. The [assembly split fitness
-tests](../../tests/NuGet.TestServer.UnitTests/OfficialAssemblySplitFitnessTests.cs)
+tests](../../tests/NuExtVault.UnitTests/OfficialAssemblySplitFitnessTests.cs)
 also inspect compiled references and enforce that:
 
 - the SDK has no implementation dependency;
 - the kernel and official extension assembly do not reference each other;
-- `NuGet.TestServer` is the only product composition root referencing both;
+- `NuExtVault` is the only product composition root referencing both;
 - official extensions cannot reference kernel, host, ASP.NET Core, storage, or
   routing implementations.
 
@@ -54,22 +54,22 @@ packaging and Package Staging fitness tests enforce that narrower boundary; the
 assembly-split fitness test does not currently derive those two edges.
 
 The intentionally invalid [forbidden-reference
-fixture](../../tests/NuGet.TestServer.ForbiddenReferenceFixture/NuGet.TestServer.ForbiddenReferenceFixture.csproj)
+fixture](../../tests/NuExtVault.ForbiddenReferenceFixture/NuExtVault.ForbiddenReferenceFixture.csproj)
 exists only to prove that trusted package loading rejects forbidden assembly
 references.
 
 ## Public contracts
 
-`NuGet.TestServer.Extensions.Sdk` 1.3.0 is the supported runtime contract
-assembly. `NuGet.TestServer.Extensions.TestKit` 1.1.0 contains authoring and test
+`NuExtVault.Extensions.Sdk` 1.3.0 is the supported runtime contract
+assembly. `NuExtVault.Extensions.TestKit` 1.1.0 contains authoring and test
 helpers. Both target `net10.0`, are locally packable, and are not externally
 published. The SDK API and structural identity, both package/assembly identities, and
 selected package assets are frozen by:
 
-- [`PublicSdkContractTests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/PublicSdkContractTests.cs);
-- [`PackagingContractTests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/PackagingContractTests.cs);
-- [`Sdk.PublicApi.approved.txt`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/Snapshots/Sdk.PublicApi.approved.txt);
-- [`sdk-v1.structural-contract.txt`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/Snapshots/sdk-v1.structural-contract.txt).
+- [`PublicSdkContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/PublicSdkContractTests.cs);
+- [`PackagingContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/PackagingContractTests.cs);
+- [`Sdk.PublicApi.approved.txt`](../../tests/NuExtVault.Extensions.Sdk.Tests/Snapshots/Sdk.PublicApi.approved.txt);
+- [`sdk-v1.structural-contract.txt`](../../tests/NuExtVault.Extensions.Sdk.Tests/Snapshots/sdk-v1.structural-contract.txt).
 
 TestKit has no independent public-API or structural snapshot. Its tests freeze
 its assembly identity, SDK-only dependency, and required package shape.
@@ -81,16 +81,16 @@ exported contracts, not infer support from a source directory.
 
 ## Internal implementation
 
-`NuGet.TestServer.Kernel` enforces policy and owns authoritative services.
-`NuGet.TestServer.Extensions.Official` contains built-in feature owners.
-`NuGet.TestServer` composes those assemblies and trusted external modules.
-`NuGet.TestServer.Cli` is the command-line entry point. None of these assemblies
+`NuExtVault.Kernel` enforces policy and owns authoritative services.
+`NuExtVault.Extensions.Official` contains built-in feature owners.
+`NuExtVault` composes those assemblies and trusted external modules.
+`NuExtVault.Cli` is the command-line entry point. None of these assemblies
 is a public extension contract.
 
 Official and external extensions use the same SDK module, operation, route,
 contribution, and capability contracts. Official code receives no private
 authority escape; [extension fitness
-tests](../../tests/NuGet.TestServer.UnitTests/ExtensionModuleFitnessTests.cs)
+tests](../../tests/NuExtVault.UnitTests/ExtensionModuleFitnessTests.cs)
 continuously enforce this boundary.
 
 ## Rationale and deferred behavior

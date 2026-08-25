@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>true</IsPackable>
+    <PackageId>NuExtVault.PackageStaging</PackageId>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <RootNamespace>NuExtVault.PackageStaging</RootNamespace>
+    <AssemblyName>NuExtVault.PackageStaging</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <Description>
+      Package Staging: an optional, administrator-installed NuExtVault extension
+      that stages packages and symbols and promotes them through the kernel. It uses only
+      the public extension SDK and is absent from every default server profile.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="extension-manifest.json"
+          Pack="true"
+          PackagePath="/" />
+    <EmbeddedResource Include="extension-manifest.json"
+                      LogicalName="extension-manifest.json" />
+  </ItemGroup>
+
+</Project>

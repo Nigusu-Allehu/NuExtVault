@@ -1,22 +1,22 @@
 # 8. Build, test, and release
 
-Use .NET SDK 10.0 from the repository root. `NuGet.TestServer.slnx` contains all
+Use .NET SDK 10.0 from the repository root. `NuExtVault.slnx` contains all
 production, package, fixture, SDK-test, unit-test, and functional-test projects.
 
 ## Canonical validation
 
 <!-- example-id: contrib-08-validation-commands; evidence: reference -->
 ```text
-dotnet restore NuGet.TestServer.slnx
-dotnet build NuGet.TestServer.slnx --no-restore --configuration Release --warnaserror
-dotnet test NuGet.TestServer.slnx --no-restore --no-build --configuration Release
+dotnet restore NuExtVault.slnx
+dotnet build NuExtVault.slnx --no-restore --configuration Release --warnaserror
+dotnet test NuExtVault.slnx --no-restore --no-build --configuration Release
 ```
 
 Run the smallest relevant test first, then the full SDK, unit, and functional
 suites. The functional suite exercises real loopback Kestrel, NuGet.Protocol,
 `dotnet restore`, `dotnet nuget push`, the packed CLI, trusted loading, and
 Package Staging. Compatibility-sensitive changes must run
-[`ProtocolCompatibilityBaselineTests`](../../tests/NuGet.TestServer.FunctionalTests/ProtocolCompatibilityBaselineTests.cs)
+[`ProtocolCompatibilityBaselineTests`](../../tests/NuExtVault.FunctionalTests/ProtocolCompatibilityBaselineTests.cs)
 and the affected real-client scenarios.
 
 The repository has no tracked `.editorconfig`, `Directory.Build.props`, or
@@ -34,8 +34,8 @@ root between concurrent processes.
 
 ## Performance and compatibility
 
-[`ScalabilityCharacterizationTests`](../../tests/NuGet.TestServer.UnitTests/ScalabilityCharacterizationTests.cs)
-run only when `NUGET_TESTSERVER_RUN_PERF=1`. They characterize gateway overhead,
+[`ScalabilityCharacterizationTests`](../../tests/NuExtVault.UnitTests/ScalabilityCharacterizationTests.cs)
+run only when `NUEXTVAULT_RUN_PERF=1`. They characterize gateway overhead,
 allocations, embedded startup, 100 parallel hosts, readiness, audit cost, and
 catalog sizes. Compare only equivalent runtime, OS, architecture, configuration,
 and methodology. The checked-in Step 11D JSON is historical evidence, not a
@@ -48,18 +48,18 @@ capability, SDK API, canonical manifest, and structural snapshots deliberately.
 
 Release-pack these projects when their surfaces are affected:
 
-- `src\NuGet.TestServer.Extensions.Sdk`;
-- `src\NuGet.TestServer.Extensions.TestKit`;
-- `tests\NuGet.TestServer.SdkFixture`;
-- `src\NuGet.TestServer.Cli`;
-- `src\NuGet.TestServer.Extensions.PackageStaging`.
+- `src\NuExtVault.Extensions.Sdk`;
+- `src\NuExtVault.Extensions.TestKit`;
+- `tests\NuExtVault.SdkFixture`;
+- `src\NuExtVault.Cli`;
+- `src\NuExtVault.Extensions.PackageStaging`.
 
 Use `--configuration Release -p:TreatWarningsAsErrors=true --output <directory>`.
-[`PackagingContractTests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/PackagingContractTests.cs)
+[`PackagingContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/PackagingContractTests.cs)
 inspect SDK/TestKit package contents and pack the independent consumer.
 `DocumentationExampleTests` installs and exercises the CLI tool from a local
 package source, while
-[`CommandLineEndToEndTests`](../../tests/NuGet.TestServer.FunctionalTests/CommandLineEndToEndTests.cs)
+[`CommandLineEndToEndTests`](../../tests/NuExtVault.FunctionalTests/CommandLineEndToEndTests.cs)
 exercise the built CLI. Package Staging tests assemble loading
 metadata and an ephemeral ES256 attestation, then perform real-host installation
 and publication smoke.

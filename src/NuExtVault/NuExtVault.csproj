@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Description>
+      The composition root. It is the only assembly allowed to reference both the kernel
+      and the official extension assembly: it selects the official bundle, resolves the
+      profile, and hands the kernel a validated host composition.
+    </Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NuExtVault.Kernel\NuExtVault.Kernel.csproj" />
+    <ProjectReference Include="..\NuExtVault.Extensions.Official\NuExtVault.Extensions.Official.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NuExtVault.Cli" />
+    <InternalsVisibleTo Include="NuExtVault.FunctionalTests" />
+    <InternalsVisibleTo Include="NuExtVault.RouteFixture" />
+    <InternalsVisibleTo Include="NuExtVault.UnitTests" />
+  </ItemGroup>
+
+</Project>

@@ -1,9 +1,9 @@
 ---
 name: microkernel-migration
-description: Guides NuTestServer microkernel migration work. Use when proposing, implementing, reviewing, testing, restacking, or documenting any step that moves current server behavior into the kernel, operation registry, capability broker, profiles, official extensions, public extension SDK, sidecars, or Package Staging.
+description: Guides NuExtVault microkernel migration work. Use when proposing, implementing, reviewing, testing, restacking, or documenting any step that moves current server behavior into the kernel, operation registry, capability broker, profiles, official extensions, public extension SDK, sidecars, or Package Staging.
 ---
 
-# NuTestServer microkernel migration
+# NuExtVault microkernel migration
 
 Follow this skill for every microkernel migration task.
 

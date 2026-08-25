@@ -17,9 +17,9 @@ its number and title in the proposal; never build an upper step on a stale or
 unmerged lower-step branch.
 
 Public extensions start from the separate [SDK
-fixture](../../tests/NuGet.TestServer.SdkFixture/FlavorsExtension.cs), not kernel
+fixture](../../tests/NuExtVault.SdkFixture/FlavorsExtension.cs), not kernel
 internals. Protocol work starts from [compatibility
-characterization](../../tests/NuGet.TestServer.FunctionalTests/ProtocolCompatibilityBaselineTests.cs).
+characterization](../../tests/NuExtVault.FunctionalTests/ProtocolCompatibilityBaselineTests.cs).
 
 Documentation-only corrections do not require new tests. They still require a
 proposal and explicit approval when they change documented behavior or project
@@ -52,14 +52,14 @@ behavior—not compilation, setup, timing, or an unrelated defect.
 
 Choose evidence by change type:
 
-- ownership and graph: [`OperationRegistryTests`](../../tests/NuGet.TestServer.UnitTests/OperationRegistryTests.cs);
-- route coverage: [`OperationRouteCoverageTests`](../../tests/NuGet.TestServer.UnitTests/OperationRouteCoverageTests.cs);
-- capability/security: [`CapabilityBrokerTests`](../../tests/NuGet.TestServer.UnitTests/CapabilityBrokerTests.cs);
-- assembly boundaries: [`ExtensionModuleFitnessTests`](../../tests/NuGet.TestServer.UnitTests/ExtensionModuleFitnessTests.cs);
-- external composition: [`ExtensionModuleConformanceTests`](../../tests/NuGet.TestServer.FunctionalTests/ExtensionModuleConformanceTests.cs);
-- trusted loading: [`ExternalExtensionFunctionalTests`](../../tests/NuGet.TestServer.FunctionalTests/ExternalExtensionFunctionalTests.cs);
-- SDK/API/package: [`NuGet.TestServer.Extensions.Sdk.Tests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests);
-- persistence/recovery: state hardening and [`StorageBackupTests`](../../tests/NuGet.TestServer.UnitTests/StorageBackupTests.cs).
+- ownership and graph: [`OperationRegistryTests`](../../tests/NuExtVault.UnitTests/OperationRegistryTests.cs);
+- route coverage: [`OperationRouteCoverageTests`](../../tests/NuExtVault.UnitTests/OperationRouteCoverageTests.cs);
+- capability/security: [`CapabilityBrokerTests`](../../tests/NuExtVault.UnitTests/CapabilityBrokerTests.cs);
+- assembly boundaries: [`ExtensionModuleFitnessTests`](../../tests/NuExtVault.UnitTests/ExtensionModuleFitnessTests.cs);
+- external composition: [`ExtensionModuleConformanceTests`](../../tests/NuExtVault.FunctionalTests/ExtensionModuleConformanceTests.cs);
+- trusted loading: [`ExternalExtensionFunctionalTests`](../../tests/NuExtVault.FunctionalTests/ExternalExtensionFunctionalTests.cs);
+- SDK/API/package: [`NuExtVault.Extensions.Sdk.Tests`](../../tests/NuExtVault.Extensions.Sdk.Tests);
+- persistence/recovery: state hardening and [`StorageBackupTests`](../../tests/NuExtVault.UnitTests/StorageBackupTests.cs).
 
 Never weaken valid compatibility, streaming, concurrency, integrity, or security
 assertions to make an implementation pass.

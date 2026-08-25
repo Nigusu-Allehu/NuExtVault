@@ -1,4 +1,4 @@
-# NuTestServer contributor manual
+# NuExtVault contributor manual
 
 This manual describes the current repository at Microkernel Step 22. Use compiled
 source and executable tests as the authority for implemented behavior. The

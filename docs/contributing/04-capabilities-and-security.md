@@ -11,8 +11,8 @@ state.
 A manifest requests each capability as `required` or `optional`; a profile grants
 capability names separately. Required-but-ungranted requests fail composition.
 Optional absence is observable only through `TryGet`; `GetRequired` fails with
-`CapabilityDeniedException`. The [catalog](../../src/NuGet.TestServer.Kernel/Hosting/ExtensionCatalog.cs)
-and [capability tests](../../tests/NuGet.TestServer.UnitTests/CapabilityBrokerTests.cs)
+`CapabilityDeniedException`. The [catalog](../../src/NuExtVault.Kernel/Hosting/ExtensionCatalog.cs)
+and [capability tests](../../tests/NuExtVault.UnitTests/CapabilityBrokerTests.cs)
 cover denial and isolation.
 
 Handles are scoped to one host and extension. Trusted packages are additionally
@@ -50,8 +50,8 @@ Saturation returns a typed unavailable outcome rather than bypassing policy.
 The bounded capability audit records host, extension owner, operation,
 capability, action, and outcome. Its 4,096-entry retention ring reports dropped
 entries. This audit is distinct from production authentication/authorization
-auditing. See [`CapabilityBroker`](../../src/NuGet.TestServer.Kernel/Kernel/Capabilities/CapabilityBroker.cs)
-and its [unit tests](../../tests/NuGet.TestServer.UnitTests/CapabilityBrokerTests.cs).
+auditing. See [`CapabilityBroker`](../../src/NuExtVault.Kernel/Kernel/Capabilities/CapabilityBroker.cs)
+and its [unit tests](../../tests/NuExtVault.UnitTests/CapabilityBrokerTests.cs).
 
 ## Authority and package visibility
 
@@ -64,8 +64,8 @@ resource-class visibility immediately before package data crosses the boundary:
   registration/version resources, but not search;
 - quarantined, deleted, and unknown states receive no public grant.
 
-[`PackageVisibilityPolicy`](../../src/NuGet.TestServer.Kernel/Packages/PackageVisibilityPolicy.cs)
-and its [complete matrix](../../tests/NuGet.TestServer.UnitTests/PackageVisibilityPolicyTests.cs)
+[`PackageVisibilityPolicy`](../../src/NuExtVault.Kernel/Packages/PackageVisibilityPolicy.cs)
+and its [complete matrix](../../tests/NuExtVault.UnitTests/PackageVisibilityPolicyTests.cs)
 enforce fail-closed handling.
 
 ## Production restrictions
@@ -75,9 +75,9 @@ fault injection, request recording, test package control, instrumentation contro
 secret resolution, and sidecar execution even if configuration requests them.
 Production transport, identity, namespace ownership, and mutation scopes remain
 kernel-owned. Capability/profile restrictions are covered by
-[`CapabilityBrokerTests`](../../tests/NuGet.TestServer.UnitTests/CapabilityBrokerTests.cs);
+[`CapabilityBrokerTests`](../../tests/NuExtVault.UnitTests/CapabilityBrokerTests.cs);
 transport and identity behavior is covered by [production security functional
-tests](../../tests/NuGet.TestServer.FunctionalTests/ProductionSecurityTests.cs).
+tests](../../tests/NuExtVault.FunctionalTests/ProductionSecurityTests.cs).
 
 Invalid trust, attestation, ownership, routes, contracts, required grants, or
 authoritative policy participants prevent startup. Request-time policy failures

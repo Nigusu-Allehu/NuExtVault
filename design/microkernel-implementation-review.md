@@ -91,7 +91,7 @@ Do not rewrite. Pause the old Step 12 and require Steps 11A through 11D:
 4. Establish scalability and backpressure baselines before high-volume extraction.
 
 If `/flavors/index.json` cannot be contributed by a separately compiled test module
-without kernel edits, describe NuTestServer as a modular monolith. Do not claim a
+without kernel edits, describe NuExtVault as a modular monolith. Do not claim a
 third-party extension platform.
 
 ## Selected decisions
@@ -190,8 +190,8 @@ After Steps 11A through 11D:
 - Lane C runs Step 16 supply-chain policy.
 - Step 17 package management waits for the read and policy lanes.
 - Step 18 performs the physical official assembly split. It is implemented: the
-  official extensions ship as `NuGet.TestServer.Extensions.Official`, the kernel and
-  runtime as `NuGet.TestServer.Kernel`, and `NuGet.TestServer` is the only assembly
+  official extensions ship as `NuExtVault.Extensions.Official`, the kernel and
+  runtime as `NuExtVault.Kernel`, and `NuExtVault` is the only assembly
   that references both.
 - Step 19 is implemented and resolves route, URL, rendering, capability, contract
   identity, support, signing, replacement, manifest, and target-framework decisions.
@@ -259,7 +259,7 @@ restores the characterized legacy registration owner without data migration.
 ## Step 12B implementation update
 
 Lane A operational ownership now flows through the same generic module seam as a
-separately compiled contribution. `NuTest.Operations` is the single owner of the
+separately compiled contribution. `NuExtVault.Operations` is the single owner of the
 existing health, readiness, storage-health, diagnostics, backup, and restore operation
 IDs and contributes all existing health routes through generated descriptors.
 
@@ -273,7 +273,7 @@ owns the atomic checkpoint/restore commit and recovery mutations.
 ## Step 16 implementation update
 
 Lane C now extracts supply-chain policy participation into the internal official
-`NuTest.SupplyChain` module. The module contributes authoritative signature, scanner,
+`NuExtVault.SupplyChain` module. The module contributes authoritative signature, scanner,
 ownership, namespace, and quota participants through the Step 11C generic seam.
 Separate audited capabilities expose only signature inspection and scanning against
 opaque, kernel-issued package handles. Ownership and quota facts remain
@@ -317,21 +317,21 @@ The official extensions are now a separately compiled assembly. The enforced acc
 gate is the compiled assembly graph, not a namespace convention:
 
 ```text
-NuGet.TestServer.Extensions.Sdk               (contracts; System-only dependencies)
+NuExtVault.Extensions.Sdk               (contracts; System-only dependencies)
         ^                              ^
-NuGet.TestServer.Kernel        NuGet.TestServer.Extensions.Official
+NuExtVault.Kernel        NuExtVault.Extensions.Official
         ^                              ^
-        +------ NuGet.TestServer (composition root) ------+
+        +------ NuExtVault (composition root) ------+
                           ^
-                 NuGet.TestServer.Cli
+                 NuExtVault.Cli
 ```
 
-`NuGet.TestServer.Kernel` owns hosting, routing, security, the capability broker,
+`NuExtVault.Kernel` owns hosting, routing, security, the capability broker,
 package identity and content, storage, transactional state, checkpoints, moderation,
-and diagnostics. `NuGet.TestServer.Extensions.Official` owns the service index, flat
+and diagnostics. `NuExtVault.Extensions.Official` owns the service index, flat
 container, registration, search, package management, operations, supply-chain policy,
 test control, and the vulnerability catalog feature together with its own snapshot
-state. Neither references the other. `NuGet.TestServer` is the only assembly that
+state. Neither references the other. `NuExtVault` is the only assembly that
 references both: it resolves the profile, selects the official bundle explicitly, and
 hands owners capabilities the kernel resolved by declared capability identity. The
 conformance fixture obeys the same compiled constraints as the official assembly.
@@ -360,8 +360,8 @@ without any contract, wire, or data migration.
 ## Step 19 implementation update
 
 The former contracts assembly is now the public
-`NuGet.TestServer.Extensions.Sdk` package/assembly `1.0.0`, and
-`NuGet.TestServer.Extensions.TestKit` is a separate `1.0.0` package. Both target only
+`NuExtVault.Extensions.Sdk` package/assembly `1.0.0`, and
+`NuExtVault.Extensions.TestKit` is a separate `1.0.0` package. Both target only
 `net10.0`, matching every runtime and test project in the repository. The SDK has no
 host, kernel, ASP.NET Core, storage, DI, security, NuGet.Protocol, rendering, or
 official-extension dependency.
@@ -406,7 +406,7 @@ evidence requiring process isolation; Step 21 remains not applicable.
 
 - Answered in Step 18: the enforced graph is
   `Abstractions <- Kernel`, `Abstractions <- Official`, and
-  `Kernel + Official <- NuGet.TestServer` composition root. Compiled
+  `Kernel + Official <- NuExtVault` composition root. Compiled
   assembly-reference fitness tests are the acceptance gate.
 - Answered in Step 18: capability interfaces and their transport-neutral documents
   live in the abstractions; the kernel implements them and the broker resolves handles

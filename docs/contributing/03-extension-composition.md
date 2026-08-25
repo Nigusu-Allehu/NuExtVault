@@ -1,6 +1,6 @@
 # 3. Extension composition
 
-NuTestServer resolves a complete extension graph before accepting requests. A
+NuExtVault resolves a complete extension graph before accepting requests. A
 module contributes immutable declarations and typed registrations; the kernel
 validates ownership, dependencies, routes, resources, grants, and profiles as
 one deterministic unit.
@@ -10,9 +10,9 @@ one deterministic unit.
 A separately compiled extension implements `IExtensionModule`. Its
 `Contribution` returns an immutable manifest, `RegisterOperations` registers
 typed owners, and `RegisterRoutes` registers typed binders. The public contract
-is in [`ExtensionModel.cs`](../../src/NuGet.TestServer.Extensions.Sdk/ExtensionModel.cs)
+is in [`ExtensionModel.cs`](../../src/NuExtVault.Extensions.Sdk/ExtensionModel.cs)
 and is frozen by the [SDK API
-snapshot](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/Snapshots/Sdk.PublicApi.approved.txt).
+snapshot](../../tests/NuExtVault.Extensions.Sdk.Tests/Snapshots/Sdk.PublicApi.approved.txt).
 
 The strict manifest is authoritative for identity, SDK range, independent
 contract versions, operations, service-resource contributions, routes,
@@ -31,8 +31,8 @@ a winner.
 Public v1 extensions may introduce only new extension-prefixed operation IDs.
 Replacement is disabled, and the SDK exposes no takeover API. Authoritative
 identity, publication, moderation, ownership, recovery, and package mutations
-are nonreplaceable. See [`OperationRegistryTests`](../../tests/NuGet.TestServer.UnitTests/OperationRegistryTests.cs)
-and [`OwnershipAndCapabilityContractTests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests/OwnershipAndCapabilityContractTests.cs).
+are nonreplaceable. See [`OperationRegistryTests`](../../tests/NuExtVault.UnitTests/OperationRegistryTests.cs)
+and [`OwnershipAndCapabilityContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/OwnershipAndCapabilityContractTests.cs).
 
 ## Routes, resources, and contributions
 
@@ -47,9 +47,9 @@ The catalog rejects concrete and semantic route conflicts, reserved prefixes,
 dangling operations, incompatible contracts, invalid limits, access mismatches,
 duplicate single-owner resources, and missing resource links. Resource ordering
 is explicit and independent of registration order. Evidence lives in
-[`ExtensionCatalogTests`](../../tests/NuGet.TestServer.UnitTests/ExtensionCatalogTests.cs),
-[`EndpointDescriptorTests`](../../tests/NuGet.TestServer.UnitTests/EndpointDescriptorTests.cs),
-and [`ServiceIndexCompositionTests`](../../tests/NuGet.TestServer.UnitTests/ServiceIndexCompositionTests.cs).
+[`ExtensionCatalogTests`](../../tests/NuExtVault.UnitTests/ExtensionCatalogTests.cs),
+[`EndpointDescriptorTests`](../../tests/NuExtVault.UnitTests/EndpointDescriptorTests.cs),
+and [`ServiceIndexCompositionTests`](../../tests/NuExtVault.UnitTests/ServiceIndexCompositionTests.cs).
 
 Typed registration-document contributors and policy participants exist
 internally. V1 does not expose arbitrary JSON mutation, arbitrary contribution
@@ -65,10 +65,10 @@ Profiles are internal host composition, not public SDK objects:
 | `standard` | Default CLI composition with durable storage, official features, and test control |
 | `production` | Durable, production-security composition without test-control features or grants |
 
-[`ServerProfiles`](../../src/NuGet.TestServer/Hosting/ServerProfiles.cs) defines
-the selections and grants. [`ServerProfileTests`](../../tests/NuGet.TestServer.UnitTests/ServerProfileTests.cs)
+[`ServerProfiles`](../../src/NuExtVault/Hosting/ServerProfiles.cs) defines
+the selections and grants. [`ServerProfileTests`](../../tests/NuExtVault.UnitTests/ServerProfileTests.cs)
 and [composition functional
-tests](../../tests/NuGet.TestServer.FunctionalTests/ServerProfileCompositionTests.cs)
+tests](../../tests/NuExtVault.FunctionalTests/ServerProfileCompositionTests.cs)
 freeze their differences and per-host isolation.
 
 Resolved graph diagnostics and operation inventories are ordinal and stable.
@@ -77,7 +77,7 @@ internal diagnostics; no public CLI graph-dump command is currently promised.
 
 ## Official and trusted external modules
 
-Official modules ship in `NuGet.TestServer.Extensions.Official` and obey the SDK
+Official modules ship in `NuExtVault.Extensions.Official` and obey the SDK
 boundary. Administrator-installed packages are discovered only from explicit
 local roots, validated, staged, loaded, then merged into the same catalog,
 operation, route, resource, and capability graph. They are trusted in-process
@@ -87,13 +87,13 @@ The reviewed built-in structural contract snapshots are:
 
 <!-- example-id: contrib-03-evidence-inventories; evidence: reference -->
 ```text
-tests/NuGet.TestServer.UnitTests/Snapshots/operations.contract.txt
-tests/NuGet.TestServer.UnitTests/Snapshots/routes.contract.txt
-tests/NuGet.TestServer.UnitTests/Snapshots/resources.contract.txt
-tests/NuGet.TestServer.UnitTests/Snapshots/capabilities.contract.txt
+tests/NuExtVault.UnitTests/Snapshots/operations.contract.txt
+tests/NuExtVault.UnitTests/Snapshots/routes.contract.txt
+tests/NuExtVault.UnitTests/Snapshots/resources.contract.txt
+tests/NuExtVault.UnitTests/Snapshots/capabilities.contract.txt
 ```
 
-[`ContractFingerprintTests`](../../tests/NuGet.TestServer.UnitTests/ContractFingerprintTests.cs)
+[`ContractFingerprintTests`](../../tests/NuExtVault.UnitTests/ContractFingerprintTests.cs)
 regenerate and compare these internal snapshots. They cover global built-in
 contracts/manifests and capability interface shapes, not resolved profiles or
 loaded external modules. Update them only as part of an approved, reviewed

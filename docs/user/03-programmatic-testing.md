@@ -2,13 +2,13 @@
 
 [User manual](README.md)
 
-`NuGetTestServerHost` starts real Kestrel on an OS-selected loopback port while
+`NuExtVaultHost` starts real Kestrel on an OS-selected loopback port while
 keeping package, request, fault, profile, extension, and vulnerability state
 host-scoped and independent of external networks by default.
 
 ## Start a host and generate a package
 
-Reference the repository's `src/NuGet.TestServer/NuGet.TestServer.csproj` and
+Reference the repository's `src/NuExtVault/NuExtVault.csproj` and
 NuGet.Protocol 7.9.0 from a `net10.0` test or console project.
 
 <!-- example-id: user-03-generated-package; evidence: executable -->
@@ -16,10 +16,10 @@ NuGet.Protocol 7.9.0 from a `net10.0` test or console project.
 using NuGet.Common;
 using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
-using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Packages;
+using NuExtVault.Hosting;
+using NuExtVault.Packages;
 
-await using var server = await NuGetTestServerHost.StartAsync();
+await using var server = await NuExtVaultHost.StartAsync();
 
 var package = TestPackageBuilder.Create("Docs.Generated.Package", "1.0.0")
     .WithAuthors("Documentation tests")
@@ -48,11 +48,11 @@ duplicate normalized identity throws `DuplicatePackageException`.
 
 <!-- example-id: user-03-parallel-isolation; evidence: executable -->
 ```csharp
-using NuGet.TestServer.Hosting;
-using NuGet.TestServer.Packages;
+using NuExtVault.Hosting;
+using NuExtVault.Packages;
 
-await using var first = await NuGetTestServerHost.StartAsync();
-await using var second = await NuGetTestServerHost.StartAsync();
+await using var first = await NuExtVaultHost.StartAsync();
+await using var second = await NuExtVaultHost.StartAsync();
 
 await first.Packages.AddAsync(
     TestPackageBuilder.Create("Docs.Only.First", "1.0.0").Build());

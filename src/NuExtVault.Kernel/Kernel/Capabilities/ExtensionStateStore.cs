@@ -1,0 +1,484 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using NuExtVault.Extensions.Sdk;
+
+namespace NuExtVault.Kernel.Capabilities;
+
+/// <summary>
+/// The version 1 extension state format. It is no longer an active state owner: the
+/// transactional store uses it to adopt records written by earlier builds, to keep the
+/// downgrade mirror current, and to read legacy owner-scoped file sets.
+/// </summary>
+internal sealed partial class ExtensionStateStore
+{
+    private readonly string? _root;
+    private readonly ImmutableDictionary<
+        string,
+        ImmutableDictionary<string, LegacyStateFileSetRegistration>> _legacyFileSets;
+    internal const int LockStripeCount = 64;
+    private readonly SemaphoreSlim[] _locks =
+        Enumerable.Range(0, LockStripeCount).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
+
+    internal int LockCount => _locks.Length;
+
+    public ExtensionStateStore(
+        string? root,
+        ImmutableDictionary<
+            string,
+            ImmutableDictionary<string, LegacyStateFileSetRegistration>>? legacyFileSets = null)
+    {
+        _root = root is null ? null : Path.GetFullPath(root);
+        _legacyFileSets = legacyFileSets ??
+            ImmutableDictionary<
+                string,
+                ImmutableDictionary<string, LegacyStateFileSetRegistration>>.Empty;
+    }
+
+    public async ValueTask<ExtensionStateFileSet?> ReadLegacyFileSetAsync(
+        string ownerId,
+        string logicalName,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logicalName);
+        token.ThrowIfCancellationRequested();
+        if (!_legacyFileSets.TryGetValue(ownerId, out var ownerSets) ||
+            !ownerSets.TryGetValue(logicalName, out var registration))
+        {
+            return null;
+        }
+
+        var root = Path.GetFullPath(registration.RootDirectory);
+        if (!Directory.Exists(root))
+        {
+            return null;
+        }
+
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new ExtensionStateException(
+                "Legacy extension state root cannot be a filesystem link.");
+        }
+
+        var maximumTotalBytes = Math.Min(maximumBytes, registration.MaximumTotalBytes);
+        var maximumFileBytes = Math.Min(maximumBytes, registration.MaximumFileBytes);
+        var rootPrefix = Path.EndsInDirectorySeparator(root)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        var files = ImmutableArray.CreateBuilder<ExtensionStateFile>();
+        long totalBytes = 0;
+        try
+        {
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+                ReturnSpecialDirectories = false
+            };
+            foreach (var path in Directory.EnumerateFiles(root, "*", options)
+                         .Order(StringComparer.Ordinal))
+            {
+                token.ThrowIfCancellationRequested();
+                if (files.Count >= registration.MaximumFileCount)
+                {
+                    throw new CapabilityStreamLimitExceededException(
+                        files.Count + 1,
+                        registration.MaximumFileCount);
+                }
+
+                var fullPath = Path.GetFullPath(path);
+                var pathComparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                if (!fullPath.StartsWith(rootPrefix, pathComparison) ||
+                    (File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new ExtensionStateException(
+                        "Legacy extension state contains an unsafe filesystem entry.");
+                }
+
+                var relative = Path.GetRelativePath(root, fullPath);
+                if (!IsSafeRelativeName(relative))
+                {
+                    throw new ExtensionStateException(
+                        "Legacy extension state contains an unsafe logical name.");
+                }
+
+                var declaredLength = new FileInfo(fullPath).Length;
+                if (declaredLength > maximumFileBytes)
+                {
+                    throw new CapabilityStreamLimitExceededException(
+                        declaredLength,
+                        maximumFileBytes);
+                }
+
+                if (totalBytes + declaredLength > maximumTotalBytes)
+                {
+                    throw new CapabilityStreamLimitExceededException(
+                        totalBytes + declaredLength,
+                        maximumTotalBytes);
+                }
+
+                var content = await ReadBoundedAsync(
+                    fullPath,
+                    maximumFileBytes,
+                    token);
+                totalBytes += content.LongLength;
+                if (totalBytes > maximumTotalBytes)
+                {
+                    throw new CapabilityStreamLimitExceededException(
+                        totalBytes,
+                        maximumTotalBytes);
+                }
+
+                files.Add(new ExtensionStateFile(
+                    relative.Replace(Path.DirectorySeparatorChar, '/'),
+                    content));
+            }
+
+            return new ExtensionStateFileSet(files.ToImmutable());
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException)
+        {
+            throw new ExtensionStateException(
+                "Legacy extension state could not be read.",
+                exception);
+        }
+    }
+
+    public async ValueTask<T?> ReadAsync<T>(
+        string ownerId,
+        string key,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue)
+    {
+        var payload = await ReadRawAsync(ownerId, key, token, maximumBytes);
+        return payload is null ? default : JsonSerializer.Deserialize<T>(payload);
+    }
+
+    public async ValueTask<byte[]?> ReadRawAsync(
+        string ownerId,
+        string key,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue)
+    {
+        var path = GetPath(ownerId, key);
+        var gate = GetLock(path);
+        await gate.WaitAsync(token);
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            byte[] content;
+            try
+            {
+                var length = new FileInfo(path).Length;
+                if (length > maximumBytes)
+                {
+                    throw new CapabilityStreamLimitExceededException(length, maximumBytes);
+                }
+
+                content = await ReadBoundedAsync(path, maximumBytes, token);
+                var envelope = JsonSerializer.Deserialize<StateEnvelope>(content)
+                    ?? throw new ExtensionStateException("Extension state envelope is empty.");
+                if (envelope.Version != 1 ||
+                    !string.Equals(envelope.Key, key, StringComparison.Ordinal))
+                {
+                    throw new ExtensionStateException("Extension state metadata is invalid.");
+                }
+
+                return ReadPayload(envelope);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (ExtensionStateException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or UnauthorizedAccessException or
+                JsonException or FormatException or CryptographicException)
+            {
+                throw new ExtensionStateException(
+                    "Extension state could not be read or validated.",
+                    exception);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public ValueTask WriteAsync<T>(
+        string ownerId,
+        string key,
+        T value,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue) =>
+        WriteRawAsync(
+            ownerId,
+            key,
+            JsonSerializer.SerializeToUtf8Bytes(value),
+            token,
+            maximumBytes);
+
+    public async ValueTask WriteRawAsync(
+        string ownerId,
+        string key,
+        byte[] payload,
+        CancellationToken token,
+        long maximumBytes = long.MaxValue)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        token.ThrowIfCancellationRequested();
+        var path = GetPath(ownerId, key);
+        var gate = GetLock(path);
+        await gate.WaitAsync(token);
+        try
+        {
+            token.ThrowIfCancellationRequested();
+            var content = CreateCompatibilityEnvelope(key, payload);
+            if (content.LongLength > maximumBytes)
+            {
+                throw new CapabilityStreamLimitExceededException(
+                    content.LongLength,
+                    maximumBytes);
+            }
+
+            var directory = Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(directory);
+            var temporary = Path.Combine(directory, $".{Guid.NewGuid():N}.tmp");
+            try
+            {
+                await using (var stream = new FileStream(
+                                 temporary,
+                                 FileMode.CreateNew,
+                                 FileAccess.Write,
+                                 FileShare.None,
+                                 64 * 1024,
+                                 FileOptions.Asynchronous | FileOptions.WriteThrough))
+                {
+                    await stream.WriteAsync(content, token);
+                    await stream.FlushAsync(token);
+                    stream.Flush(flushToDisk: true);
+                }
+
+                token.ThrowIfCancellationRequested();
+                File.Move(temporary, path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            throw new ExtensionStateException("Extension state could not be persisted.", exception);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private string GetPath(string ownerId, string key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        if (_root is null)
+        {
+            throw new ExtensionStateException("Durable extension state is not configured.");
+        }
+
+        if (!StateKeyRegex().IsMatch(key))
+        {
+            throw new ArgumentException(
+                "Extension state keys may contain only letters, numbers, '.', '_' and '-'.",
+                nameof(key));
+        }
+
+        var ownerNamespace = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(ownerId)))
+            .ToLowerInvariant();
+        var keyName = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))
+            .ToLowerInvariant();
+        return Path.Combine(_root, ownerNamespace, $"{keyName}.json");
+    }
+
+    /// <summary>
+    /// The version 1 record path. The transactional store keeps this mirror current so an
+    /// earlier server build can still read the same state.
+    /// </summary>
+    public string GetCompatibilityPath(string ownerId, string key) => GetPath(ownerId, key);
+
+    public static byte[] CreateCompatibilityEnvelope(string key, byte[] payload) =>
+        JsonSerializer.SerializeToUtf8Bytes(new StateEnvelope(
+            1,
+            key,
+            Convert.ToBase64String(payload),
+            Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant()));
+
+    public static (string Key, byte[] Payload)? TryReadCompatibilityRecord(string path)
+    {
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<StateEnvelope>(File.ReadAllBytes(path));
+            if (envelope is null || envelope.Version != 1)
+            {
+                return null;
+            }
+
+            return (envelope.Key, ReadPayload(envelope));
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException or
+            FormatException or ExtensionStateException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads a version 1 envelope's identity without decoding its payload. The payload
+    /// property is skipped by the reader, so a mirror can be compared with the record it
+    /// projects without ever materializing the record.
+    /// </summary>
+    public static (string Key, string Sha256)? TryReadCompatibilityIdentity(string path)
+    {
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<StateEnvelopeIdentity>(
+                File.ReadAllBytes(path));
+            if (envelope is null ||
+                envelope.Version != 1 ||
+                string.IsNullOrWhiteSpace(envelope.Key) ||
+                string.IsNullOrWhiteSpace(envelope.Sha256))
+            {
+                return null;
+            }
+
+            return (envelope.Key, envelope.Sha256);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException or
+            FormatException)
+        {
+            return null;
+        }
+    }
+
+    private static byte[] ReadPayload(StateEnvelope envelope)
+    {
+        var payload = Convert.FromBase64String(envelope.Payload);
+        StatePayloadInstrumentation.Materialized(payload.LongLength);
+        var expected = Convert.FromHexString(envelope.Sha256);
+        var actual = SHA256.HashData(payload);
+        if (!CryptographicOperations.FixedTimeEquals(expected, actual))
+        {
+            throw new ExtensionStateException("Extension state integrity validation failed.");
+        }
+
+        return payload;
+    }
+
+    private SemaphoreSlim GetLock(string path)
+    {
+        var hash = StringComparer.Ordinal.GetHashCode(path);
+        return _locks[(int)((uint)hash % (uint)_locks.Length)];
+    }
+
+    private static bool IsSafeRelativeName(string name) =>
+        !string.IsNullOrWhiteSpace(name) &&
+        !Path.IsPathRooted(name) &&
+        name.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries)
+            .All(segment => segment is not "." and not "..");
+
+    private static async Task<byte[]> ReadBoundedAsync(
+        string path,
+        long maximumBytes,
+        CancellationToken token)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            64 * 1024,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var destination = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer, token);
+            if (read == 0)
+            {
+                return destination.ToArray();
+            }
+
+            if (destination.Length + read > maximumBytes)
+            {
+                throw new CapabilityStreamLimitExceededException(
+                    destination.Length + read,
+                    maximumBytes);
+            }
+
+            await destination.WriteAsync(buffer.AsMemory(0, read), token);
+        }
+    }
+
+    [GeneratedRegex("^[A-Za-z0-9._-]{1,128}$", RegexOptions.CultureInvariant)]
+    private static partial Regex StateKeyRegex();
+
+    private sealed record StateEnvelope(int Version, string Key, string Payload, string Sha256);
+
+    private sealed record StateEnvelopeIdentity(int Version, string Key, string Sha256);
+}
+
+internal sealed record LegacyStateFileSetRegistration(
+    string RootDirectory,
+    long MaximumFileBytes,
+    long MaximumTotalBytes,
+    int MaximumFileCount = 256)
+{
+    public LegacyStateFileSetRegistration Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(RootDirectory);
+        if (MaximumFileBytes <= 0 ||
+            MaximumTotalBytes <= 0 ||
+            MaximumFileBytes > MaximumTotalBytes ||
+            MaximumFileCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(MaximumTotalBytes),
+                "Legacy state file-set limits are invalid.");
+        }
+
+        return this;
+    }
+}

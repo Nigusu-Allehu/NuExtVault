@@ -2,7 +2,7 @@
 
 [User manual](README.md)
 
-NuTestServer currently ships from this repository. The CLI tool is locally
+NuExtVault currently ships from this repository. The CLI tool is locally
 packable but is not published to NuGet.org. Run these commands from the repository
 root. The examples use cross-platform PowerShell 7 (`pwsh`).
 
@@ -12,8 +12,8 @@ The example uses isolated output and installation directories.
 
 <!-- example-id: user-01-pack-install; evidence: executable -->
 ```powershell
-dotnet pack .\src\NuGet.TestServer.Cli\NuGet.TestServer.Cli.csproj --configuration Release --output "{{ARTIFACTS}}"
-dotnet tool install --tool-path "{{TOOLS}}" NuGet.TestServer.Cli --add-source "{{ARTIFACTS}}" --version 1.0.0
+dotnet pack .\src\NuExtVault.Cli\NuExtVault.Cli.csproj --configuration Release --output "{{ARTIFACTS}}"
+dotnet tool install --tool-path "{{TOOLS}}" NuExtVault.Cli --add-source "{{ARTIFACTS}}" --version 1.0.0
 ```
 
 ## Start an isolated server

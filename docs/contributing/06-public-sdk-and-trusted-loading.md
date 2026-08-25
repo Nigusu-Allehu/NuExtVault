@@ -4,9 +4,9 @@ The supported public extension surface is locally packable and `net10.0` only.
 
 <!-- example-id: contrib-06-version-table; evidence: reference -->
 ```text
-NuGet.TestServer.Extensions.Sdk 1.3.0 net10.0
-NuGet.TestServer.Extensions.TestKit 1.1.0 net10.0
-NuTest.PackageStaging 1.0.0 net10.0
+NuExtVault.Extensions.Sdk 1.3.0 net10.0
+NuExtVault.Extensions.TestKit 1.1.0 net10.0
+NuExtVault.PackageStaging 1.0.0 net10.0
 ```
 
 The SDK contains runtime contracts, strict manifest parsing/schema, canonical
@@ -31,7 +31,7 @@ but not sufficient: the reviewed structural SHA-256 must also match.
 Canonical bytes are unindented UTF-8 with fixed property order, ordinal identity
 ordering, no trailing newline, and lowercase SHA-256. Always canonicalize through
 the SDK. Golden fixtures live in
-[`NuGet.TestServer.Extensions.Sdk.Tests`](../../tests/NuGet.TestServer.Extensions.Sdk.Tests).
+[`NuExtVault.Extensions.Sdk.Tests`](../../tests/NuExtVault.Extensions.Sdk.Tests).
 
 TestKit's `ManifestBuilder` currently does not author the optional state
 declaration. Stateful examples must validate their authoritative JSON directly.
@@ -43,9 +43,9 @@ compiled Flavors fixture, then executes conformance.
 
 <!-- example-id: contrib-06-sdk-example; evidence: executable -->
 ```csharp
-using NuGet.TestServer.Extensions.Sdk;
-using NuGet.TestServer.Extensions.TestKit;
-using NuGet.TestServer.SdkFixture;
+using NuExtVault.Extensions.Sdk;
+using NuExtVault.Extensions.TestKit;
+using NuExtVault.SdkFixture;
 
 var manifest = new ManifestBuilder()
     .WithIdentity("Contoso.Flavors", "1.2.3", "Contoso")
@@ -94,12 +94,12 @@ path mutation therefore cannot change activated code. Collection after host
 disposal is tested, but this is cleanup and dependency isolation—not hot reload,
 dynamic enablement, or a security sandbox. Every configured package is required;
 failure prevents startup. Configuration changes require restart. See
-[`ExternalExtensions`](../../src/NuGet.TestServer/Hosting/ExternalExtensions.cs)
-and [loader tests](../../tests/NuGet.TestServer.UnitTests/ExternalExtensionPackageLoaderTests.cs).
+[`ExternalExtensions`](../../src/NuExtVault/Hosting/ExternalExtensions.cs)
+and [loader tests](../../tests/NuExtVault.UnitTests/ExternalExtensionPackageLoaderTests.cs).
 
 ## Package Staging
 
-`NuTest.PackageStaging` declares required state, nine new nonreplaceable
+`NuExtVault.PackageStaging` declares required state, nine new nonreplaceable
 operations, administrator-only bounded routes, streaming uploads, a
 service-resource contribution, and five required capabilities. It is absent from
 all default profiles and must be installed with explicit extension, trust, and

@@ -44,18 +44,18 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore NuGet.TestServer.slnx
+        run: dotnet restore NuExtVault.slnx
 
       - name: Build
-        run: dotnet build NuGet.TestServer.slnx --no-restore --configuration Release --warnaserror
+        run: dotnet build NuExtVault.slnx --no-restore --configuration Release --warnaserror
 
       - name: Test
         run: >-
-          dotnet test NuGet.TestServer.slnx
+          dotnet test NuExtVault.slnx
           --no-restore
           --no-build
           --configuration Release
-          --filter "FullyQualifiedName!~NuGet.TestServer.FunctionalTests.DocumentationContractTests&FullyQualifiedName!~NuGet.TestServer.FunctionalTests.DocumentationExampleTests"
+          --filter "FullyQualifiedName!~NuExtVault.FunctionalTests.DocumentationContractTests&FullyQualifiedName!~NuExtVault.FunctionalTests.DocumentationExampleTests"
           --logger "trx;LogFilePrefix=test-results-${{ matrix.os }}"
           --results-directory TestResults
 

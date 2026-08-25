@@ -1,7 +1,7 @@
-# NuTestServer user manual
+# NuExtVault user manual
 
 This manual describes behavior implemented and tested in the current repository.
-NuTestServer is a lightweight NuGet V3 server for deterministic integration and
+NuExtVault is a lightweight NuGet V3 server for deterministic integration and
 end-to-end tests. It is not a hosted, multi-node package service.
 
 ## Prerequisites

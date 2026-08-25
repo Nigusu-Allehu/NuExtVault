@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This is the authoritative policy for the NuTestServer public extension SDK v1
+This is the authoritative policy for the NuExtVault public extension SDK v1
 surface stabilized by Microkernel Step 19, loaded by Step 20, and additively extended
 to SDK `1.3.0` by Step 22. The implementation
 and package projects exist in this repository, can be packed locally, and are
@@ -13,7 +13,7 @@ Step 20 adds administrator-installed package discovery, trusted in-process loadi
 validation, and activation through repeatable CLI package and trust roots. Discovery
 is disabled by default and performs no network access. Sidecars remain deferred
 until a concrete consumer requires process isolation or another implementation
-language. Step 22 adds the independently packed `NuTest.PackageStaging` reference
+language. Step 22 adds the independently packed `NuExtVault.PackageStaging` reference
 extension and generic staged-content, atomic-publication, transactional-state,
 route-header/body-binding, and state-manifest contracts. External publication remains
 out of scope.
@@ -24,8 +24,8 @@ The two public package and assembly identities are:
 
 | Package and assembly | Version | Purpose |
 | --- | --- | --- |
-| `NuGet.TestServer.Extensions.Sdk` | `1.3.0` | Supported extension contracts, strict JSON manifest parser, schema, canonical identities, conformance checks, and attestation APIs |
-| `NuGet.TestServer.Extensions.TestKit` | `1.1.0` | Typed manifest builder, capability fake, and conformance helper |
+| `NuExtVault.Extensions.Sdk` | `1.3.0` | Supported extension contracts, strict JSON manifest parser, schema, canonical identities, conformance checks, and attestation APIs |
+| `NuExtVault.Extensions.TestKit` | `1.1.0` | Typed manifest builder, capability fake, and conformance helper |
 
 Both packages target only `net10.0`. This is intentional for v1: the server,
 kernel, official extension assembly, CLI, functional tests, and independently
@@ -35,7 +35,7 @@ dependency-injection, database, NuGet.Protocol, storage, kernel, host, security,
 official-extension dependency. TestKit depends only on the SDK project.
 
 The SDK package includes
-`contentFiles/any/any/nutestserver/extension-manifest-v1.schema.json`. TestKit is a
+`contentFiles/any/any/nuextvault/extension-manifest-v1.schema.json`. TestKit is a
 separate assembly so its builders and fakes do not enlarge the runtime contract.
 
 ## Manifest and public contribution surface
@@ -55,10 +55,10 @@ duplicate identities, implicit capability requirements, and replacement requests
 It returns errors ordered by JSON path and error code. The JSON schema and strict
 runtime parser are both part of the local SDK package.
 
-`NuGet.TestServer.Extensions.TestKit.ManifestBuilder` is the typed authoring
+`NuExtVault.Extensions.TestKit.ManifestBuilder` is the typed authoring
 equivalent. It deterministically orders operation, contribution, route, and
 capability identities. A separately compiled reference project is available at
-`tests\NuGet.TestServer.SdkFixture`; it packages its root
+`tests\NuExtVault.SdkFixture`; it packages its root
 `extension-manifest.json`, implements `IExtensionModule`, binds
 `/flavors/index.json`, registers a typed operation, and resolves a required
 capability without referencing the kernel.
@@ -138,7 +138,7 @@ structural fingerprints, and attestation payloads:
 `CanonicalContractBytes`, `ExtensionManifestJson`, `StructuralContractFingerprint`,
 and `ConformanceAttestation.CanonicalPayloadBytes` are the corresponding APIs.
 Golden canonical bytes and SHA-256 files in
-`tests\NuGet.TestServer.Extensions.Sdk.Tests` freeze these definitions. The manifest
+`tests\NuExtVault.Extensions.Sdk.Tests` freeze these definitions. The manifest
 digest, SDK structural fingerprint, and signed attestation therefore cannot choose
 different ad hoc serialization rules.
 
@@ -198,9 +198,9 @@ enablement, disablement, and unload require restart.
 Pack the stabilized local artifacts from the repository root:
 
 ```powershell
-dotnet pack src\NuGet.TestServer.Extensions.Sdk\NuGet.TestServer.Extensions.Sdk.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
-dotnet pack src\NuGet.TestServer.Extensions.TestKit\NuGet.TestServer.Extensions.TestKit.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
-dotnet pack tests\NuGet.TestServer.SdkFixture\NuGet.TestServer.SdkFixture.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
+dotnet pack src\NuExtVault.Extensions.Sdk\NuExtVault.Extensions.Sdk.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
+dotnet pack src\NuExtVault.Extensions.TestKit\NuExtVault.Extensions.TestKit.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
+dotnet pack tests\NuExtVault.SdkFixture\NuExtVault.SdkFixture.csproj --configuration Release -p:TreatWarningsAsErrors=true --output artifacts\sdk
 ```
 
 These commands create local packages; they do not publish them. A deployable
@@ -211,12 +211,12 @@ trust roots.
 Pre-Step-19 extension projects should:
 
 1. replace references to
-   `NuGet.TestServer.Extensions.Abstractions` with
-   `NuGet.TestServer.Extensions.Sdk`;
+   `NuExtVault.Extensions.Abstractions` with
+   `NuExtVault.Extensions.Sdk`;
 2. target `net10.0` and update namespaces to
-   `NuGet.TestServer.Extensions.Sdk`;
+   `NuExtVault.Extensions.Sdk`;
 3. add a strict schema-v1 `extension-manifest.json`, using the packaged schema or
-   `tests\NuGet.TestServer.SdkFixture` as the reference template;
+   `tests\NuExtVault.SdkFixture` as the reference template;
 4. declare independent contract versions, bounded routes, and explicit required or
    optional capabilities;
 5. use TestKit's `ManifestBuilder`, fakes, and `ConformanceCheck` in tests;

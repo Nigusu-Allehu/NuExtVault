@@ -28,8 +28,8 @@ not a frequent probe. `/__test/health` is the legacy liveness alias.
 ## Diagnostics
 
 There is no diagnostics or metrics HTTP endpoint. Process-local counters reset
-on restart. The meter and activity source is `NuGet.TestServer`; embedding hosts
-may attach listeners/exporters. NuTestServer does not configure an exporter.
+on restart. The meter and activity source is `NuExtVault`; embedding hosts
+may attach listeners/exporters. NuExtVault does not configure an exporter.
 Request logs include method, path, status, and elapsed time.
 
 ## Offline backup
