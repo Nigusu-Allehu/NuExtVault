@@ -72,13 +72,17 @@ of the signing key's SubjectPublicKeyInfo:
   "successorPackageId": "NuExtVault.PackageStaging",
   "expectedPublisher": "NuExtVault",
   "expectedSigningKeyId": "<approved key ID>",
-  "expectedSigningKeyFingerprint": "<lowercase SPKI SHA-256>"
+  "expectedSigningKeyFingerprint": "<lowercase SPKI SHA-256>",
+  "expectedPackageVersion": "1.1.0",
+  "expectedManifestDigest": "<lowercase manifest SHA-256>",
+  "expectedStagedContentDigest": "<lowercase verified staged-content SHA-256>"
 }
 ```
 
 On first startup against a pre-rename store, pass that file with
 `--extension-identity-migration`. The kernel verifies it against the loaded signed
-package, then upgrades transactional extension state and checkpoints,
+package version, manifest digest, and staged-content digest, then upgrades
+transactional extension state and checkpoints,
 staged-content ownership, and publication-journal idempotency/recovery ownership
 before listening. The crash journal binds the verified package, manifest, content,
 and authorization digest, so a changed package, key, or configuration cannot resume

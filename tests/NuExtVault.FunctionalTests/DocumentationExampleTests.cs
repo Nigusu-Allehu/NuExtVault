@@ -301,8 +301,7 @@ public sealed class DocumentationExampleTests
         process.StartInfo.ArgumentList.Add("-NoProfile");
         process.StartInfo.ArgumentList.Add("-NonInteractive");
         process.StartInfo.ArgumentList.Add("-Command");
-        process.StartInfo.ArgumentList.Add(
-            $"{quickStart} --storage '{directory.Path}'");
+        process.StartInfo.ArgumentList.Add(quickStart);
         process.StartInfo.Environment["LOCALAPPDATA"] = directory.Path;
         process.StartInfo.Environment["XDG_DATA_HOME"] = directory.Path;
         process.StartInfo.Environment["HOME"] = directory.Path;

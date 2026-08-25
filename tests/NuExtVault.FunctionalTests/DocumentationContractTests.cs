@@ -116,11 +116,12 @@ public sealed partial class DocumentationContractTests
         Assert.Equal(
             """
             dotnet tool install --global NuExtVault
-            nuextvault start
+            $storage = Join-Path ([System.IO.Path]::GetTempPath()) ("nuextvault-" + [guid]::NewGuid().ToString("N"))
+            nuextvault start --storage $storage
             """,
             RootQuickStartCommand());
         Assert.Contains(
-            "`dotnet run --project .\\src\\NuExtVault.Cli -- start`",
+            "`dotnet run --project .\\src\\NuExtVault.Cli -- start --storage .\\.nuextvault-data`",
             markdown,
             StringComparison.Ordinal);
         Assert.Contains("docs/user/README.md", markdown, StringComparison.Ordinal);

@@ -191,9 +191,10 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
             publisher: PackageStagingAssets.Publisher);
         using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
         roots.WritePackage(
             "staging.nupkg",
-            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+            package);
 
         using var runtime = ExternalExtensionPackageLoader.Load(
             new ExternalExtensionConfiguration([.. roots.Roots], [trustRoot], TimeProvider.System));
@@ -249,9 +250,10 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
             publisher: PackageStagingAssets.Publisher);
         using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
         roots.WritePackage(
             "staging.nupkg",
-            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+            package);
         using var storage = new TemporaryDirectory();
         string contentId;
         using (var content = new StagedContentStore(storage.Path, "legacy-host"))
@@ -276,7 +278,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         {
             _ = ServerApplication.Build(
                 ServerComposition.Create(
-                    StagingProfile(MigrationAuthorization(trustRoot)),
+                    StagingProfile(MigrationAuthorization(trustRoot, package)),
                     storageDirectory: storage.Path,
                     authentication: AuthenticationConfiguration.Anonymous,
                     externalExtensions: new ExternalExtensionConfiguration(
@@ -320,7 +322,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
     [Fact]
     public void A_trusted_package_signed_by_an_unrelated_key_cannot_claim_predecessor_state()
     {
-        var (_, authorizedRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+        var (authorizedKey, authorizedRoot) = ConformanceAttestationFixture.CreateTrustedKey(
             publisher: PackageStagingAssets.Publisher,
             keyId: "authorized-key");
         var (attackerKey, attackerRoot) = ConformanceAttestationFixture.CreateTrustedKey(
@@ -339,7 +341,12 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         {
             using var application = ServerApplication.Build(
                 ServerComposition.Create(
-                    StagingProfile(MigrationAuthorization(authorizedRoot)),
+                    StagingProfile(MigrationAuthorization(
+                        authorizedRoot,
+                        ExternalExtensionPackageBuilder.BuildValidPackage(
+                            Assets,
+                            authorizedKey,
+                            authorizedRoot.KeyId))),
                     storageDirectory: storage.Path,
                     authentication: AuthenticationConfiguration.Anonymous,
                     externalExtensions: new ExternalExtensionConfiguration(
@@ -359,12 +366,13 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
             publisher: PackageStagingAssets.Publisher);
         using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
         roots.WritePackage(
             "staging.nupkg",
-            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+            package);
         await using var application = ServerApplication.Build(
             ServerComposition.Create(
-                StagingProfile(MigrationAuthorization(trustRoot)),
+                StagingProfile(MigrationAuthorization(trustRoot, package)),
                 authentication: AuthenticationConfiguration.Anonymous,
                 externalExtensions: new ExternalExtensionConfiguration(
                     [.. roots.Roots],
@@ -420,9 +428,130 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
                 authorization is null ? [] : [authorization]
         };
 
+    [Theory]
+    [InlineData("package-version")]
+    [InlineData("manifest-digest")]
+    [InlineData("staged-content-digest")]
+    public void An_authorization_for_a_different_successor_artifact_is_rejected(string mismatch)
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher);
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage("staging.nupkg", package);
+        using var storage = new TemporaryDirectory();
+        var authorization = MigrationAuthorization(trustRoot, package);
+        authorization = mismatch switch
+        {
+            "package-version" => authorization with { ExpectedPackageVersion = "9.9.9" },
+            "manifest-digest" => authorization with { ExpectedManifestDigest = new string('a', 64) },
+            "staged-content-digest" => authorization with
+            {
+                ExpectedStagedContentDigest = new string('b', 64)
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(mismatch))
+        };
+
+        var exception = Assert.Throws<ServerHostingConfigurationException>(() =>
+        {
+            using var application = ServerApplication.Build(
+                ServerComposition.Create(
+                    StagingProfile(authorization),
+                    storageDirectory: storage.Path,
+                    authentication: AuthenticationConfiguration.Anonymous,
+                    externalExtensions: new ExternalExtensionConfiguration(
+                        [.. roots.Roots],
+                        [trustRoot],
+                        TimeProvider.System)));
+        });
+
+        Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(
+            storage.Path,
+            DurableOwnerIdentityMigrator.JournalFileName)));
+    }
+
+    [Fact]
+    public async Task Resume_rejects_a_new_same_key_artifact_and_matching_new_authorization()
+    {
+        const string predecessor = "NuTest.PackageStaging";
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher);
+        var firstPackage = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
+        var secondPackage = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
+        using var firstRoots = ExternalExtensionRootFixture.CreateRoots();
+        firstRoots.WritePackage("staging.nupkg", firstPackage);
+        using var firstRuntime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [.. firstRoots.Roots],
+                [trustRoot],
+                TimeProvider.System));
+        var firstMigration = Assert.Single(OwnerIdentityMigrationResolver.Resolve(
+            firstRuntime.Modules,
+            firstRuntime.Modules.Select(module => module.Contribution.Manifest.Identity.Id),
+            [MigrationAuthorization(trustRoot, firstPackage)]));
+        using var storage = new TemporaryDirectory();
+        using (var state = new TransactionalStateStore(
+                   Path.Combine(storage.Path, "extension-state"),
+                   [new StateParticipantDescriptor(
+                       predecessor,
+                       "1.0.0",
+                       "package-staging",
+                       1,
+                       true)]))
+        {
+            await state.WriteAsync(
+                predecessor,
+                "group.resume",
+                "{}"u8.ToArray(),
+                null,
+                CancellationToken.None);
+        }
+        var interrupted = new DurableOwnerIdentityMigrator(storage.Path, [firstMigration])
+        {
+            FaultInjector = point =>
+            {
+                if (point == OwnerIdentityMigrationFailPoint.AfterTransactionalState)
+                {
+                    throw new IOException("simulated crash");
+                }
+            }
+        };
+        Assert.Throws<IOException>(interrupted.Migrate);
+
+        using var secondRoots = ExternalExtensionRootFixture.CreateRoots();
+        secondRoots.WritePackage("staging.nupkg", secondPackage);
+        using var secondRuntime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [.. secondRoots.Roots],
+                [trustRoot],
+                TimeProvider.System));
+        var secondMigration = Assert.Single(OwnerIdentityMigrationResolver.Resolve(
+            secondRuntime.Modules,
+            secondRuntime.Modules.Select(module => module.Contribution.Manifest.Identity.Id),
+            [MigrationAuthorization(trustRoot, secondPackage)]));
+        Assert.NotEqual(firstMigration.AuthorizationDigest, secondMigration.AuthorizationDigest);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => DurableOwnerIdentityMigrator.Migrate(storage.Path, [secondMigration]));
+
+        Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private OwnerIdentityMigrationAuthorization MigrationAuthorization(
-        ConformanceTrustRoot trustRoot) =>
-        new(
+        ConformanceTrustRoot trustRoot,
+        byte[] package)
+    {
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage("authorized.nupkg", package);
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [.. roots.Roots],
+                [trustRoot],
+                TimeProvider.System));
+        var identity = Assert.Single(runtime.Diagnostics.Results).ActivationIdentity
+            ?? throw new InvalidOperationException("The authorized package did not load.");
+        return new(
             "NuTest.PackageStaging",
             PackageStagingAssets.Id,
             Assets.Id,
@@ -430,7 +559,11 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
             trustRoot.KeyId,
             Convert.ToHexStringLower(
                 System.Security.Cryptography.SHA256.HashData(
-                    trustRoot.SubjectPublicKeyInfo.Span)));
+                    trustRoot.SubjectPublicKeyInfo.Span)),
+            identity.PackageVersion,
+            identity.ManifestDigest,
+            identity.StagedContentIdentity);
+    }
 
     private static RouteDeclaration Route(ExtensionManifest manifest, string id) =>
         manifest.Routes.Single(route => route.Identity.Value == id);

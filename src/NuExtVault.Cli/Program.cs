@@ -103,6 +103,7 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
             or UnauthorizedAccessException
             or ArgumentException
             or InvalidOperationException
+            or ServerHostingConfigurationException
             or CliConfigurationException)
     {
         Console.Error.WriteLine($"Restore failed: {exception.Message}");
@@ -400,7 +401,10 @@ static ImmutableArray<OwnerIdentityMigrationAuthorization>
                 root.GetProperty("successorPackageId").GetString()!,
                 root.GetProperty("expectedPublisher").GetString()!,
                 root.GetProperty("expectedSigningKeyId").GetString()!,
-                root.GetProperty("expectedSigningKeyFingerprint").GetString()!));
+                root.GetProperty("expectedSigningKeyFingerprint").GetString()!,
+                root.GetProperty("expectedPackageVersion").GetString()!,
+                root.GetProperty("expectedManifestDigest").GetString()!,
+                root.GetProperty("expectedStagedContentDigest").GetString()!));
         }
         catch (Exception exception) when (
             exception is JsonException or

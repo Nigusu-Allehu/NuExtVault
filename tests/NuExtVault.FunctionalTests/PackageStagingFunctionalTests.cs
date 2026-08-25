@@ -500,13 +500,14 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
         var assets = fixture.StagingAssets;
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(publisher: "NuExtVault");
         using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(assets, key);
         roots.WritePackage(
             "staging.nupkg",
-            ExternalExtensionPackageBuilder.BuildValidPackage(assets, key));
+            package);
 
         await using (var first = await NuExtVaultHost.StartCompositionAsync(
             ServerComposition.Create(
-                StagingProfile(ServerProfiles.Standard, trustRoot),
+                StagingProfile(ServerProfiles.Standard, trustRoot, package),
                 storageDirectory: storage,
                 authentication: AuthenticationConfiguration.Anonymous,
                 externalExtensions: new ExternalExtensionConfiguration(
@@ -561,7 +562,7 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
 
         await using (var restarted = await NuExtVaultHost.StartCompositionAsync(
                          ServerComposition.Create(
-                             StagingProfile(ServerProfiles.Standard, trustRoot),
+                             StagingProfile(ServerProfiles.Standard, trustRoot, package),
                              storageDirectory: storage,
                              authentication: AuthenticationConfiguration.Anonymous,
                              externalExtensions: new ExternalExtensionConfiguration(
@@ -791,12 +792,13 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
         var assets = fixture.StagingAssets;
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(publisher: "NuExtVault");
         var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(assets, key);
         roots.WritePackage(
             "staging.nupkg",
-            ExternalExtensionPackageBuilder.BuildValidPackage(assets, key));
+            package);
         return NuExtVaultHost.StartCompositionAsync(
             ServerComposition.Create(
-                StagingProfile(ServerProfiles.Embedded, trustRoot),
+                StagingProfile(ServerProfiles.Embedded, trustRoot, package),
                 authentication: requireApiKey
                     ? AuthenticationConfiguration.Create(null, null, ApiKey)
                     : AuthenticationConfiguration.Anonymous,
@@ -809,7 +811,19 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
 
     private ServerProfile StagingProfile(
         ServerProfile profile,
-        ConformanceTrustRoot trustRoot) =>
+        ConformanceTrustRoot trustRoot,
+        byte[] package)
+    {
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage("authorized.nupkg", package);
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [.. roots.Roots],
+                [trustRoot],
+                TimeProvider.System));
+        var identity = Assert.Single(runtime.Diagnostics.Results).ActivationIdentity
+            ?? throw new InvalidOperationException("The authorized package did not load.");
+        return
         profile with
         {
             Grants =
@@ -831,9 +845,13 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
                     trustRoot.KeyId,
                     Convert.ToHexStringLower(
                         System.Security.Cryptography.SHA256.HashData(
-                            trustRoot.SubjectPublicKeyInfo.Span)))
+                           trustRoot.SubjectPublicKeyInfo.Span)),
+                    identity.PackageVersion,
+                    identity.ManifestDigest,
+                    identity.StagedContentIdentity)
             ]
         };
+    }
 }
 
 /// <summary>Packs the optional staging extension once for the whole collection.</summary>

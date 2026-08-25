@@ -93,7 +93,10 @@ internal static class OwnerIdentityMigrationResolver
             string.IsNullOrWhiteSpace(authorization.SuccessorPackageId) ||
             string.IsNullOrWhiteSpace(authorization.ExpectedPublisher) ||
             string.IsNullOrWhiteSpace(authorization.ExpectedSigningKeyId) ||
-            !IsSha256(authorization.ExpectedSigningKeyFingerprint))
+            !IsSha256(authorization.ExpectedSigningKeyFingerprint) ||
+            string.IsNullOrWhiteSpace(authorization.ExpectedPackageVersion) ||
+            !IsSha256(authorization.ExpectedManifestDigest) ||
+            !IsSha256(authorization.ExpectedStagedContentDigest))
         {
             throw Failure("Durable identity migration administrator authorization is invalid.");
         }
@@ -140,6 +143,18 @@ internal static class OwnerIdentityMigrationResolver
             !string.Equals(
                 authorization.ExpectedSigningKeyFingerprint,
                 manifest.ValidatedSigningKeyFingerprint,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                authorization.ExpectedPackageVersion,
+                manifest.ValidatedPackageVersion,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                authorization.ExpectedManifestDigest,
+                manifest.ValidatedManifestDigest,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(
+                authorization.ExpectedStagedContentDigest,
+                manifest.ValidatedStagedContentDigest,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw Failure(
@@ -160,9 +175,9 @@ internal static class OwnerIdentityMigrationResolver
             authorization.ExpectedPublisher,
             authorization.ExpectedSigningKeyId,
             authorization.ExpectedSigningKeyFingerprint.ToLowerInvariant(),
-            manifest.ValidatedPackageVersion!,
-            manifest.ValidatedManifestDigest!,
-            manifest.ValidatedStagedContentDigest!
+            authorization.ExpectedPackageVersion,
+            authorization.ExpectedManifestDigest.ToLowerInvariant(),
+            authorization.ExpectedStagedContentDigest.ToLowerInvariant()
         };
         using var stream = new MemoryStream();
         foreach (var field in fields)
@@ -174,8 +189,8 @@ internal static class OwnerIdentityMigrationResolver
         return Convert.ToHexStringLower(SHA256.HashData(stream.ToArray()));
     }
 
-    private static bool IsSha256(string value) =>
-        value.Length == 64 && value.All(Uri.IsHexDigit);
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     private static ServerHostingConfigurationException Failure(string message) => new(message);
 }

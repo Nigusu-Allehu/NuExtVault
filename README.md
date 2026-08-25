@@ -12,11 +12,12 @@ Install the .NET SDK 10.0, then install and run the global tool:
 
 ```powershell
 dotnet tool install --global NuExtVault
-nuextvault start
+$storage = Join-Path ([System.IO.Path]::GetTempPath()) ("nuextvault-" + [guid]::NewGuid().ToString("N"))
+nuextvault start --storage $storage
 ```
 
 Contributors can run the source checkout with
-`dotnet run --project .\src\NuExtVault.Cli -- start`.
+`dotnet run --project .\src\NuExtVault.Cli -- start --storage .\.nuextvault-data`.
 
 - [User manual](docs/user/README.md)
 - [Contributor manual](docs/contributing/README.md)

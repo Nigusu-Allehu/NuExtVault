@@ -29,6 +29,10 @@ structural contracts evolve independently. The host currently accepts SDK
 cannot declare identity lineage. Manifest v2 requires SDK 1.4.0 or later and is
 the first contract that can declare `identityPredecessors`. Version compatibility
 is necessary but not sufficient: the reviewed structural SHA-256 must also match.
+The SDK package and file version advance to 1.4.0, while its assembly version
+intentionally remains 1.3.0.0 because the 1.4 surface is additive. Keeping that
+binary identity allows existing v1.3-compiled extensions to bind to the compatible
+host assembly; tests load a package genuinely attested for SDK 1.3.
 
 Canonical bytes are unindented UTF-8 with fixed property order, ordinal identity
 ordering, no trailing newline, and lowercase SHA-256. Always canonicalize through

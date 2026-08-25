@@ -32,7 +32,10 @@ internal sealed record OwnerIdentityMigrationAuthorization(
     string SuccessorPackageId,
     string ExpectedPublisher,
     string ExpectedSigningKeyId,
-    string ExpectedSigningKeyFingerprint);
+    string ExpectedSigningKeyFingerprint,
+    string ExpectedPackageVersion,
+    string ExpectedManifestDigest,
+    string ExpectedStagedContentDigest);
 
 internal sealed record ProfilePolicyRequirement(
     string PolicyPoint,
