@@ -106,6 +106,10 @@ public sealed class ManifestContractTests
     {
         var root = JsonNode.Parse(
             File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        root["$schema"] = "https://schemas.nuextvault.dev/extensions/manifest/v2";
+        root["schemaVersion"] = 2;
+        root["contracts"]!["manifest"] = 2;
+        root["sdk"]!["minimum"] = "1.4.0";
         root["identityPredecessors"] = new JsonArray("Contoso.Legacy");
 
         var manifest = ExtensionManifestJson.Parse(Encoding.UTF8.GetBytes(root.ToJsonString()));
@@ -120,6 +124,41 @@ public sealed class ManifestContractTests
     }
 
     [Theory]
+    [InlineData("""[]""")]
+    [InlineData("""["Contoso.Legacy"]""")]
+    public void Manifest_v1_rejects_the_identity_lineage_member(string predecessors)
+    {
+        var root = JsonNode.Parse(
+            File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        root["identityPredecessors"] = JsonNode.Parse(predecessors);
+
+        var result = ExtensionManifestJson.Validate(Encoding.UTF8.GetBytes(root.ToJsonString()));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Errors,
+            error => error.Code == "manifest.identity-predecessor.schema-required");
+    }
+
+    [Fact]
+    public void Manifest_v2_requires_an_sdk_version_newer_than_the_v1_host_contract()
+    {
+        var root = JsonNode.Parse(
+            File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        root["$schema"] = "https://schemas.nuextvault.dev/extensions/manifest/v2";
+        root["schemaVersion"] = 2;
+        root["contracts"]!["manifest"] = 2;
+        root["sdk"]!["minimum"] = "1.3.0";
+
+        var result = ExtensionManifestJson.Validate(Encoding.UTF8.GetBytes(root.ToJsonString()));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Errors,
+            error => error.Code == "manifest.sdk.minimum-required");
+    }
+
+    [Theory]
     [InlineData("""["Contoso.Flavors"]""", "manifest.identity-predecessor.self")]
     [InlineData(
         """["Contoso.Legacy","contoso.legacy"]""",
@@ -130,6 +169,10 @@ public sealed class ManifestContractTests
     {
         var root = JsonNode.Parse(
             File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        root["$schema"] = "https://schemas.nuextvault.dev/extensions/manifest/v2";
+        root["schemaVersion"] = 2;
+        root["contracts"]!["manifest"] = 2;
+        root["sdk"]!["minimum"] = "1.4.0";
         root["identityPredecessors"] = JsonNode.Parse(predecessors);
 
         var result = ExtensionManifestJson.Validate(

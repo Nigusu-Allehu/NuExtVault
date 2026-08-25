@@ -95,7 +95,6 @@ public static class ExtensionManifestJson
 
             var root = document.RootElement;
             var errors = new List<ManifestValidationError>();
-            UnknownMembers(root, RootMembers, "$", errors);
             Require(
                 root,
                 [
@@ -120,16 +119,19 @@ public static class ExtensionManifestJson
 
             var schemaVersion = Integer(root, "schemaVersion", "$.schemaVersion", errors);
             var schema = String(root, "$schema", "$.$schema", errors);
-            if (schemaVersion != 1 ||
+            UnknownMembers(root, RootMembers, "$", errors);
+            if ((schemaVersion != 1 && schemaVersion != 2) ||
                 !string.Equals(
                     schema,
-                    ExtensionManifest.ManifestV1Schema,
+                    schemaVersion == 2
+                        ? ExtensionManifest.ManifestV2Schema
+                        : ExtensionManifest.ManifestV1Schema,
                     StringComparison.Ordinal))
             {
                 errors.Add(Error(
                     "$.schemaVersion",
                     "manifest.schema.unsupported",
-                    "Only manifest schema version 1 is supported."));
+                    "Only manifest schema versions 1 and 2 are supported."));
             }
 
             var id = String(root, "id", "$.id", errors);
@@ -157,13 +159,29 @@ public static class ExtensionManifestJson
             }
 
             var sdk = ParseSdk(root, errors);
-            var contracts = ParseContracts(root, errors);
+            var contracts = ParseContracts(root, schemaVersion, errors);
             var operations = ParseOperations(root, id, errors);
             var routes = ParseRoutes(root, operations, errors);
             var contributions = ParseContributions(root, id, routes, errors);
             var capabilities = ParseCapabilities(root, errors);
             var state = ParseState(root, errors);
             var identityPredecessors = ParseIdentityPredecessors(root, id, errors);
+            if (schemaVersion == 1 && root.TryGetProperty("identityPredecessors", out _))
+            {
+                errors.Add(Error(
+                    "$.identityPredecessors",
+                    "manifest.identity-predecessor.schema-required",
+                    "Identity predecessors require manifest schema version 2."));
+            }
+            if (schemaVersion == 2 &&
+                sdk is not null &&
+                sdk.Minimum.CompareTo(new SdkContractVersion(1, 4, 0)) < 0)
+            {
+                errors.Add(Error(
+                    "$.sdk.minimum",
+                    "manifest.sdk.minimum-required",
+                    "Manifest schema version 2 requires SDK 1.4.0 or newer."));
+            }
 
             if (errors.Count > 0)
             {
@@ -401,6 +419,7 @@ public static class ExtensionManifestJson
 
     private static ContractVersionSet? ParseContracts(
         JsonElement root,
+        int schemaVersion,
         List<ManifestValidationError> errors)
     {
         if (!Object(root, "contracts", "$.contracts", errors, out var contracts))
@@ -442,7 +461,7 @@ public static class ExtensionManifestJson
                 "structural",
                 "$.contracts.structural",
                 errors)));
-        if (result.Manifest.Value != 1 ||
+        if (result.Manifest.Value != schemaVersion ||
             result.Operation.Value != 1 ||
             result.Contribution.Value != 1 ||
             result.Route.Value != 1 ||
@@ -452,7 +471,8 @@ public static class ExtensionManifestJson
             errors.Add(Error(
                 "$.contracts",
                 "manifest.contract.unsupported",
-                "Manifest v1 requires every structural contract at version 1."));
+                $"Manifest v{schemaVersion} requires its manifest contract at version " +
+                $"{schemaVersion} and every other structural contract at version 1."));
         }
 
         return result;

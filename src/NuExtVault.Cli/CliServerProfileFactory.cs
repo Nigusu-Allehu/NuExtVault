@@ -17,7 +17,9 @@ internal static class CliServerProfileFactory
         TrustedProxyOptions? trustedProxies,
         ImmutableArray<string> extensionRoots = default,
         ImmutableArray<ConformanceTrustRoot> extensionTrustRoots = default,
-        ImmutableArray<string> extensionGrants = default)
+        ImmutableArray<string> extensionGrants = default,
+        ImmutableArray<OwnerIdentityMigrationAuthorization>
+            ownerIdentityMigrationAuthorizations = default)
     {
         var profile = production ? ServerProfiles.Production : ServerProfiles.Standard;
         if (!extensionGrants.IsDefaultOrEmpty)
@@ -39,6 +41,13 @@ internal static class CliServerProfileFactory
                 ]
             };
         }
+        profile = profile with
+        {
+            OwnerIdentityMigrationAuthorizations =
+                ownerIdentityMigrationAuthorizations.IsDefault
+                    ? []
+                    : ownerIdentityMigrationAuthorizations
+        };
 
         return ServerComposition.Create(
             profile,

@@ -8,7 +8,7 @@ namespace NuExtVault.ExternalExtensionTestKit;
 public static class PackageStagingAssets
 {
     public const string Id = "NuExtVault.PackageStaging";
-    public const string Version = "1.0.0";
+    public const string Version = "1.1.0";
     public const string Publisher = "NuExtVault";
     public const string EntryAssemblyFileName = "NuExtVault.PackageStaging.dll";
     public const string EntryType = "NuExtVault.PackageStaging.PackageStagingModule";

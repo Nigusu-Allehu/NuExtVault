@@ -143,6 +143,7 @@ type NuExtVault.Extensions.Sdk.ExtensionSdkVersions
   NuExtVault.Extensions.Sdk.CapabilityContractVersion CapabilityV1 { get; }
   NuExtVault.Extensions.Sdk.ContributionContractVersion ContributionV1 { get; }
   NuExtVault.Extensions.Sdk.ManifestSchemaVersion ManifestV1 { get; }
+  NuExtVault.Extensions.Sdk.ManifestSchemaVersion ManifestV2 { get; }
   NuExtVault.Extensions.Sdk.OperationContractVersion OperationV1 { get; }
   NuExtVault.Extensions.Sdk.RouteContractVersion RouteV1 { get; }
   NuExtVault.Extensions.Sdk.SdkContractIdentity Identity { get; }

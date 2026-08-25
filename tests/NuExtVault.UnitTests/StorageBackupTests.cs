@@ -27,8 +27,14 @@ public sealed class StorageBackupTests
                 destination.Path,
                 KernelStateParticipants.BuiltIn,
                 [
-                    new OwnerIdentityMigration("Legacy.Owner", "Current.One"),
-                    new OwnerIdentityMigration("Legacy.Owner", "Current.Two")
+                    new OwnerIdentityMigration(
+                        "Legacy.Owner",
+                        "Current.One",
+                        new string('a', 64)),
+                    new OwnerIdentityMigration(
+                        "Legacy.Owner",
+                        "Current.Two",
+                        new string('b', 64))
                 ],
                 CancellationToken.None));
 
@@ -98,7 +104,7 @@ public sealed class StorageBackupTests
         var backupPath = Path.Combine(source.Path, "legacy.zip");
         await StorageBackup.CreateAsync(source.Path, backupPath);
         var currentParticipant = legacyParticipant with { ExtensionId = current };
-        var migration = new OwnerIdentityMigration(legacy, current);
+        var migration = new OwnerIdentityMigration(legacy, current, new string('a', 64));
 
         await StorageBackup.RestoreAsync(
             backupPath,
@@ -733,11 +739,106 @@ public sealed class StorageBackupTests
                 "payload.txt")));
             Assert.True(File.Exists(Path.Combine(secret, "payload.txt")));
         }
+
         finally
         {
             Directory.Delete(victim, recursive: true);
             Directory.Delete(secret, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Restore_rejects_an_archive_with_an_owner_migration_journal()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+        var manifest = await StorageBackup.CreateAsync(source.Path, backupPath);
+        var journal = """{"Version":1}"""u8.ToArray();
+        var path = DurableOwnerIdentityMigrator.JournalFileName;
+        await InjectEntryAsync(backupPath, path, journal);
+        await ReplaceManifestAsync(
+            backupPath,
+            manifest with
+            {
+                Files =
+                [
+                    .. manifest.Files,
+                    new StorageBackupFile(
+                        path,
+                        journal.LongLength,
+                        Convert.ToHexStringLower(SHA256.HashData(journal)))
+                ]
+            });
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => StorageBackup.RestoreAsync(backupPath, destination.Path));
+
+        Assert.Contains(
+            "owner identity migration",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(
+            destination.Path,
+            DurableOwnerIdentityMigrator.JournalFileName)));
+    }
+
+    [Fact]
+    public async Task Backup_rejects_an_owner_migration_staging_directory()
+    {
+        using var source = TemporaryDirectory.Create();
+        var staging = Path.Combine(
+            source.Path,
+            StorageBackup.ExtensionStateDirectoryName,
+            "owner",
+            ".owner-migration-successor");
+        Directory.CreateDirectory(staging);
+        await File.WriteAllTextAsync(Path.Combine(staging, "state.json"), "{}");
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StorageBackup.CreateAsync(source.Path, backupPath));
+
+        Assert.Contains("restart", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public async Task Restore_rejects_an_archive_with_owner_migration_staging()
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+        var manifest = await StorageBackup.CreateAsync(source.Path, backupPath);
+        var content = "{}"u8.ToArray();
+        const string path = "extension-state/owner/.owner-migration-successor/state.json";
+        await InjectEntryAsync(backupPath, path, content);
+        await ReplaceManifestAsync(
+            backupPath,
+            manifest with
+            {
+                Files =
+                [
+                    .. manifest.Files,
+                    new StorageBackupFile(
+                        path,
+                        content.LongLength,
+                        Convert.ToHexStringLower(SHA256.HashData(content)))
+                ]
+            });
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => StorageBackup.RestoreAsync(backupPath, destination.Path));
+
+        Assert.Contains(
+            "owner identity migration",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(Directory.Exists(Path.Combine(
+            destination.Path,
+            "extension-state",
+            "owner",
+            ".owner-migration-successor")));
     }
 
     [Theory]

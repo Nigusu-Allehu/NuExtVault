@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using NuExtVault.Extensions.Sdk;
 
 namespace NuExtVault.ExternalExtensionTestKit;
 
@@ -236,7 +237,9 @@ public static class ExternalExtensionPackageBuilder
             assets.Version,
             assets.Publisher,
             Sha256Hex(assets.ManifestJsonBytes),
-            StructuralSha256());
+            StructuralSha256(),
+            sdkVersion: ExtensionManifestJson.Parse(assets.ManifestJsonBytes).Sdk.Minimum,
+            manifestVersion: ExtensionManifestJson.Parse(assets.ManifestJsonBytes).SchemaVersion);
         var attestation = ConformanceAttestationFixture.SignToAttestationJson(
             payload,
             trustedKey,
@@ -285,7 +288,9 @@ public static class ExternalExtensionPackageBuilder
             assets.Version,
             publisherOverride ?? assets.Publisher,
             Sha256Hex(manifestJsonBytes),
-            StructuralSha256());
+            StructuralSha256(),
+            sdkVersion: ExtensionManifestJson.Parse(manifestJsonBytes).Sdk.Minimum,
+            manifestVersion: ExtensionManifestJson.Parse(manifestJsonBytes).SchemaVersion);
         var attestation = ConformanceAttestationFixture.SignToAttestationJson(
             payload,
             trustedKey,

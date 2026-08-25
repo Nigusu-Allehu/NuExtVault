@@ -8,8 +8,7 @@ internal static class PublicExtensionModuleAdapter
 {
     public static IExtensionModule Materialize(
         IExtensionModule module,
-        string manifestDigest,
-        string stagedContentDigest)
+        ValidatedExtensionActivationIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(module);
         var manifest = module.Contribution.Manifest;
@@ -109,8 +108,13 @@ internal static class PublicExtensionModuleAdapter
             Resources = resources,
             State = manifest.State,
             IdentityPredecessors = manifest.IdentityPredecessors,
-            ValidatedManifestDigest = manifestDigest,
-            ValidatedStagedContentDigest = stagedContentDigest
+            ValidatedManifestDigest = identity.ManifestDigest,
+            ValidatedStagedContentDigest = identity.StagedContentIdentity,
+            ValidatedPackageId = identity.PackageId,
+            ValidatedPackageVersion = identity.PackageVersion,
+            ValidatedPublisher = identity.Publisher,
+            ValidatedSigningKeyId = identity.PublisherKeyId,
+            ValidatedSigningKeyFingerprint = identity.PublisherKeyFingerprint
         };
         var contribution = new ExtensionModuleContribution(enriched, materializedBindings);
         return new MaterializedModule(module, contribution);

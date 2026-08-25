@@ -79,6 +79,7 @@ public static class StorageBackup
         using var storageLease = AcquireStorageLease(root);
         try
         {
+            EnsureNoOwnerMigrationArtifacts(root);
             var (participants, checkpointId) = await CaptureStateCheckpointAsync(root, token);
             var files = new List<StorageBackupFile>();
             await using (var stream = File.Create(temporary))
@@ -231,6 +232,12 @@ public static class StorageBackup
             if (manifest.Files is null)
             {
                 throw new InvalidDataException("Backup integrity manifest has no file list.");
+            }
+            if (manifest.Files.Any(file => IsOwnerMigrationArtifact(file.Path)))
+            {
+                throw new InvalidDataException(
+                    "Backup contains an incomplete owner identity migration. Restart the source " +
+                    "server to complete migration, then create a new backup.");
             }
 
             var quarantined = ValidateParticipants(
@@ -876,6 +883,36 @@ public static class StorageBackup
             ReservedExtensionStateFileNames.Contains(segments[^1], StringComparer.OrdinalIgnoreCase);
     }
 
+    private static void EnsureNoOwnerMigrationArtifacts(string root)
+    {
+        if (File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName)) ||
+            File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName + ".tmp")) ||
+            Directory.Exists(Path.Combine(root, ExtensionStateDirectoryName)) &&
+            Directory.EnumerateDirectories(
+                    Path.Combine(root, ExtensionStateDirectoryName),
+                    ".owner-migration-*",
+                    SearchOption.AllDirectories)
+                .Any())
+        {
+            throw new InvalidOperationException(
+                "Storage has an incomplete owner identity migration. Restart the server to " +
+                "complete migration before creating a backup.");
+        }
+    }
+
+    private static bool IsOwnerMigrationArtifact(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return string.Equals(
+                   normalized,
+                   DurableOwnerIdentityMigrator.JournalFileName,
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(
+                   "/" + DurableOwnerIdentityMigrator.JournalFileName,
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.Split('/').Any(segment =>
+                   segment.StartsWith(".owner-migration-", StringComparison.OrdinalIgnoreCase));
+    }
     private static void ValidateRelativePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) ||

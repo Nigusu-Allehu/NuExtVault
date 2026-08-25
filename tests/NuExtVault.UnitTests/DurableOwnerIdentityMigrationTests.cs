@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using NuExtVault.Extensions.Sdk;
 using NuExtVault.Kernel.Capabilities;
+using NuExtVault.Operations;
 
 namespace NuExtVault.UnitTests;
 
@@ -9,7 +10,8 @@ public sealed class DurableOwnerIdentityMigrationTests
 {
     private const string LegacyOwner = "NuTest.PackageStaging";
     private const string CurrentOwner = "NuExtVault.PackageStaging";
-    private static readonly OwnerIdentityMigration Migration = new(LegacyOwner, CurrentOwner);
+    private static readonly OwnerIdentityMigration Migration =
+        new(LegacyOwner, CurrentOwner, new string('a', 64));
 
     [Fact]
     public async Task Legacy_state_content_and_journal_migrate_as_one_owner()
@@ -113,10 +115,144 @@ public sealed class DurableOwnerIdentityMigrationTests
                 root.Path,
                 [
                     Migration,
-                    new OwnerIdentityMigration("Legacy.Other", "Current.Other")
+                    new OwnerIdentityMigration(
+                        "Legacy.Other",
+                        "Current.Other",
+                        new string('b', 64))
                 ]));
 
         Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task An_interrupted_journal_rejects_changed_administrator_authorization()
+    {
+        using var root = new TemporaryDirectory();
+        await SeedLegacyStoreAsync(root.Path);
+        var interrupted = new DurableOwnerIdentityMigrator(root.Path, [Migration])
+        {
+            FaultInjector = point =>
+            {
+                if (point == OwnerIdentityMigrationFailPoint.AfterTransactionalState)
+                {
+                    throw new IOException("simulated crash");
+                }
+            }
+        };
+        Assert.Throws<IOException>(interrupted.Migrate);
+
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            DurableOwnerIdentityMigrator.Migrate(
+                root.Path,
+                [Migration with { AuthorizationDigest = new string('c', 64) }]));
+
+        Assert.Contains("does not match", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task An_interrupted_journal_rejects_startup_without_current_authorization()
+    {
+        using var root = new TemporaryDirectory();
+        await SeedLegacyStoreAsync(root.Path);
+        var interrupted = new DurableOwnerIdentityMigrator(root.Path, [Migration])
+        {
+            FaultInjector = point =>
+            {
+                if (point == OwnerIdentityMigrationFailPoint.AfterTransactionalState)
+                {
+                    throw new IOException("simulated crash");
+                }
+            }
+        };
+        Assert.Throws<IOException>(interrupted.Migrate);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => DurableOwnerIdentityMigrator.Migrate(root.Path, []));
+
+        Assert.Contains("authorization", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Populated_predecessors_converging_on_one_successor_fail_before_mutation()
+    {
+        using var root = new TemporaryDirectory();
+        await SeedLegacyStoreAsync(root.Path);
+        const string otherLegacy = "NuTest.OtherStaging";
+        var stateRoot = Path.Combine(root.Path, "extension-state");
+        using (var other = new TransactionalStateStore(
+                   stateRoot,
+                   [
+                       new StateParticipantDescriptor(
+                           LegacyOwner,
+                           "1.0.0",
+                           "package-staging",
+                           1,
+                           true),
+                       new StateParticipantDescriptor(otherLegacy, "1.0.0", "other", 1)
+                   ]))
+        {
+            await other.WriteAsync(
+                otherLegacy,
+                "record",
+                "{}"u8.ToArray(),
+                null,
+                CancellationToken.None);
+        }
+        var migrations = new[]
+        {
+            Migration,
+            new OwnerIdentityMigration(otherLegacy, CurrentOwner, new string('b', 64))
+        };
+        var predecessorDirectories = Directory.EnumerateDirectories(
+                stateRoot,
+                "*",
+                SearchOption.TopDirectoryOnly)
+            .ToArray();
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => DurableOwnerIdentityMigrator.Migrate(root.Path, migrations));
+
+        Assert.Contains("converge", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(
+            root.Path,
+            DurableOwnerIdentityMigrator.JournalFileName)));
+        Assert.All(predecessorDirectories, directory => Assert.True(Directory.Exists(directory)));
+    }
+
+    [Theory]
+    [InlineData((int)OwnerIdentityMigrationFailPoint.AfterTransactionalState)]
+    [InlineData((int)OwnerIdentityMigrationFailPoint.AfterStagedContent)]
+    [InlineData((int)OwnerIdentityMigrationFailPoint.AfterPublicationJournal)]
+    public async Task Backup_refuses_every_interrupted_owner_migration_phase(int failPointValue)
+    {
+        using var root = new TemporaryDirectory();
+        await SeedLegacyStoreAsync(root.Path);
+        var interrupted = new DurableOwnerIdentityMigrator(root.Path, [Migration])
+        {
+            FaultInjector = point =>
+            {
+                if (point == (OwnerIdentityMigrationFailPoint)failPointValue)
+                {
+                    throw new IOException("simulated crash");
+                }
+            }
+        };
+        Assert.Throws<IOException>(interrupted.Migrate);
+        var backupPath = Path.Combine(
+            Path.GetDirectoryName(root.Path)!,
+            $"{Guid.NewGuid():N}.zip");
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => StorageBackup.CreateAsync(root.Path, backupPath));
+            Assert.Contains("restart", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(backupPath));
+        }
+        finally
+        {
+            File.Delete(backupPath);
+        }
     }
 
     [Fact]

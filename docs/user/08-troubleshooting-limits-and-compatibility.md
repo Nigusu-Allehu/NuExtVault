@@ -17,6 +17,8 @@
 | Package absent from search | Unlisted, quarantined, deleted, or not promoted | Inspect exact registration and administrative state |
 | Exact restore succeeds but search omits it | Package is unlisted | This is intentional NuGet compatibility |
 | Backup reports storage in use | Backup is offline | Stop the server first |
+| Backup reports an incomplete owner migration | A crash journal or migration staging directory exists | Restart with the same package and authorization, then retry backup |
+| No `--storage` and default-root selection fails | Neither default exists, or legacy and current roots both exist | Pass the exact intended repository with `--storage` |
 | Extension route missing | Discovery/configuration/restart is missing | Configure roots, trust, grants, then restart |
 
 ## Resource limits
@@ -67,6 +69,9 @@ historical NuGet client.
 Default durable storage uses .NET's local application-data directory. Use an
 explicit per-run `--storage` path for portable automation. Path options consume
 one platform-native argument and do not split delimiter-separated lists.
+After this storage-identity release, downgrading while an owner migration is
+incomplete is unsupported. Do not run old and new binaries against implicit default
+roots concurrently; select one exact root explicitly.
 
 ## Known constraints
 

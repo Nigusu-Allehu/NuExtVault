@@ -60,7 +60,7 @@ references.
 
 ## Public contracts
 
-`NuExtVault.Extensions.Sdk` 1.3.0 is the supported runtime contract
+`NuExtVault.Extensions.Sdk` 1.4.0 is the supported runtime contract
 assembly. `NuExtVault.Extensions.TestKit` 1.1.0 contains authoring and test
 helpers. Both target `net10.0`, are locally packable, and are not externally
 published. The SDK API and structural identity, both package/assembly identities, and

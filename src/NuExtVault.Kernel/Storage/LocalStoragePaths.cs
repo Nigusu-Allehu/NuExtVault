@@ -25,7 +25,16 @@ public static class LocalStoragePaths
                 "the intended repository path.");
         }
 
-        return legacyExists ? legacy : current;
+        if (!legacyExists)
+        {
+            throw new InvalidOperationException(
+                $"Legacy default storage root '{legacy}' does not exist. A concurrent older " +
+                $"server could create or use that root while this version selects '{current}', " +
+                "so automatic selection is unsafe; pass --storage with the intended repository " +
+                "path.");
+        }
+
+        return legacy;
     }
 
     private static string LocalAppData =>

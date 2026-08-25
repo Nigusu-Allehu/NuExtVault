@@ -142,7 +142,7 @@ internal sealed class ExtensionCatalog
     {
         foreach (var manifest in manifests)
         {
-            if (manifest.SchemaVersion != 1)
+            if (manifest.SchemaVersion.Value is not (1 or 2))
             {
                 throw Failure(
                     "unsupported-manifest-schema",
@@ -161,34 +161,34 @@ internal sealed class ExtensionCatalog
     }
 
     private static void ValidateIdentityPredecessors(IReadOnlyList<ExtensionManifest> manifests)
+    {
+        var active = manifests
+            .Select(manifest => manifest.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var claimed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var manifest in manifests)
         {
-            var active = manifests
-                .Select(manifest => manifest.Id)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var claimed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var manifest in manifests)
+            foreach (var predecessor in manifest.IdentityPredecessors)
             {
-                foreach (var predecessor in manifest.IdentityPredecessors)
+                if (active.Contains(predecessor))
                 {
-                    if (active.Contains(predecessor))
-                    {
-                        throw Failure(
-                            "ambiguous-active-identity-predecessor",
-                            $"Extension '{manifest.Id}' declares active extension '{predecessor}' as " +
-                            "an identity predecessor.");
-                    }
-
-                    if (claimed.TryGetValue(predecessor, out var successor))
-                    {
-                        throw Failure(
-                            "duplicate-identity-predecessor",
-                            $"Extensions '{successor}' and '{manifest.Id}' both claim identity " +
-                            $"predecessor '{predecessor}'.");
-                    }
-
-                    claimed.Add(predecessor, manifest.Id);
+                    throw Failure(
+                        "ambiguous-active-identity-predecessor",
+                        $"Extension '{manifest.Id}' declares active extension '{predecessor}' as " +
+                        "an identity predecessor.");
                 }
+
+                if (claimed.TryGetValue(predecessor, out var successor))
+                {
+                    throw Failure(
+                        "duplicate-identity-predecessor",
+                        $"Extensions '{successor}' and '{manifest.Id}' both claim identity " +
+                        $"predecessor '{predecessor}'.");
+                }
+
+                claimed.Add(predecessor, manifest.Id);
             }
+        }
     }
 
     private static void ValidateDependencies(

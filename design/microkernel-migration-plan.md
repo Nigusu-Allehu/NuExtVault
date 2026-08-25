@@ -57,7 +57,7 @@ activation begin in Step 20.
 
 Step 22 implements Package Staging as the reference external extension. It lives in
 `src/NuExtVault.Extensions.PackageStaging`, is independently packable as
-`NuExtVault.PackageStaging`, references only the public SDK (v1.3.0), ships a strict
+`NuExtVault.PackageStaging`, references only the public SDK (v1.4.0), ships a strict
 manifest with a signed ES256 conformance attestation, and loads through the Step 20
 trusted in-process package loader. It is absent from every official catalog, kernel
 catalog, and default profile: an administrator must supply extension roots, trust

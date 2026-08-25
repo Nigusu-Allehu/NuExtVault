@@ -108,7 +108,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
     // ---- manifest ---------------------------------------------------------
 
     [Fact]
-    public void The_staging_manifest_is_schema_v1_valid()
+    public void The_staging_manifest_is_schema_v2_valid()
     {
         var result = ExtensionManifestJson.Validate(Assets.ManifestJsonBytes);
 
@@ -150,6 +150,8 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         var manifest = ExtensionManifestJson.Parse(Assets.ManifestJsonBytes);
 
         Assert.Equal(["NuTest.PackageStaging"], manifest.IdentityPredecessors.ToArray());
+        Assert.Equal(ExtensionSdkVersions.ManifestV2, manifest.SchemaVersion);
+        Assert.Equal(ExtensionSdkVersions.ManifestV2, manifest.Contracts.Manifest);
     }
 
     [Fact]
@@ -176,7 +178,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
     {
         var manifest = ExtensionManifestJson.Parse(Assets.ManifestJsonBytes);
 
-        Assert.Equal(new SdkContractVersion(1, 3, 0), manifest.Sdk.Minimum);
+        Assert.Equal(new SdkContractVersion(1, 4, 0), manifest.Sdk.Minimum);
         Assert.True(ExtensionSdkVersions.IsSupported(manifest.Sdk.Minimum));
         Assert.True(ExtensionSdkVersions.IsSupported(ExtensionSdkVersions.OldestSupported));
     }
@@ -274,7 +276,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         {
             _ = ServerApplication.Build(
                 ServerComposition.Create(
-                    StagingProfile(),
+                    StagingProfile(MigrationAuthorization(trustRoot)),
                     storageDirectory: storage.Path,
                     authentication: AuthenticationConfiguration.Anonymous,
                     externalExtensions: new ExternalExtensionConfiguration(
@@ -286,6 +288,67 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         using var unchanged = new StagedContentStore(storage.Path, "probe");
         Assert.NotNull(unchanged.Find(legacyOwner, contentId));
         Assert.Null(unchanged.Find(PackageStagingAssets.Id, contentId));
+    }
+
+    [Fact]
+    public void A_signed_predecessor_declaration_without_admin_authorization_is_rejected()
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher);
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "staging.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
+        using var storage = new TemporaryDirectory();
+
+        var exception = Assert.Throws<ServerHostingConfigurationException>(() =>
+        {
+            using var application = ServerApplication.Build(
+                ServerComposition.Create(
+                    StagingProfile(),
+                    storageDirectory: storage.Path,
+                    authentication: AuthenticationConfiguration.Anonymous,
+                    externalExtensions: new ExternalExtensionConfiguration(
+                        [.. roots.Roots],
+                        [trustRoot],
+                        TimeProvider.System)));
+        });
+
+        Assert.Contains("administrator authorization", exception.Message);
+    }
+
+    [Fact]
+    public void A_trusted_package_signed_by_an_unrelated_key_cannot_claim_predecessor_state()
+    {
+        var (_, authorizedRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher,
+            keyId: "authorized-key");
+        var (attackerKey, attackerRoot) = ConformanceAttestationFixture.CreateTrustedKey(
+            publisher: PackageStagingAssets.Publisher,
+            keyId: "attacker-key");
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        roots.WritePackage(
+            "staging.nupkg",
+            ExternalExtensionPackageBuilder.BuildValidPackage(
+                Assets,
+                attackerKey,
+                attackerRoot.KeyId));
+        using var storage = new TemporaryDirectory();
+
+        var exception = Assert.Throws<ServerHostingConfigurationException>(() =>
+        {
+            using var application = ServerApplication.Build(
+                ServerComposition.Create(
+                    StagingProfile(MigrationAuthorization(authorizedRoot)),
+                    storageDirectory: storage.Path,
+                    authentication: AuthenticationConfiguration.Anonymous,
+                    externalExtensions: new ExternalExtensionConfiguration(
+                        [.. roots.Roots],
+                        [authorizedRoot, attackerRoot],
+                        TimeProvider.System)));
+        });
+
+        Assert.Contains("does not match", exception.Message);
     }
 
     // ---- generic manifest state registration -------------------------------
@@ -301,7 +364,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
             ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key));
         await using var application = ServerApplication.Build(
             ServerComposition.Create(
-                StagingProfile(),
+                StagingProfile(MigrationAuthorization(trustRoot)),
                 authentication: AuthenticationConfiguration.Anonymous,
                 externalExtensions: new ExternalExtensionConfiguration(
                     [.. roots.Roots],
@@ -340,7 +403,8 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
             store.Participants.Select(p => p.ExtensionId).Order(StringComparer.Ordinal));
     }
 
-    internal static ServerProfile StagingProfile() =>
+    internal static ServerProfile StagingProfile(
+        OwnerIdentityMigrationAuthorization? authorization = null) =>
         ServerProfiles.Embedded with
         {
             Grants =
@@ -351,8 +415,22 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
                 new CapabilityGrant(BuiltInCapabilityNames.ExtensionStateWrite),
                 new CapabilityGrant(BuiltInCapabilityNames.PackageContentWriteStaged),
                 new CapabilityGrant(BuiltInCapabilityNames.PublicationRequest)
-            ]
+            ],
+            OwnerIdentityMigrationAuthorizations =
+                authorization is null ? [] : [authorization]
         };
+
+    private OwnerIdentityMigrationAuthorization MigrationAuthorization(
+        ConformanceTrustRoot trustRoot) =>
+        new(
+            "NuTest.PackageStaging",
+            PackageStagingAssets.Id,
+            Assets.Id,
+            Assets.Publisher,
+            trustRoot.KeyId,
+            Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(
+                    trustRoot.SubjectPublicKeyInfo.Span)));
 
     private static RouteDeclaration Route(ExtensionManifest manifest, string id) =>
         manifest.Routes.Single(route => route.Identity.Value == id);

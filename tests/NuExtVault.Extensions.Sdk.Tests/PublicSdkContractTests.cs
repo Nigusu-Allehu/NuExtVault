@@ -26,7 +26,7 @@ public sealed class PublicSdkContractTests
         var name = assembly.GetName();
 
         Assert.Equal("NuExtVault.Extensions.Sdk", name.Name);
-        Assert.Equal(new Version(1, 3, 0, 0), name.Version);
+        Assert.Equal(new Version(1, 4, 0, 0), name.Version);
         Assert.Equal(
             ".NETCoreApp,Version=v10.0",
             assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName);
@@ -77,9 +77,10 @@ public sealed class PublicSdkContractTests
         Assert.Equal(
             new SdkContractIdentity("NuExtVault.Extensions.Sdk"),
             ExtensionSdkVersions.Identity);
-        Assert.Equal(new SdkContractVersion(1, 3, 0), ExtensionSdkVersions.Current);
+        Assert.Equal(new SdkContractVersion(1, 4, 0), ExtensionSdkVersions.Current);
         Assert.Equal(new SdkContractVersion(1, 0, 0), ExtensionSdkVersions.OldestSupported);
         Assert.Equal(new ManifestSchemaVersion(1), ExtensionSdkVersions.ManifestV1);
+        Assert.Equal(new ManifestSchemaVersion(2), ExtensionSdkVersions.ManifestV2);
         Assert.Equal(new OperationContractVersion(1), ExtensionSdkVersions.OperationV1);
         Assert.Equal(new ContributionContractVersion(1), ExtensionSdkVersions.ContributionV1);
         Assert.Equal(new RouteContractVersion(1), ExtensionSdkVersions.RouteV1);
@@ -94,7 +95,8 @@ public sealed class PublicSdkContractTests
     [InlineData(1, 2, 0, true)]
     [InlineData(0, 9, 9, false)]
     [InlineData(1, 3, 0, true)]
-    [InlineData(1, 4, 0, false)]
+    [InlineData(1, 4, 0, true)]
+    [InlineData(1, 5, 0, false)]
     [InlineData(2, 0, 0, false)]
     public void Sdk_support_range_is_same_major_and_bounded_by_host(
         int major,

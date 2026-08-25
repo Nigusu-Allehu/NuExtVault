@@ -371,32 +371,13 @@ public static class ServerApplication
     }
 
     internal static ImmutableArray<OwnerIdentityMigration> CreateOwnerIdentityMigrations(
-        ServerComposition composition)
-    {
-        var active = composition.ExtensionGraph.Extensions
-            .Select(extension => extension.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var migrations = ImmutableArray.CreateBuilder<OwnerIdentityMigration>();
-        foreach (var manifest in composition.Modules
-                     .Select(module => module.Contribution.Manifest)
-                     .Where(manifest =>
-                         active.Contains(manifest.Identity.Id) &&
-                         !manifest.IdentityPredecessors.IsDefaultOrEmpty))
-        {
-            if (manifest.ValidatedManifestDigest is null ||
-                manifest.ValidatedStagedContentDigest is null)
-            {
-                throw new ServerHostingConfigurationException(
-                    $"Extension '{manifest.Identity.Id}' cannot authorize durable identity " +
-                    "migration because its package and signed manifest were not verified.");
-            }
-
-            migrations.AddRange(manifest.IdentityPredecessors.Select(predecessor =>
-                new OwnerIdentityMigration(predecessor, manifest.Identity.Id)));
-        }
-
-        return migrations.ToImmutable();
-    }
+        ServerComposition composition) =>
+        OwnerIdentityMigrationResolver.Resolve(
+            composition.Modules,
+            composition.ExtensionGraph.Extensions.Select(extension => extension.Id),
+            composition.Profile.OwnerIdentityMigrationAuthorizations.IsDefault
+                ? []
+                : composition.Profile.OwnerIdentityMigrationAuthorizations);
 
     private static void MapMiddleware(WebApplication app)
     {

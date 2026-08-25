@@ -506,7 +506,7 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
 
         await using (var first = await NuExtVaultHost.StartCompositionAsync(
             ServerComposition.Create(
-                StagingProfile(ServerProfiles.Standard),
+                StagingProfile(ServerProfiles.Standard, trustRoot),
                 storageDirectory: storage,
                 authentication: AuthenticationConfiguration.Anonymous,
                 externalExtensions: new ExternalExtensionConfiguration(
@@ -561,7 +561,7 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
 
         await using (var restarted = await NuExtVaultHost.StartCompositionAsync(
                          ServerComposition.Create(
-                             StagingProfile(ServerProfiles.Standard),
+                             StagingProfile(ServerProfiles.Standard, trustRoot),
                              storageDirectory: storage,
                              authentication: AuthenticationConfiguration.Anonymous,
                              externalExtensions: new ExternalExtensionConfiguration(
@@ -796,7 +796,7 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
             ExternalExtensionPackageBuilder.BuildValidPackage(assets, key));
         return NuExtVaultHost.StartCompositionAsync(
             ServerComposition.Create(
-                StagingProfile(ServerProfiles.Embedded),
+                StagingProfile(ServerProfiles.Embedded, trustRoot),
                 authentication: requireApiKey
                     ? AuthenticationConfiguration.Create(null, null, ApiKey)
                     : AuthenticationConfiguration.Anonymous,
@@ -807,7 +807,9 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
             CancellationToken.None);
     }
 
-    private static ServerProfile StagingProfile(ServerProfile profile) =>
+    private ServerProfile StagingProfile(
+        ServerProfile profile,
+        ConformanceTrustRoot trustRoot) =>
         profile with
         {
             Grants =
@@ -818,6 +820,18 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
                 new CapabilityGrant(BuiltInCapabilityNames.ExtensionStateWrite),
                 new CapabilityGrant(BuiltInCapabilityNames.PackageContentWriteStaged),
                 new CapabilityGrant(BuiltInCapabilityNames.PublicationRequest)
+            ],
+            OwnerIdentityMigrationAuthorizations =
+            [
+                new OwnerIdentityMigrationAuthorization(
+                    "NuTest.PackageStaging",
+                    "NuExtVault.PackageStaging",
+                    fixture.StagingAssets.Id,
+                    fixture.StagingAssets.Publisher,
+                    trustRoot.KeyId,
+                    Convert.ToHexStringLower(
+                        System.Security.Cryptography.SHA256.HashData(
+                            trustRoot.SubjectPublicKeyInfo.Span)))
             ]
         };
 }

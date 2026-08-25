@@ -8,15 +8,25 @@ using System.Text.Json.Nodes;
 
 namespace NuExtVault.Kernel.Capabilities;
 
-internal sealed record OwnerIdentityMigration(string PredecessorId, string SuccessorId)
+internal sealed record OwnerIdentityMigration(
+    string PredecessorId,
+    string SuccessorId,
+    string AuthorizationDigest)
 {
     public OwnerIdentityMigration Validate()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(PredecessorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(SuccessorId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(AuthorizationDigest);
         if (string.Equals(PredecessorId, SuccessorId, StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Owner identity migration cannot link an identity to itself.");
+        }
+        if (AuthorizationDigest.Length != 64 ||
+            AuthorizationDigest.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException(
+                "Owner identity migration authorization digest must be SHA-256 hex.");
         }
 
         return this;
@@ -66,12 +76,30 @@ internal sealed class DurableOwnerIdentityMigrator
 
     public void Migrate()
     {
-        if (_migrations.IsEmpty || !Directory.Exists(_root))
+        if (!Directory.Exists(_root))
         {
             return;
         }
 
         var journalPath = Path.Combine(_root, JournalFileName);
+        if (_migrations.IsEmpty)
+        {
+            if (File.Exists(journalPath) ||
+                File.Exists(journalPath + ".tmp") ||
+                Directory.Exists(Path.Combine(_root, "extension-state")) &&
+                Directory.EnumerateDirectories(
+                        Path.Combine(_root, "extension-state"),
+                        ".owner-migration-*",
+                        SearchOption.AllDirectories)
+                    .Any())
+            {
+                throw new InvalidDataException(
+                    "An interrupted owner identity migration cannot resume without the " +
+                    "same verified administrator authorization.");
+            }
+            return;
+        }
+
         var stateRoot = Path.Combine(_root, "extension-state");
         if (Directory.Exists(stateRoot))
         {
@@ -99,6 +127,15 @@ internal sealed class DurableOwnerIdentityMigrator
             if (pending.Length == 0)
             {
                 return;
+            }
+            var convergence = pending
+                .GroupBy(migration => migration.SuccessorId, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (convergence is not null)
+            {
+                throw new InvalidDataException(
+                    $"Multiple populated durable predecessors converge on successor " +
+                    $"'{convergence.Key}'; migration cannot merge them.");
             }
 
             journal = new MigrationJournal(1, Phase: 0, pending, _migrations);

@@ -20,13 +20,15 @@ public sealed class LocalStoragePathsTests
     }
 
     [Fact]
-    public void Default_resolution_uses_the_new_root_when_neither_root_exists()
+    public void Default_resolution_requires_an_explicit_root_when_neither_root_exists()
     {
         using var root = new TemporaryDirectory();
 
-        Assert.Equal(
-            Path.Combine(root.Path, "nuextvault"),
-            LocalStoragePaths.ResolveDefaultRoot(root.Path));
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => LocalStoragePaths.ResolveDefaultRoot(root.Path));
+
+        Assert.Contains("--storage", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("concurrent", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -40,13 +42,16 @@ public sealed class LocalStoragePathsTests
     }
 
     [Fact]
-    public void Default_resolution_uses_the_new_root_when_it_alone_exists()
+    public void Default_resolution_requires_explicit_storage_when_only_new_root_exists()
     {
         using var root = new TemporaryDirectory();
         var current = Path.Combine(root.Path, "nuextvault");
         Directory.CreateDirectory(current);
 
-        Assert.Equal(current, LocalStoragePaths.ResolveDefaultRoot(root.Path));
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => LocalStoragePaths.ResolveDefaultRoot(root.Path));
+
+        Assert.Contains("--storage", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

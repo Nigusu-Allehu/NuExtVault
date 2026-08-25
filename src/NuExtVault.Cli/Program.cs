@@ -19,7 +19,7 @@ var arguments = args.ToList();
 if (arguments.Count == 0)
 {
     Console.Error.WriteLine(
-        "Usage: nuextvault <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [--extension-grant <capability>] [package limit options] [authentication options]");
+        "Usage: nuextvault <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [--extension-identity-migration <json-file>] [--extension-grant <capability>] [package limit options] [authentication options]");
     return 2;
 }
 
@@ -63,6 +63,7 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
     try
     {
         var restoreStorage = ResolveStorage(arguments);
+        var ownerAuthorizations = ReadOwnerIdentityMigrationAuthorizations(arguments);
         using var externalRuntime = ExternalExtensionPackageLoader.Load(
             new ExternalExtensionConfiguration(
                 [.. ReadRepeatedPathOption(arguments, "--extension-root")],
@@ -88,7 +89,10 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
             input,
             restoreStorage,
             [.. KernelStateParticipants.BuiltIn, .. participants],
-            CreateOwnerIdentityMigrations(externalRuntime.Modules),
+            OwnerIdentityMigrationResolver.Resolve(
+                externalRuntime.Modules,
+                externalRuntime.Modules.Select(module => module.Contribution.Manifest.Identity.Id),
+                ownerAuthorizations),
             CancellationToken.None);
         Console.WriteLine(
             $"Restored {manifest.Files.Count} files into '{Path.GetFullPath(restoreStorage)}'.");
@@ -201,7 +205,9 @@ try
         trustedProxies: ParseTrustedProxies(arguments),
         extensionRoots: ReadRepeatedPathOption(arguments, "--extension-root"),
         extensionTrustRoots: ReadTrustRoots(arguments),
-        extensionGrants: ReadExtensionGrants(arguments));
+        extensionGrants: ReadExtensionGrants(arguments),
+        ownerIdentityMigrationAuthorizations:
+            ReadOwnerIdentityMigrationAuthorizations(arguments));
     app = ServerApplication.Build(composition);
 }
 catch (Exception exception) when (
@@ -292,29 +298,6 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
 static string ResolveStorage(IReadOnlyList<string> arguments) =>
     ReadOption(arguments, "--storage") ?? LocalStoragePaths.ResolveDefaultRoot();
 
-static ImmutableArray<OwnerIdentityMigration> CreateOwnerIdentityMigrations(
-    ImmutableArray<IExtensionModule> modules)
-{
-    var migrations = ImmutableArray.CreateBuilder<OwnerIdentityMigration>();
-    foreach (var manifest in modules
-                 .Select(module => module.Contribution.Manifest)
-                 .Where(manifest => !manifest.IdentityPredecessors.IsDefaultOrEmpty))
-    {
-        if (manifest.ValidatedManifestDigest is null ||
-            manifest.ValidatedStagedContentDigest is null)
-        {
-            throw new CliConfigurationException(
-                $"Extension '{manifest.Identity.Id}' cannot authorize durable identity " +
-                "migration because its package and signed manifest were not verified.");
-        }
-
-        migrations.AddRange(manifest.IdentityPredecessors.Select(predecessor =>
-            new OwnerIdentityMigration(predecessor, manifest.Identity.Id)));
-    }
-
-    return migrations.ToImmutable();
-}
-
 static ImmutableArray<string> ReadRepeatedPathOption(
     IReadOnlyList<string> arguments,
     string name)
@@ -372,6 +355,7 @@ static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string>
             throw new CliConfigurationException(
                 $"Extension trust-root file '{Path.GetFileName(path)}' does not exist.");
         }
+
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllBytes(path));
@@ -393,6 +377,43 @@ static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string>
         }
     }
     return roots.ToImmutable();
+}
+
+static ImmutableArray<OwnerIdentityMigrationAuthorization>
+    ReadOwnerIdentityMigrationAuthorizations(IReadOnlyList<string> arguments)
+{
+    var authorizations = ImmutableArray.CreateBuilder<OwnerIdentityMigrationAuthorization>();
+    foreach (var path in ReadRepeatedPathOption(arguments, "--extension-identity-migration"))
+    {
+        if (!File.Exists(path))
+        {
+            throw new CliConfigurationException(
+                $"Extension identity-migration file '{Path.GetFileName(path)}' does not exist.");
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            var root = document.RootElement;
+            authorizations.Add(new OwnerIdentityMigrationAuthorization(
+                root.GetProperty("predecessorId").GetString()!,
+                root.GetProperty("successorExtensionId").GetString()!,
+                root.GetProperty("successorPackageId").GetString()!,
+                root.GetProperty("expectedPublisher").GetString()!,
+                root.GetProperty("expectedSigningKeyId").GetString()!,
+                root.GetProperty("expectedSigningKeyFingerprint").GetString()!));
+        }
+        catch (Exception exception) when (
+            exception is JsonException or
+                FormatException or
+                InvalidOperationException or
+                KeyNotFoundException)
+        {
+            throw new CliConfigurationException(
+                $"Extension identity-migration file '{Path.GetFileName(path)}' is invalid.",
+                exception);
+        }
+    }
+    return authorizations.ToImmutable();
 }
 
 static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)

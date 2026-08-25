@@ -57,6 +57,8 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
 {
     internal const string ManifestV1Schema =
         "https://schemas.nuextvault.dev/extensions/manifest/v1";
+    internal const string ManifestV2Schema =
+        "https://schemas.nuextvault.dev/extensions/manifest/v2";
 
     public ExtensionManifest(
         ManifestSchemaVersion schemaVersion,
@@ -108,7 +110,9 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         OwnedOperations = [.. Operations.Select(operation => operation.Identity.Value)];
         Endpoints = [];
         Resources = [];
-        SchemaUri = ManifestV1Schema;
+        SchemaUri = schemaVersion == ExtensionSdkVersions.ManifestV2
+            ? ManifestV2Schema
+            : ManifestV1Schema;
     }
 
     internal ExtensionManifest(
@@ -229,6 +233,16 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
     internal string? ValidatedManifestDigest { get; init; }
 
     internal string? ValidatedStagedContentDigest { get; init; }
+
+    internal string? ValidatedPackageId { get; init; }
+
+    internal string? ValidatedPackageVersion { get; init; }
+
+    internal string? ValidatedPublisher { get; init; }
+
+    internal string? ValidatedSigningKeyId { get; init; }
+
+    internal string? ValidatedSigningKeyFingerprint { get; init; }
 
     public bool Equals(ExtensionManifest? other) =>
         other is not null &&

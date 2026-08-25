@@ -49,6 +49,7 @@ internal sealed record ValidatedExtensionActivationIdentity(
     string ModuleAssemblyIdentity,
     string Publisher,
     string PublisherKeyId,
+    string PublisherKeyFingerprint,
     string ManifestDigest,
     string ClosureDigest,
     ContractVersionSet SelectedContracts,
@@ -270,8 +271,7 @@ internal static class ExternalExtensionPackageLoader
 
                     var materialized = PublicExtensionModuleAdapter.Materialize(
                         module,
-                        package.Identity.ManifestDigest,
-                        package.Identity.StagedContentIdentity);
+                        package.Identity);
                     contexts.Add(context);
                     modules.Add(materialized);
                     results.Add(new ExternalExtensionLoadResult(
@@ -539,7 +539,7 @@ internal static class ExternalExtensionPackageLoader
 
             var metadata = ReadPackageMetadata(RequiredRootFile(stage, PackageMetadataName));
             ValidateManifest(manifest);
-            var publisherKeyId = ValidateAttestation(
+            var publisherIdentity = ValidateAttestation(
                 RequiredRootFile(stage, AttestationName),
                 packageId,
                 packageVersion,
@@ -638,7 +638,8 @@ internal static class ExternalExtensionPackageLoader
                 manifest.Identity.Version,
                 entryAssembly.Identity.FullName!,
                 manifest.Identity.Publisher,
-                publisherKeyId,
+                publisherIdentity.KeyId,
+                publisherIdentity.Fingerprint,
                 manifestDigest,
                 closureDigest,
                 manifest.Contracts,
@@ -726,7 +727,7 @@ internal static class ExternalExtensionPackageLoader
         }
     }
 
-    private static string ValidateAttestation(
+    private static VerifiedPublisherIdentity ValidateAttestation(
         string path,
         string packageId,
         string packageVersion,
@@ -756,13 +757,47 @@ internal static class ExternalExtensionPackageLoader
             file.KeyId,
             file.IssuedAt,
             file.ExpiresAt);
+        var matchingRoots = (configuration.TrustRoots.IsDefault
+                ? []
+                : configuration.TrustRoots)
+            .Where(root =>
+                string.Equals(root.Publisher, manifest.Identity.Publisher, StringComparison.Ordinal) &&
+                string.Equals(root.KeyId, envelope.KeyId, StringComparison.Ordinal) &&
+                string.Equals(root.Algorithm, envelope.Algorithm, StringComparison.Ordinal))
+            .ToArray();
+        if (matchingRoots.Length != 1)
+        {
+            throw new ExternalExtensionException(
+                packageId,
+                packageVersion,
+                matchingRoots.Length == 0
+                    ? "external-extension.trust-root-missing"
+                    : "external-extension.trust-root-ambiguous",
+                matchingRoots.Length == 0
+                    ? $"Package '{packageId}' has no matching publisher signing key."
+                    : $"Package '{packageId}' resolves to multiple publisher signing keys.");
+        }
         var structural = StructuralContractFingerprint.Create(typeof(IExtensionModule).Assembly);
+        var attestedSdkVersion = ReadAttestedSdkVersion(
+            envelope.Payload,
+            packageId,
+            packageVersion);
+        if (!ExtensionSdkVersions.IsSupported(attestedSdkVersion) ||
+            attestedSdkVersion.CompareTo(manifest.Sdk.Minimum) < 0 ||
+            attestedSdkVersion.CompareTo(manifest.Sdk.MaximumExclusive) >= 0)
+        {
+            throw new ExternalExtensionException(
+                packageId,
+                packageVersion,
+                "external-extension.attestation-invalid",
+                $"Package '{packageId}' attests an incompatible SDK contract version.");
+        }
         var expectation = new ConformanceExpectation(
             packageId,
             packageVersion,
             manifest.Identity.Publisher,
             Convert.ToHexStringLower(SHA256.HashData(manifestBytes)),
-            ExtensionSdkVersions.Current,
+            attestedSdkVersion,
             manifest.Contracts.Manifest,
             manifest.Contracts.Operation,
             manifest.Contracts.Contribution,
@@ -790,8 +825,40 @@ internal static class ExternalExtensionPackageLoader
                 code,
                 $"Package '{packageId}' failed attestation verification ({verification.Failure}).");
         }
-        return envelope.KeyId;
+        return new VerifiedPublisherIdentity(
+            envelope.KeyId,
+            Convert.ToHexStringLower(
+                SHA256.HashData(matchingRoots[0].SubjectPublicKeyInfo.Span)));
     }
+
+    private static SdkContractVersion ReadAttestedSdkVersion(
+        ReadOnlyMemory<byte> payload,
+        string packageId,
+        string packageVersion)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(payload);
+            if (!SdkContractVersion.TryParse(
+                    document.RootElement.GetProperty("sdkVersion").GetString(),
+                    out var version))
+            {
+                throw new JsonException("The attested SDK version is invalid.");
+            }
+            return version;
+        }
+        catch (Exception exception) when (
+            exception is JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            throw new ExternalExtensionException(
+                packageId,
+                packageVersion,
+                "external-extension.attestation-invalid",
+                $"Package '{packageId}' has an invalid attestation payload.");
+        }
+    }
+
+    private sealed record VerifiedPublisherIdentity(string KeyId, string Fingerprint);
 
     private static PackageMetadata ReadPackageMetadata(string path)
     {

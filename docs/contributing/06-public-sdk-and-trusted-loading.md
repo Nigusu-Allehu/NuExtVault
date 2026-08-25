@@ -4,9 +4,9 @@ The supported public extension surface is locally packable and `net10.0` only.
 
 <!-- example-id: contrib-06-version-table; evidence: reference -->
 ```text
-NuExtVault.Extensions.Sdk 1.3.0 net10.0
+NuExtVault.Extensions.Sdk 1.4.0 net10.0
 NuExtVault.Extensions.TestKit 1.1.0 net10.0
-NuExtVault.PackageStaging 1.0.0 net10.0
+NuExtVault.PackageStaging 1.1.0 net10.0
 ```
 
 The SDK contains runtime contracts, strict manifest parsing/schema, canonical
@@ -25,8 +25,10 @@ capability requirements, and replacement requests.
 
 The manifest schema, SDK API, operation, contribution, route, capability, and
 structural contracts evolve independently. The host currently accepts SDK
-1.0.0 through 1.3.0 within major version 1. Version compatibility is necessary
-but not sufficient: the reviewed structural SHA-256 must also match.
+1.0.0 through 1.4.0 within major version 1. Manifest v1 remains supported and
+cannot declare identity lineage. Manifest v2 requires SDK 1.4.0 or later and is
+the first contract that can declare `identityPredecessors`. Version compatibility
+is necessary but not sufficient: the reviewed structural SHA-256 must also match.
 
 Canonical bytes are unindented UTF-8 with fixed property order, ordinal identity
 ordering, no trailing newline, and lowercase SHA-256. Always canonicalize through
@@ -50,7 +52,7 @@ using NuExtVault.SdkFixture;
 var manifest = new ManifestBuilder()
     .WithIdentity("Contoso.Flavors", "1.2.3", "Contoso")
     .TargetSdk(
-        new SdkContractVersion(1, 3, 0),
+        new SdkContractVersion(1, 4, 0),
         new SdkContractVersion(2, 0, 0))
     .RequireCapability("host.clock.read")
     .Build();
