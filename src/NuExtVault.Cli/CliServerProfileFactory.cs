@@ -41,13 +41,13 @@ internal static class CliServerProfileFactory
                 ]
             };
         }
-        profile = profile with
+        if (!ownerIdentityMigrationAuthorizations.IsDefaultOrEmpty)
         {
-            OwnerIdentityMigrationAuthorizations =
-                ownerIdentityMigrationAuthorizations.IsDefault
-                    ? []
-                    : ownerIdentityMigrationAuthorizations
-        };
+            profile = profile with
+            {
+                OwnerIdentityMigrationAuthorizations = ownerIdentityMigrationAuthorizations
+            };
+        }
 
         return ServerComposition.Create(
             profile,

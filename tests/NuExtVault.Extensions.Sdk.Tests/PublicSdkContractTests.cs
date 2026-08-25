@@ -26,7 +26,7 @@ public sealed class PublicSdkContractTests
         var name = assembly.GetName();
 
         Assert.Equal("NuExtVault.Extensions.Sdk", name.Name);
-        Assert.Equal(new Version(1, 4, 0, 0), name.Version);
+        Assert.Equal(new Version(1, 3, 0, 0), name.Version);
         Assert.Equal(
             ".NETCoreApp,Version=v10.0",
             assembly.GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName);

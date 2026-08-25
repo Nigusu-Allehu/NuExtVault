@@ -783,6 +783,31 @@ public sealed class StorageBackupTests
             DurableOwnerIdentityMigrator.JournalFileName)));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(".tmp")]
+    public async Task Restore_rejects_a_target_with_an_owner_migration_journal(
+        string journalSuffix)
+    {
+        using var source = TemporaryDirectory.Create();
+        using var destination = TemporaryDirectory.Create();
+        var backupPath = Path.Combine(source.Path, "backup.zip");
+        await StorageBackup.CreateAsync(source.Path, backupPath);
+        var journalPath = Path.Combine(
+            destination.Path,
+            DurableOwnerIdentityMigrator.JournalFileName + journalSuffix);
+        await File.WriteAllTextAsync(journalPath, """{"Version":1}""");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => StorageBackup.RestoreAsync(backupPath, destination.Path));
+
+        Assert.Contains(
+            "owner identity migration",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True(File.Exists(journalPath));
+    }
+
     [Fact]
     public async Task Backup_rejects_an_owner_migration_staging_directory()
     {

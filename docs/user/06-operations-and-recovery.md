@@ -61,6 +61,8 @@ directory exists. Restart the server with the same signed package and administra
 authorization to complete migration, then create the backup. Restore also rejects
 older archives containing such incomplete artifacts instead of attempting to merge
 mixed migration phases.
+Restore likewise refuses a target that still contains an owner-migration journal
+or staging directory; complete that migration or choose another clean target.
 
 ## Restore to clean storage
 

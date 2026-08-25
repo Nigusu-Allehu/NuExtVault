@@ -326,6 +326,32 @@ public sealed class DurableOwnerIdentityMigrationTests
     }
 
     [Fact]
+    public async Task Case_mismatched_persisted_owner_fails_before_migration()
+    {
+        using var root = new TemporaryDirectory();
+        await SeedLegacyStoreAsync(root.Path);
+        var indexPath = Path.Combine(
+            root.Path,
+            StagedContentStore.DirectoryName,
+            "index.json");
+        var index = await File.ReadAllTextAsync(indexPath);
+        await File.WriteAllTextAsync(
+            indexPath,
+            index.Replace(
+                LegacyOwner,
+                LegacyOwner.ToLowerInvariant(),
+                StringComparison.Ordinal));
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => DurableOwnerIdentityMigrator.Migrate(root.Path, [Migration]));
+
+        Assert.Contains("casing", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(Path.Combine(
+            root.Path,
+            DurableOwnerIdentityMigrator.JournalFileName)));
+    }
+
+    [Fact]
     public async Task The_legacy_identity_is_not_a_runtime_alias_after_migration()
     {
         using var root = new TemporaryDirectory();

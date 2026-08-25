@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using NuExtVault.Extensions.Sdk;
@@ -127,6 +128,18 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
                 subjectPublicKeyInfoBase64 =
                     Convert.ToBase64String(trustRoot.SubjectPublicKeyInfo.ToArray())
             }));
+        File.WriteAllText(
+            install.IdentityMigrationPath,
+            JsonSerializer.Serialize(new
+            {
+                predecessorId = "NuTest.PackageStaging",
+                successorExtensionId = "NuExtVault.PackageStaging",
+                successorPackageId = "NuExtVault.PackageStaging",
+                expectedPublisher = trustRoot.Publisher,
+                expectedSigningKeyId = trustRoot.KeyId,
+                expectedSigningKeyFingerprint = Convert.ToHexStringLower(
+                    SHA256.HashData(trustRoot.SubjectPublicKeyInfo.Span))
+            }));
         return install;
     }
 
@@ -139,7 +152,10 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
             .Append(" start --port ").Append(port)
             .Append(" --storage \"").Append(install.StorageRoot).Append('"')
             .Append(" --extension-root \"").Append(install.ExtensionRoot).Append('"')
-            .Append(" --extension-trust-root \"").Append(install.TrustRootPath).Append('"');
+            .Append(" --extension-trust-root \"").Append(install.TrustRootPath).Append('"')
+            .Append(" --extension-identity-migration \"")
+            .Append(install.IdentityMigrationPath)
+            .Append('"');
         foreach (var grant in grants)
         {
             arguments.Append(" --extension-grant ").Append(grant);
@@ -195,6 +211,7 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
             ExtensionRoot = Path.Combine(root, "extensions");
             StorageRoot = Path.Combine(root, "storage");
             TrustRootPath = Path.Combine(root, "trust-root.json");
+            IdentityMigrationPath = Path.Combine(root, "identity-migration.json");
             Directory.CreateDirectory(ExtensionRoot);
             Directory.CreateDirectory(StorageRoot);
         }
@@ -206,6 +223,8 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
         public string StorageRoot { get; }
 
         public string TrustRootPath { get; }
+
+        public string IdentityMigrationPath { get; }
 
         public static StagingInstall Create() =>
             new(Path.Combine(

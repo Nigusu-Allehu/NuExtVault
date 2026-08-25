@@ -187,6 +187,7 @@ public static class StorageBackup
         var destination = Path.GetFullPath(storageDirectory);
         Directory.CreateDirectory(destination);
         using var storageLease = AcquireStorageLease(destination);
+        EnsureRestoreTargetHasNoOwnerMigrationArtifacts(destination);
         RecoverInterruptedRestore(destination);
         EnsureRestoreTargetIsClean(destination);
         var parent = Path.GetDirectoryName(destination)
@@ -885,19 +886,37 @@ public static class StorageBackup
 
     private static void EnsureNoOwnerMigrationArtifacts(string root)
     {
-        if (File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName)) ||
-            File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName + ".tmp")) ||
-            Directory.Exists(Path.Combine(root, ExtensionStateDirectoryName)) &&
-            Directory.EnumerateDirectories(
-                    Path.Combine(root, ExtensionStateDirectoryName),
-                    ".owner-migration-*",
-                    SearchOption.AllDirectories)
-                .Any())
+        if (HasOwnerMigrationArtifacts(root))
         {
             throw new InvalidOperationException(
                 "Storage has an incomplete owner identity migration. Restart the server to " +
                 "complete migration before creating a backup.");
         }
+    }
+
+    private static void EnsureRestoreTargetHasNoOwnerMigrationArtifacts(string root)
+    {
+        if (HasOwnerMigrationArtifacts(root))
+        {
+            throw new InvalidOperationException(
+                "Restore target has an incomplete owner identity migration. Restart the " +
+                "original server to complete migration, or restore into a different clean path.");
+        }
+    }
+
+    private static bool HasOwnerMigrationArtifacts(string root)
+    {
+        var stateRoot = Path.Combine(root, ExtensionStateDirectoryName);
+        return File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName)) ||
+               File.Exists(Path.Combine(
+                   root,
+                   DurableOwnerIdentityMigrator.JournalFileName + ".tmp")) ||
+               Directory.Exists(stateRoot) &&
+               Directory.EnumerateDirectories(
+                       stateRoot,
+                       ".owner-migration-*",
+                       SearchOption.AllDirectories)
+                   .Any();
     }
 
     private static bool IsOwnerMigrationArtifact(string path)

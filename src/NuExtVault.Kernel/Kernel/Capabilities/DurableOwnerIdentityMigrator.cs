@@ -192,8 +192,16 @@ internal sealed class DurableOwnerIdentityMigrator
                          SearchOption.AllDirectories))
             {
                 var name = Path.GetFileName(directory);
+                var participantPath = Path.Combine(
+                    directory,
+                    TransactionalStateStore.ParticipantFileName);
+                var persistedOwner = File.Exists(participantPath)
+                    ? JsonNode.Parse(File.ReadAllBytes(participantPath))?["ExtensionId"]
+                        ?.GetValue<string>()
+                    : null;
                 foreach (var migration in _migrations)
                 {
+                    EnsureExactOwnerCasing(persistedOwner, migration);
                     result[migration].Legacy |= string.Equals(
                         name,
                         OwnerDirectoryName(migration.PredecessorId),
@@ -232,6 +240,7 @@ internal sealed class DurableOwnerIdentityMigrator
                     $"Owner-keyed durable file '{Path.GetFileName(path)}' has no owner identity.");
             foreach (var migration in _migrations)
             {
+                EnsureExactOwnerCasing(owner, migration);
                 result[migration].Legacy |= string.Equals(
                     owner,
                     migration.PredecessorId,
@@ -241,6 +250,40 @@ internal sealed class DurableOwnerIdentityMigrator
                     migration.SuccessorId,
                     StringComparison.Ordinal);
             }
+        }
+    }
+
+    private static void EnsureExactOwnerCasing(
+        string? persistedOwner,
+        OwnerIdentityMigration migration)
+    {
+        if (persistedOwner is null)
+        {
+            return;
+        }
+
+        var matchesPredecessor = string.Equals(
+            persistedOwner,
+            migration.PredecessorId,
+            StringComparison.OrdinalIgnoreCase);
+        var matchesSuccessor = string.Equals(
+            persistedOwner,
+            migration.SuccessorId,
+            StringComparison.OrdinalIgnoreCase);
+        if ((matchesPredecessor &&
+             !string.Equals(
+                 persistedOwner,
+                 migration.PredecessorId,
+                 StringComparison.Ordinal)) ||
+            (matchesSuccessor &&
+             !string.Equals(
+                 persistedOwner,
+                 migration.SuccessorId,
+                 StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                $"Persisted durable owner '{persistedOwner}' has different casing from the " +
+                "authorized owner identity; migration cannot choose an identity spelling.");
         }
     }
 

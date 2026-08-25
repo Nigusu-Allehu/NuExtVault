@@ -238,7 +238,7 @@ public static class ExternalExtensionPackageBuilder
             assets.Publisher,
             Sha256Hex(assets.ManifestJsonBytes),
             StructuralSha256(),
-            sdkVersion: ExtensionManifestJson.Parse(assets.ManifestJsonBytes).Sdk.Minimum,
+            sdkVersion: ExtensionSdkVersions.Current,
             manifestVersion: ExtensionManifestJson.Parse(assets.ManifestJsonBytes).SchemaVersion);
         var attestation = ConformanceAttestationFixture.SignToAttestationJson(
             payload,
