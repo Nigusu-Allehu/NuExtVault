@@ -44,6 +44,7 @@ public sealed class DocumentationExampleTests
         "user-07-package-layout",
         "user-07-trust-root",
         "user-07-staging-grants",
+        "user-07-identity-migration",
         "user-07-staging-start",
         "user-07-staging-routes",
         "user-08-limit-table",
@@ -69,6 +70,7 @@ public sealed class DocumentationExampleTests
         "user-07-package-layout",
         "user-07-trust-root",
         "user-07-staging-grants",
+        "user-07-identity-migration",
         "user-07-staging-start",
         "user-07-staging-routes",
         "user-08-limit-table",
@@ -151,6 +153,17 @@ public sealed class DocumentationExampleTests
         Assert.Equal(
             grants,
             Lines(examples["user-07-staging-grants"].Content));
+        using var identityMigration = JsonDocument.Parse(
+            examples["user-07-identity-migration"].Content);
+        Assert.Equal(
+            "NuTest.PackageStaging",
+            identityMigration.RootElement.GetProperty("predecessorId").GetString());
+        Assert.Equal(
+            "NuExtVault.PackageStaging",
+            identityMigration.RootElement.GetProperty("successorExtensionId").GetString());
+        Assert.Equal(
+            "NuExtVault.PackageStaging",
+            identityMigration.RootElement.GetProperty("successorPackageId").GetString());
 
         var stagingStart = examples["user-07-staging-start"].Content;
         Assert.StartsWith(
@@ -159,6 +172,10 @@ public sealed class DocumentationExampleTests
             StringComparison.Ordinal);
         Assert.Contains("--extension-root \"{{EXTENSION_ROOT}}\"", stagingStart, StringComparison.Ordinal);
         Assert.Contains("--extension-trust-root \"{{TRUST_ROOT}}\"", stagingStart, StringComparison.Ordinal);
+        Assert.Contains(
+            "--extension-identity-migration \"{{IDENTITY_MIGRATION}}\"",
+            stagingStart,
+            StringComparison.Ordinal);
         Assert.Equal(5, stagingStart.Split("--extension-grant", StringSplitOptions.None).Length - 1);
         Assert.All(grants, grant =>
             Assert.Contains($"--extension-grant {grant}", stagingStart, StringComparison.Ordinal));

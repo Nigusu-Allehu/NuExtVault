@@ -22,7 +22,20 @@ internal sealed record ServerProfile(
     ServerProfileKind Kind,
     ImmutableArray<ExtensionSelection> Extensions,
     ImmutableArray<CapabilityGrant> Grants,
-    ImmutableArray<ProfilePolicyRequirement> PolicyRequirements = default);
+    ImmutableArray<ProfilePolicyRequirement> PolicyRequirements = default,
+    ImmutableArray<OwnerIdentityMigrationAuthorization>
+        OwnerIdentityMigrationAuthorizations = default);
+
+internal sealed record OwnerIdentityMigrationAuthorization(
+    string PredecessorId,
+    string SuccessorExtensionId,
+    string SuccessorPackageId,
+    string ExpectedPublisher,
+    string ExpectedSigningKeyId,
+    string ExpectedSigningKeyFingerprint,
+    string ExpectedPackageVersion,
+    string ExpectedManifestDigest,
+    string ExpectedStagedContentDigest);
 
 internal sealed record ProfilePolicyRequirement(
     string PolicyPoint,

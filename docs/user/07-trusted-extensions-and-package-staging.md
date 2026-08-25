@@ -58,6 +58,38 @@ packages.content.write-staged
 publication.request
 ```
 
+The manifest-v2 contract declares the signed predecessor identity
+`NuTest.PackageStaging`, but that declaration does not authorize takeover. The host
+administrator must also provide an exact authorization bound to the predecessor,
+successor extension and package, publisher, signing-key ID, and SHA-256 fingerprint
+of the signing key's SubjectPublicKeyInfo:
+
+<!-- example-id: user-07-identity-migration; evidence: reference -->
+```json
+{
+  "predecessorId": "NuTest.PackageStaging",
+  "successorExtensionId": "NuExtVault.PackageStaging",
+  "successorPackageId": "NuExtVault.PackageStaging",
+  "expectedPublisher": "NuExtVault",
+  "expectedSigningKeyId": "<approved key ID>",
+  "expectedSigningKeyFingerprint": "<lowercase SPKI SHA-256>",
+  "expectedPackageVersion": "1.1.0",
+  "expectedManifestDigest": "<lowercase manifest SHA-256>",
+  "expectedStagedContentDigest": "<lowercase verified staged-content SHA-256>"
+}
+```
+
+On first startup against a pre-rename store, pass that file with
+`--extension-identity-migration`. The kernel verifies it against the loaded signed
+package version, manifest digest, and staged-content digest, then upgrades
+transactional extension state and checkpoints,
+staged-content ownership, and publication-journal idempotency/recovery ownership
+before listening. The crash journal binds the verified package, manifest, content,
+and authorization digest, so a changed package, key, or configuration cannot resume
+the mutation. A completed migration retains no runtime alias. Missing or ambiguous
+authorization, undeclared owners, or data under both identities fails closed rather
+than merging.
+
 The following is a non-executable reference because this repository cannot generate an
 administrator's production signing key or installable attestation. The functional
 suite executes the same argument shape with an ephemeral signed fixture.
@@ -67,6 +99,7 @@ suite executes the same argument shape with an ephemeral signed fixture.
 & "{{TOOL_COMMAND}}" start --port "{{PORT}}" --storage "{{STORAGE}}" `
   --extension-root "{{EXTENSION_ROOT}}" `
   --extension-trust-root "{{TRUST_ROOT}}" `
+  --extension-identity-migration "{{IDENTITY_MIGRATION}}" `
   --extension-grant host.clock.read `
   --extension-grant extension-state.read `
   --extension-grant extension-state.write `
@@ -106,7 +139,7 @@ group history. Backups include staging state, bytes, and publication journals.
 Restore them with the same trusted package configuration, then supply all grants
 again when starting.
 
-The SDK (`1.3.0`) and TestKit (`1.1.0`) target `net10.0` and are locally packable,
+The SDK (`1.4.0`) and TestKit (`1.1.0`) target `net10.0` and are locally packable,
 not externally published. There is no network extension feed, hot reload,
 sidecar, security sandbox, multi-node coordination, or optional degradation.
 

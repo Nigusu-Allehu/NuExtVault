@@ -19,13 +19,12 @@ var arguments = args.ToList();
 if (arguments.Count == 0)
 {
     Console.Error.WriteLine(
-        "Usage: nuextvault <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [--extension-grant <capability>] [package limit options] [authentication options]");
+        "Usage: nuextvault <start|backup|restore> [options]; start supports [--production] [--port <port>] [--data <directory>] [--storage <directory>] [--extension-root <directory>] [--extension-trust-root <json-file>] [--extension-identity-migration <json-file>] [--extension-grant <capability>] [package limit options] [authentication options]");
     return 2;
 }
 
 if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 {
-    var backupStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
     var output = ReadOption(arguments, "--output");
     if (output is null)
     {
@@ -35,13 +34,17 @@ if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 
     try
     {
+        var backupStorage = ResolveStorage(arguments);
         var manifest = await StorageBackup.CreateAsync(backupStorage, output);
         Console.WriteLine(
             $"Created backup '{Path.GetFullPath(output)}' with {manifest.Files.Count} files.");
         return 0;
     }
     catch (Exception exception) when (
-        exception is IOException or UnauthorizedAccessException or ArgumentException)
+        exception is IOException
+            or UnauthorizedAccessException
+            or ArgumentException
+            or InvalidOperationException)
     {
         Console.Error.WriteLine($"Backup failed: {exception.Message}");
         return 1;
@@ -50,7 +53,6 @@ if (string.Equals(arguments[0], "backup", StringComparison.OrdinalIgnoreCase))
 
 if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
 {
-    var restoreStorage = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
     var input = ReadOption(arguments, "--input");
     if (input is null)
     {
@@ -60,6 +62,8 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
 
     try
     {
+        var restoreStorage = ResolveStorage(arguments);
+        var ownerAuthorizations = ReadOwnerIdentityMigrationAuthorizations(arguments);
         using var externalRuntime = ExternalExtensionPackageLoader.Load(
             new ExternalExtensionConfiguration(
                 [.. ReadRepeatedPathOption(arguments, "--extension-root")],
@@ -85,6 +89,10 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
             input,
             restoreStorage,
             [.. KernelStateParticipants.BuiltIn, .. participants],
+            OwnerIdentityMigrationResolver.Resolve(
+                externalRuntime.Modules,
+                externalRuntime.Modules.Select(module => module.Contribution.Manifest.Identity.Id),
+                ownerAuthorizations),
             CancellationToken.None);
         Console.WriteLine(
             $"Restored {manifest.Files.Count} files into '{Path.GetFullPath(restoreStorage)}'.");
@@ -94,6 +102,8 @@ if (string.Equals(arguments[0], "restore", StringComparison.OrdinalIgnoreCase))
         exception is IOException
             or UnauthorizedAccessException
             or ArgumentException
+            or InvalidOperationException
+            or ServerHostingConfigurationException
             or CliConfigurationException)
     {
         Console.Error.WriteLine($"Restore failed: {exception.Message}");
@@ -114,10 +124,11 @@ if (!int.TryParse(port, out var parsedPort) || parsedPort is < 0 or > 65535)
     return 2;
 }
 
-var storageDirectory = ReadOption(arguments, "--storage") ?? LocalStoragePaths.DefaultRoot;
+string storageDirectory;
 PackageTransferLimits packageLimits;
 try
 {
+    storageDirectory = ResolveStorage(arguments);
     packageLimits = new PackageTransferLimits
     {
         MaxRequestBodyBytes = ReadPositiveLongOption(
@@ -144,7 +155,10 @@ try
     }.Validate();
 }
 catch (Exception exception) when (
-    exception is ArgumentException or OverflowException or CliConfigurationException)
+    exception is ArgumentException
+        or OverflowException
+        or InvalidOperationException
+        or CliConfigurationException)
 {
     Console.Error.WriteLine(exception.Message);
     return 2;
@@ -192,7 +206,9 @@ try
         trustedProxies: ParseTrustedProxies(arguments),
         extensionRoots: ReadRepeatedPathOption(arguments, "--extension-root"),
         extensionTrustRoots: ReadTrustRoots(arguments),
-        extensionGrants: ReadExtensionGrants(arguments));
+        extensionGrants: ReadExtensionGrants(arguments),
+        ownerIdentityMigrationAuthorizations:
+            ReadOwnerIdentityMigrationAuthorizations(arguments));
     app = ServerApplication.Build(composition);
 }
 catch (Exception exception) when (
@@ -280,6 +296,9 @@ static string? ReadOption(IReadOnlyList<string> arguments, string name)
     return null;
 }
 
+static string ResolveStorage(IReadOnlyList<string> arguments) =>
+    ReadOption(arguments, "--storage") ?? LocalStoragePaths.ResolveDefaultRoot();
+
 static ImmutableArray<string> ReadRepeatedPathOption(
     IReadOnlyList<string> arguments,
     string name)
@@ -337,6 +356,7 @@ static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string>
             throw new CliConfigurationException(
                 $"Extension trust-root file '{Path.GetFileName(path)}' does not exist.");
         }
+
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllBytes(path));
@@ -358,6 +378,46 @@ static ImmutableArray<ConformanceTrustRoot> ReadTrustRoots(IReadOnlyList<string>
         }
     }
     return roots.ToImmutable();
+}
+
+static ImmutableArray<OwnerIdentityMigrationAuthorization>
+    ReadOwnerIdentityMigrationAuthorizations(IReadOnlyList<string> arguments)
+{
+    var authorizations = ImmutableArray.CreateBuilder<OwnerIdentityMigrationAuthorization>();
+    foreach (var path in ReadRepeatedPathOption(arguments, "--extension-identity-migration"))
+    {
+        if (!File.Exists(path))
+        {
+            throw new CliConfigurationException(
+                $"Extension identity-migration file '{Path.GetFileName(path)}' does not exist.");
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+            var root = document.RootElement;
+            authorizations.Add(new OwnerIdentityMigrationAuthorization(
+                root.GetProperty("predecessorId").GetString()!,
+                root.GetProperty("successorExtensionId").GetString()!,
+                root.GetProperty("successorPackageId").GetString()!,
+                root.GetProperty("expectedPublisher").GetString()!,
+                root.GetProperty("expectedSigningKeyId").GetString()!,
+                root.GetProperty("expectedSigningKeyFingerprint").GetString()!,
+                root.GetProperty("expectedPackageVersion").GetString()!,
+                root.GetProperty("expectedManifestDigest").GetString()!,
+                root.GetProperty("expectedStagedContentDigest").GetString()!));
+        }
+        catch (Exception exception) when (
+            exception is JsonException or
+                FormatException or
+                InvalidOperationException or
+                KeyNotFoundException)
+        {
+            throw new CliConfigurationException(
+                $"Extension identity-migration file '{Path.GetFileName(path)}' is invalid.",
+                exception);
+        }
+    }
+    return authorizations.ToImmutable();
 }
 
 static TrustedProxyOptions? ParseTrustedProxies(IReadOnlyList<string> arguments)

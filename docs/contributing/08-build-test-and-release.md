@@ -69,7 +69,7 @@ dotnet tool install --tool-path "{{TOOLS}}" NuExtVault --configfile "{{NUGET_CON
 ```
 
 For a faster contributor loop without packaging, run
-`dotnet run --project .\src\NuExtVault.Cli -- start`.
+`dotnet run --project .\src\NuExtVault.Cli -- start --storage .\.nuextvault-data`.
 
 [`PackagingContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/PackagingContractTests.cs)
 inspect SDK/TestKit package contents and pack the independent consumer.

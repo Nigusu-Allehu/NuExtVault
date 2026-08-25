@@ -57,6 +57,8 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
 {
     internal const string ManifestV1Schema =
         "https://schemas.nuextvault.dev/extensions/manifest/v1";
+    internal const string ManifestV2Schema =
+        "https://schemas.nuextvault.dev/extensions/manifest/v2";
 
     public ExtensionManifest(
         ManifestSchemaVersion schemaVersion,
@@ -108,7 +110,9 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         OwnedOperations = [.. Operations.Select(operation => operation.Identity.Value)];
         Endpoints = [];
         Resources = [];
-        SchemaUri = ManifestV1Schema;
+        SchemaUri = schemaVersion == ExtensionSdkVersions.ManifestV2
+            ? ManifestV2Schema
+            : ManifestV1Schema;
     }
 
     internal ExtensionManifest(
@@ -202,6 +206,12 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
     /// </summary>
     public ExtensionStateDeclaration? State { get; init; }
 
+    /// <summary>
+    /// Previously attested identities whose durable kernel-owned state may be upgraded
+    /// to this identity. These authorize a one-time migration, never runtime aliasing.
+    /// </summary>
+    public ImmutableArray<string> IdentityPredecessors { get; init; } = [];
+
     internal string Id { get; }
 
     internal ExtensionVersion Version { get; }
@@ -224,6 +234,16 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
 
     internal string? ValidatedStagedContentDigest { get; init; }
 
+    internal string? ValidatedPackageId { get; init; }
+
+    internal string? ValidatedPackageVersion { get; init; }
+
+    internal string? ValidatedPublisher { get; init; }
+
+    internal string? ValidatedSigningKeyId { get; init; }
+
+    internal string? ValidatedSigningKeyFingerprint { get; init; }
+
     public bool Equals(ExtensionManifest? other) =>
         other is not null &&
         SchemaVersion == other.SchemaVersion &&
@@ -234,7 +254,8 @@ public sealed record ExtensionManifest : IEquatable<ExtensionManifest>
         Contributions.SequenceEqual(other.Contributions) &&
         Routes.SequenceEqual(other.Routes, RouteDeclarationComparer.Instance) &&
         Capabilities.SequenceEqual(other.Capabilities) &&
-        State == other.State;
+        State == other.State &&
+        IdentityPredecessors.SequenceEqual(other.IdentityPredecessors);
 
     public override int GetHashCode() => HashCode.Combine(SchemaVersion, Identity, Sdk, Contracts);
 

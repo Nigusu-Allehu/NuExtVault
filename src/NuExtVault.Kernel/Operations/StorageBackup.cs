@@ -79,6 +79,7 @@ public static class StorageBackup
         using var storageLease = AcquireStorageLease(root);
         try
         {
+            EnsureNoOwnerMigrationArtifacts(root);
             var (participants, checkpointId) = await CaptureStateCheckpointAsync(root, token);
             var files = new List<StorageBackupFile>();
             await using (var stream = File.Create(temporary))
@@ -155,14 +156,38 @@ public static class StorageBackup
         string backupPath,
         string storageDirectory,
         ImmutableArray<StateParticipantDescriptor> expectedParticipants,
+        CancellationToken token) =>
+        await RestoreAsync(backupPath, storageDirectory, expectedParticipants, [], token);
+
+    internal static async Task<StorageBackupManifest> RestoreAsync(
+        string backupPath,
+        string storageDirectory,
+        ImmutableArray<StateParticipantDescriptor> expectedParticipants,
+        ImmutableArray<OwnerIdentityMigration> ownerMigrations,
         CancellationToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(backupPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(storageDirectory);
+        DurableOwnerIdentityMigrator.ValidateDeclarations(ownerMigrations);
+        foreach (var migration in ownerMigrations)
+        {
+            if (expectedParticipants.Any(participant => string.Equals(
+                    participant.ExtensionId,
+                    migration.PredecessorId,
+                    StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ArgumentException(
+                    $"Active extension '{migration.PredecessorId}' cannot also be an identity " +
+                    $"predecessor of '{migration.SuccessorId}'.",
+                    nameof(ownerMigrations));
+            }
+        }
+
         var source = Path.GetFullPath(backupPath);
         var destination = Path.GetFullPath(storageDirectory);
         Directory.CreateDirectory(destination);
         using var storageLease = AcquireStorageLease(destination);
+        EnsureRestoreTargetHasNoOwnerMigrationArtifacts(destination);
         RecoverInterruptedRestore(destination);
         EnsureRestoreTargetIsClean(destination);
         var parent = Path.GetDirectoryName(destination)
@@ -209,8 +234,17 @@ public static class StorageBackup
             {
                 throw new InvalidDataException("Backup integrity manifest has no file list.");
             }
+            if (manifest.Files.Any(file => IsOwnerMigrationArtifact(file.Path)))
+            {
+                throw new InvalidDataException(
+                    "Backup contains an incomplete owner identity migration. Restart the source " +
+                    "server to complete migration, then create a new backup.");
+            }
 
-            var quarantined = ValidateParticipants(manifest, expectedParticipants);
+            var quarantined = ValidateParticipants(
+                manifest,
+                expectedParticipants,
+                ownerMigrations);
             EnsureFreeSpace(manifest, parent);
             foreach (var file in manifest.Files)
             {
@@ -475,7 +509,8 @@ public static class StorageBackup
 
     private static IReadOnlyList<string> ValidateParticipants(
         StorageBackupManifest manifest,
-        ImmutableArray<StateParticipantDescriptor> expected)
+        ImmutableArray<StateParticipantDescriptor> expected,
+        ImmutableArray<OwnerIdentityMigration> ownerMigrations)
     {
         if (manifest.Participants is null)
         {
@@ -495,14 +530,29 @@ public static class StorageBackup
                     "Backup integrity manifest declares an invalid or repeated extension state " +
                     "participant.");
             }
+
+            foreach (var migration in ownerMigrations)
+            {
+                if (declared.Contains(migration.PredecessorId) &&
+                    declared.Contains(migration.SuccessorId))
+                {
+                    throw new InvalidDataException(
+                        $"Backup declares both predecessor '{migration.PredecessorId}' and successor " +
+                        $"'{migration.SuccessorId}' extension state; refusing to merge them.");
+                }
+            }
         }
 
         var quarantined = new List<string>();
         foreach (var participant in manifest.Participants)
         {
+            var expectedId = ownerMigrations.FirstOrDefault(migration => string.Equals(
+                migration.PredecessorId,
+                participant.ExtensionId,
+                StringComparison.Ordinal))?.SuccessorId ?? participant.ExtensionId;
             var match = expected.FirstOrDefault(candidate => string.Equals(
                 candidate.ExtensionId,
-                participant.ExtensionId,
+                expectedId,
                 StringComparison.Ordinal));
             if (match is null)
             {
@@ -543,10 +593,20 @@ public static class StorageBackup
 
         foreach (var required in expected.Where(participant => participant.Required))
         {
-            if (!manifest.Participants.Any(participant => string.Equals(
-                    participant.ExtensionId,
-                    required.ExtensionId,
-                    StringComparison.Ordinal)))
+            if (!manifest.Participants.Any(participant =>
+                    string.Equals(
+                        participant.ExtensionId,
+                        required.ExtensionId,
+                        StringComparison.Ordinal) ||
+                    ownerMigrations.Any(migration =>
+                        string.Equals(
+                            migration.PredecessorId,
+                            participant.ExtensionId,
+                            StringComparison.Ordinal) &&
+                        string.Equals(
+                            migration.SuccessorId,
+                            required.ExtensionId,
+                            StringComparison.Ordinal))))
             {
                 throw new InvalidDataException(
                     $"Backup is missing required extension state for '{required.ExtensionId}'.");
@@ -824,6 +884,54 @@ public static class StorageBackup
             ReservedExtensionStateFileNames.Contains(segments[^1], StringComparer.OrdinalIgnoreCase);
     }
 
+    private static void EnsureNoOwnerMigrationArtifacts(string root)
+    {
+        if (HasOwnerMigrationArtifacts(root))
+        {
+            throw new InvalidOperationException(
+                "Storage has an incomplete owner identity migration. Restart the server to " +
+                "complete migration before creating a backup.");
+        }
+    }
+
+    private static void EnsureRestoreTargetHasNoOwnerMigrationArtifacts(string root)
+    {
+        if (HasOwnerMigrationArtifacts(root))
+        {
+            throw new InvalidOperationException(
+                "Restore target has an incomplete owner identity migration. Restart the " +
+                "original server to complete migration, or restore into a different clean path.");
+        }
+    }
+
+    private static bool HasOwnerMigrationArtifacts(string root)
+    {
+        var stateRoot = Path.Combine(root, ExtensionStateDirectoryName);
+        return File.Exists(Path.Combine(root, DurableOwnerIdentityMigrator.JournalFileName)) ||
+               File.Exists(Path.Combine(
+                   root,
+                   DurableOwnerIdentityMigrator.JournalFileName + ".tmp")) ||
+               Directory.Exists(stateRoot) &&
+               Directory.EnumerateDirectories(
+                       stateRoot,
+                       ".owner-migration-*",
+                       SearchOption.AllDirectories)
+                   .Any();
+    }
+
+    private static bool IsOwnerMigrationArtifact(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+        return string.Equals(
+                   normalized,
+                   DurableOwnerIdentityMigrator.JournalFileName,
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(
+                   "/" + DurableOwnerIdentityMigrator.JournalFileName,
+                   StringComparison.OrdinalIgnoreCase) ||
+               normalized.Split('/').Any(segment =>
+                   segment.StartsWith(".owner-migration-", StringComparison.OrdinalIgnoreCase));
+    }
     private static void ValidateRelativePath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) ||

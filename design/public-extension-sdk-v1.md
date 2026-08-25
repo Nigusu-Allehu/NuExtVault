@@ -3,8 +3,9 @@
 ## Status and scope
 
 This is the authoritative policy for the NuExtVault public extension SDK v1
-surface stabilized by Microkernel Step 19, loaded by Step 20, and additively extended
-to SDK `1.3.0` by Step 22. The implementation
+surface stabilized by Microkernel Step 19, loaded by Step 20, additively extended
+to SDK `1.3.0` by Step 22, and extended to SDK package `1.4.0` by the
+Package Staging identity-lineage contract. The implementation
 and package projects exist in this repository, can be packed locally, and are
 exercised by official and separately packaged test extensions. They have not been
 published to NuGet.org or any other external feed.
@@ -24,8 +25,9 @@ The two public package and assembly identities are:
 
 | Package and assembly | Version | Purpose |
 | --- | --- | --- |
-| `NuExtVault.Extensions.Sdk` | `1.3.0` | Supported extension contracts, strict JSON manifest parser, schema, canonical identities, conformance checks, and attestation APIs |
+| `NuExtVault.Extensions.Sdk` | `1.4.0` | Supported extension contracts, strict JSON manifest parser, schemas, canonical identities, conformance checks, and attestation APIs |
 | `NuExtVault.Extensions.TestKit` | `1.1.0` | Typed manifest builder, capability fake, and conformance helper |
+| `NuExtVault.PackageStaging` | `1.1.0` | Optional reference extension using manifest v2 and SDK minimum 1.4.0 |
 
 Both packages target only `net10.0`. This is intentional for v1: the server,
 kernel, official extension assembly, CLI, functional tests, and independently
@@ -34,9 +36,17 @@ that this repository does not build or test. The SDK package has no ASP.NET Core
 dependency-injection, database, NuGet.Protocol, storage, kernel, host, security, or
 official-extension dependency. TestKit depends only on the SDK project.
 
-The SDK package includes
-`contentFiles/any/any/nuextvault/extension-manifest-v1.schema.json`. TestKit is a
-separate assembly so its builders and fakes do not enlarge the runtime contract.
+The SDK package includes both
+`contentFiles/any/any/nuextvault/extension-manifest-v1.schema.json` and
+`extension-manifest-v2.schema.json`. TestKit is a separate assembly so its builders
+and fakes do not enlarge the runtime contract.
+
+The SDK package and file versions advance to `1.4.0`, but `AssemblyVersion` remains
+`1.3.0.0`. Manifest v2 and its lineage property are additive to the public API and
+retain structural contract v1, so preserving the assembly identity lets extensions
+compiled against SDK 1.3 bind to the compatible host assembly. Loader tests cover a
+package attested for SDK 1.3. A future binary-incompatible SDK must use a new assembly
+identity rather than reusing this compatibility decision.
 
 ## Manifest and public contribution surface
 
@@ -54,6 +64,13 @@ missing required members, unsupported schemas or SDK ranges, invalid versions,
 duplicate identities, implicit capability requirements, and replacement requests.
 It returns errors ordered by JSON path and error code. The JSON schema and strict
 runtime parser are both part of the local SDK package.
+
+Manifest schema/contract v1 remains supported and rejects the
+`identityPredecessors` member. Manifest schema/contract v2 requires SDK minimum
+`1.4.0` and permits that signed lineage declaration. Lineage never authorizes
+durable-state takeover by itself: the host administrator must separately authorize
+the exact predecessor, successor extension/package, publisher, signing key ID and
+SPKI fingerprint, package version, manifest digest, and staged-content digest.
 
 `NuExtVault.Extensions.TestKit.ManifestBuilder` is the typed authoring
 equivalent. It deterministically orders operation, contribution, route, and
@@ -109,8 +126,8 @@ capability contract, and structural contract identities are independent typed
 surfaces. Sidecar RPC would be an additional independent surface, but no sidecar
 contract exists in Step 19.
 
-The host-supported SDK range today is `1.0.0` through `1.3.0`, inclusive, and only
-within major version 1. An SDK below `1.0.0`, above `1.3.0`, or in another major is
+The host-supported SDK range today is `1.0.0` through `1.4.0`, inclusive, and only
+within major version 1. An SDK below `1.0.0`, above `1.4.0`, or in another major is
 unsupported. A manifest range must include a host-supported selection, and every
 declared contract version and structural identity must match that selection.
 Unknown required fields, unsupported ranges, missing identities, or any version or

@@ -10,7 +10,8 @@ the tool.
 <!-- example-id: user-01-global-install; evidence: reference -->
 ```powershell
 dotnet tool install --global NuExtVault
-nuextvault start
+$storage = Join-Path ([System.IO.Path]::GetTempPath()) ("nuextvault-" + [guid]::NewGuid().ToString("N"))
+nuextvault start --storage $storage
 ```
 
 The initial `1.0.0` package becomes available only after the protected release

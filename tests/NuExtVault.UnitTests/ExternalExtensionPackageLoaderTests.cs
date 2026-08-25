@@ -223,6 +223,26 @@ public sealed class ExternalExtensionPackageLoaderTests(ExternalExtensionAssetsF
         AssertFailed(runtime, "external-extension.trust-root-missing");
     }
 
+    [Fact]
+    public void A_v1_package_attested_against_sdk_1_3_remains_loadable()
+    {
+        var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey();
+        using var roots = ExternalExtensionRootFixture.CreateRoots();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(Assets, key);
+        roots.WritePackage(
+            "flavors.nupkg",
+            ReplaceAttestation(
+                package,
+                key,
+                sdkVersion: new SdkContractVersion(1, 3, 0)));
+
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            Configuration(roots, trustRoot));
+
+        Assert.Single(runtime.Modules);
+        Assert.All(runtime.Diagnostics.Results, result => Assert.True(result.Succeeded));
+    }
+
     // ---- attestation matrix ----------------------------------------------------
 
     public static IEnumerable<object[]> AttestationFailureCases()

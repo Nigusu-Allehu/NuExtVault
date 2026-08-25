@@ -1,12 +1,13 @@
 {
-  "$schema": "https://schemas.nuextvault.dev/extensions/manifest/v1",
-  "schemaVersion": 1,
+  "$schema": "https://schemas.nuextvault.dev/extensions/manifest/v2",
+  "schemaVersion": 2,
   "id": "NuExtVault.PackageStaging",
-  "version": "1.0.0",
+  "identityPredecessors": [ "NuTest.PackageStaging" ],
+  "version": "1.1.0",
   "publisher": "NuExtVault",
-  "sdk": { "minimum": "1.3.0", "maximumExclusive": "2.0.0" },
+  "sdk": { "minimum": "1.4.0", "maximumExclusive": "2.0.0" },
   "contracts": {
-    "manifest": 1,
+    "manifest": 2,
     "operation": 1,
     "contribution": 1,
     "route": 1,

@@ -75,12 +75,24 @@ public static class ServerApplication
         WebApplicationBuilder builder,
         ServerComposition composition)
     {
+        FileStream? storageRootLease = null;
         try
         {
-            return Build(builder, composition);
+            if (composition.StorageDirectory is not null)
+            {
+                Directory.CreateDirectory(composition.StorageDirectory);
+                storageRootLease =
+                    DurablePackageStore.AcquireRootLease(composition.StorageDirectory);
+                DurableOwnerIdentityMigrator.Migrate(
+                    composition.StorageDirectory,
+                    CreateOwnerIdentityMigrations(composition));
+            }
+
+            return Build(builder, composition, storageRootLease);
         }
         catch
         {
+            storageRootLease?.Dispose();
             composition.StorageLease?.Dispose();
             composition.ExternalExtensions.Dispose();
             throw;
@@ -89,7 +101,8 @@ public static class ServerApplication
 
     private static WebApplication Build(
         WebApplicationBuilder builder,
-        ServerComposition composition)
+        ServerComposition composition,
+        FileStream? storageRootLease)
     {
         var hosting = composition.Hosting;
         var runtimeState = composition.RuntimeState;
@@ -138,7 +151,11 @@ public static class ServerApplication
         builder.Services.AddSingleton<IPackageStore>(_ =>
             storageDirectory is null
                 ? new InMemoryPackageStore(limits: packageLimits)
-                : new DurablePackageStore(storageDirectory, packageLimits));
+                : new DurablePackageStore(
+                    storageDirectory,
+                    packageLimits,
+                    storageRootLease ??
+                    throw new InvalidOperationException("The storage root lease is unavailable.")));
         builder.Services.AddSingleton<IPackageCandidateStore>(provider =>
             new PackageCandidateReader(provider.GetRequiredService<IPackageStore>()));
         var supplyChainOptions = (composition.SupplyChain ?? new SupplyChainOptions()).Validate();
@@ -352,6 +369,15 @@ public static class ServerApplication
                 manifest.State.Required).Validate());
         return [.. KernelStateParticipants.BuiltIn, .. declared];
     }
+
+    internal static ImmutableArray<OwnerIdentityMigration> CreateOwnerIdentityMigrations(
+        ServerComposition composition) =>
+        OwnerIdentityMigrationResolver.Resolve(
+            composition.Modules,
+            composition.ExtensionGraph.Extensions.Select(extension => extension.Id),
+            composition.Profile.OwnerIdentityMigrationAuthorizations.IsDefault
+                ? []
+                : composition.Profile.OwnerIdentityMigrationAuthorizations);
 
     private static void MapMiddleware(WebApplication app)
     {

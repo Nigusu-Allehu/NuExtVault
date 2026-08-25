@@ -37,6 +37,14 @@ Request logs include method, path, status, and elapsed time.
 Stop the server first: a live server owns the exclusive storage lease. The
 output archive must not already exist.
 
+When `--storage` is omitted, `start`, `backup`, and `restore` use an existing
+pre-rename `%LOCALAPPDATA%/nuget-test-server` root only when
+`%LOCALAPPDATA%/nuextvault` does not exist. If neither root exists, or if both
+exist, the command fails with instructions to pass `--storage`. This fail-closed
+policy prevents an older and newer binary started concurrently from silently
+creating separate repositories. An explicit `--storage` path is always used
+exactly as supplied.
+
 <!-- example-id: user-06-backup; evidence: executable -->
 ```powershell
 & "{{TOOL_COMMAND}}" backup --storage "{{STORAGE}}" --output "{{BACKUP}}"
@@ -47,6 +55,14 @@ security audit logs, trash, vulnerability state, transactional extension state,
 staged content, publication recovery state, and SHA-256 manifest data.
 Credentials, TLS configuration, request history, and fault rules are excluded.
 Treat archives as sensitive.
+
+Backup refuses to run while an owner-identity migration journal or staging
+directory exists. Restart the server with the same signed package and administrator
+authorization to complete migration, then create the backup. Restore also rejects
+older archives containing such incomplete artifacts instead of attempting to merge
+mixed migration phases.
+Restore likewise refuses a target that still contains an owner-migration journal
+or staging directory; complete that migration or choose another clean target.
 
 ## Restore to clean storage
 

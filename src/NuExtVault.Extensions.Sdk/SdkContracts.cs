@@ -295,11 +295,13 @@ public static class ExtensionSdkVersions
     public static SdkContractIdentity Identity { get; } =
         new("NuExtVault.Extensions.Sdk");
 
-    public static SdkContractVersion Current { get; } = new(1, 3, 0);
+    public static SdkContractVersion Current { get; } = new(1, 4, 0);
 
     public static SdkContractVersion OldestSupported { get; } = new(1, 0, 0);
 
     public static ManifestSchemaVersion ManifestV1 { get; } = new(1);
+
+    public static ManifestSchemaVersion ManifestV2 { get; } = new(2);
 
     public static OperationContractVersion OperationV1 { get; } = new(1);
 

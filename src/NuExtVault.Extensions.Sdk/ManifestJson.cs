@@ -41,7 +41,8 @@ public static class ExtensionManifestJson
         "contributions",
         "routes",
         "capabilities",
-        "state");
+        "state",
+        "identityPredecessors");
 
     /// <summary>
     /// Headers a route may never declare. Credential, transport, and proxy headers stay
@@ -94,7 +95,6 @@ public static class ExtensionManifestJson
 
             var root = document.RootElement;
             var errors = new List<ManifestValidationError>();
-            UnknownMembers(root, RootMembers, "$", errors);
             Require(
                 root,
                 [
@@ -119,16 +119,19 @@ public static class ExtensionManifestJson
 
             var schemaVersion = Integer(root, "schemaVersion", "$.schemaVersion", errors);
             var schema = String(root, "$schema", "$.$schema", errors);
-            if (schemaVersion != 1 ||
+            UnknownMembers(root, RootMembers, "$", errors);
+            if ((schemaVersion != 1 && schemaVersion != 2) ||
                 !string.Equals(
                     schema,
-                    ExtensionManifest.ManifestV1Schema,
+                    schemaVersion == 2
+                        ? ExtensionManifest.ManifestV2Schema
+                        : ExtensionManifest.ManifestV1Schema,
                     StringComparison.Ordinal))
             {
                 errors.Add(Error(
                     "$.schemaVersion",
                     "manifest.schema.unsupported",
-                    "Only manifest schema version 1 is supported."));
+                    "Only manifest schema versions 1 and 2 are supported."));
             }
 
             var id = String(root, "id", "$.id", errors);
@@ -156,12 +159,29 @@ public static class ExtensionManifestJson
             }
 
             var sdk = ParseSdk(root, errors);
-            var contracts = ParseContracts(root, errors);
+            var contracts = ParseContracts(root, schemaVersion, errors);
             var operations = ParseOperations(root, id, errors);
             var routes = ParseRoutes(root, operations, errors);
             var contributions = ParseContributions(root, id, routes, errors);
             var capabilities = ParseCapabilities(root, errors);
             var state = ParseState(root, errors);
+            var identityPredecessors = ParseIdentityPredecessors(root, id, errors);
+            if (schemaVersion == 1 && root.TryGetProperty("identityPredecessors", out _))
+            {
+                errors.Add(Error(
+                    "$.identityPredecessors",
+                    "manifest.identity-predecessor.schema-required",
+                    "Identity predecessors require manifest schema version 2."));
+            }
+            if (schemaVersion == 2 &&
+                sdk is not null &&
+                sdk.Minimum.CompareTo(new SdkContractVersion(1, 4, 0)) < 0)
+            {
+                errors.Add(Error(
+                    "$.sdk.minimum",
+                    "manifest.sdk.minimum-required",
+                    "Manifest schema version 2 requires SDK 1.4.0 or newer."));
+            }
 
             if (errors.Count > 0)
             {
@@ -177,7 +197,10 @@ public static class ExtensionManifestJson
                 contributions,
                 routes,
                 capabilities,
-                state);
+                state)
+            {
+                IdentityPredecessors = identityPredecessors
+            };
             return new ManifestValidationResult(manifest, []);
         }
     }
@@ -254,6 +277,16 @@ public static class ExtensionManifestJson
             writer.WriteEndArray();
 
             writer.WriteString("id", manifest.Identity.Id);
+            if (!manifest.IdentityPredecessors.IsDefaultOrEmpty)
+            {
+                writer.WritePropertyName("identityPredecessors");
+                writer.WriteStartArray();
+                foreach (var predecessor in manifest.IdentityPredecessors.Order(StringComparer.Ordinal))
+                {
+                    writer.WriteStringValue(predecessor);
+                }
+                writer.WriteEndArray();
+            }
             writer.WritePropertyName("operations");
             writer.WriteStartArray();
             foreach (var operation in manifest.Operations
@@ -386,6 +419,7 @@ public static class ExtensionManifestJson
 
     private static ContractVersionSet? ParseContracts(
         JsonElement root,
+        int schemaVersion,
         List<ManifestValidationError> errors)
     {
         if (!Object(root, "contracts", "$.contracts", errors, out var contracts))
@@ -427,7 +461,7 @@ public static class ExtensionManifestJson
                 "structural",
                 "$.contracts.structural",
                 errors)));
-        if (result.Manifest.Value != 1 ||
+        if (result.Manifest.Value != schemaVersion ||
             result.Operation.Value != 1 ||
             result.Contribution.Value != 1 ||
             result.Route.Value != 1 ||
@@ -437,7 +471,8 @@ public static class ExtensionManifestJson
             errors.Add(Error(
                 "$.contracts",
                 "manifest.contract.unsupported",
-                "Manifest v1 requires every structural contract at version 1."));
+                $"Manifest v{schemaVersion} requires its manifest contract at version " +
+                $"{schemaVersion} and every other structural contract at version 1."));
         }
 
         return result;
@@ -850,6 +885,75 @@ public static class ExtensionManifestJson
         }
 
         return new ExtensionStateDeclaration(schemaName, schemaVersion, required);
+    }
+
+    private static ImmutableArray<string> ParseIdentityPredecessors(
+        JsonElement root,
+        string currentId,
+        List<ManifestValidationError> errors)
+    {
+        if (!root.TryGetProperty("identityPredecessors", out var value))
+        {
+            return [];
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            errors.Add(Error(
+                "$.identityPredecessors",
+                "manifest.identity-predecessors.invalid",
+                "Identity predecessors must be an array."));
+            return [];
+        }
+
+        if (value.GetArrayLength() > 16)
+        {
+            errors.Add(Error(
+                "$.identityPredecessors",
+                "manifest.identity-predecessors.too-many",
+                "At most 16 identity predecessors may be declared."));
+        }
+
+        var result = ImmutableArray.CreateBuilder<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var index = 0;
+        foreach (var item in value.EnumerateArray())
+        {
+            var path = $"$.identityPredecessors[{index++}]";
+            var predecessor = item.ValueKind == JsonValueKind.String
+                ? item.GetString() ?? string.Empty
+                : string.Empty;
+            if (!StableIdentity.IsStable(predecessor))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.invalid",
+                    "Identity predecessors must be stable extension identities."));
+                continue;
+            }
+
+            if (string.Equals(predecessor, currentId, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.self",
+                    "An extension cannot declare its current identity as a predecessor."));
+                continue;
+            }
+
+            if (!seen.Add(predecessor))
+            {
+                errors.Add(Error(
+                    path,
+                    "manifest.identity-predecessor.duplicate",
+                    "Identity predecessors must be distinct."));
+                continue;
+            }
+
+            result.Add(predecessor);
+        }
+
+        return [.. result.Order(StringComparer.Ordinal)];
     }
 
     private static ImmutableArray<CapabilityRequest> ParseCapabilities(

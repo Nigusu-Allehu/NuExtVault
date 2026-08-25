@@ -44,7 +44,8 @@ public static class ConformanceAttestationFixture
         string manifestSha256,
         string structuralSha256,
         SdkContractVersion? sdkVersion = null,
-        string? suite = null) =>
+        string? suite = null,
+        ManifestSchemaVersion? manifestVersion = null) =>
         new(
             PayloadVersion: 1,
             PackageId: packageId,
@@ -52,7 +53,7 @@ public static class ConformanceAttestationFixture
             Publisher: publisher,
             ManifestSha256: manifestSha256,
             SdkVersion: sdkVersion ?? ExtensionSdkVersions.Current,
-            ManifestVersion: ExtensionSdkVersions.ManifestV1,
+            ManifestVersion: manifestVersion ?? ExtensionSdkVersions.ManifestV1,
             OperationVersion: ExtensionSdkVersions.OperationV1,
             ContributionVersion: ExtensionSdkVersions.ContributionV1,
             RouteVersion: ExtensionSdkVersions.RouteV1,

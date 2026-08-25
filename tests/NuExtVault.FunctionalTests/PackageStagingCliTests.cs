@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using NuExtVault.Extensions.Sdk;
 using NuExtVault.ExternalExtensionTestKit;
+using NuExtVault.Hosting;
+using NuExtVault.Operations;
 using NuExtVault.Packages;
 
 namespace NuExtVault.FunctionalTests;
@@ -94,6 +97,107 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
         }
     }
 
+    [Fact]
+    public async Task Restore_with_missing_migration_authorization_fails_cleanly()
+    {
+        using var install = Install(fixture.StagingAssets);
+        var backup = await CreateEmptyBackupAsync(install);
+
+        var result = await RunRestoreAsync(install, backup, includeAuthorization: false);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Restore failed:", result.Output, StringComparison.Ordinal);
+        Assert.Contains("administrator authorization", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unhandled exception", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Restore_with_mismatched_artifact_authorization_fails_cleanly()
+    {
+        using var install = Install(fixture.StagingAssets);
+        var backup = await CreateEmptyBackupAsync(install);
+        using (var document = JsonDocument.Parse(File.ReadAllBytes(install.IdentityMigrationPath)))
+        {
+            var values = document.RootElement.EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone());
+            values["expectedPackageVersion"] =
+                JsonDocument.Parse("\"9.9.9\"").RootElement.Clone();
+            File.WriteAllText(install.IdentityMigrationPath, JsonSerializer.Serialize(values));
+        }
+
+        var result = await RunRestoreAsync(install, backup, includeAuthorization: true);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Restore failed:", result.Output, StringComparison.Ordinal);
+        Assert.Contains("does not match", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unhandled exception", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Restore_with_null_artifact_digest_fails_cleanly()
+    {
+        using var install = Install(fixture.StagingAssets);
+        var backup = await CreateEmptyBackupAsync(install);
+        using (var document = JsonDocument.Parse(File.ReadAllBytes(install.IdentityMigrationPath)))
+        {
+            var values = document.RootElement.EnumerateObject()
+                .ToDictionary(property => property.Name, property => property.Value.Clone());
+            values["expectedManifestDigest"] =
+                JsonDocument.Parse("null").RootElement.Clone();
+            File.WriteAllText(install.IdentityMigrationPath, JsonSerializer.Serialize(values));
+        }
+
+        var result = await RunRestoreAsync(install, backup, includeAuthorization: true);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("Restore failed:", result.Output, StringComparison.Ordinal);
+        Assert.Contains("authorization is invalid", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Unhandled exception", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<string> CreateEmptyBackupAsync(StagingInstall install)
+    {
+        var source = Path.Combine(install.Root, "backup-source");
+        Directory.CreateDirectory(source);
+        var backup = Path.Combine(install.Root, "backup.zip");
+        await StorageBackup.CreateAsync(source, backup);
+        return backup;
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunRestoreAsync(
+        StagingInstall install,
+        string backup,
+        bool includeAuthorization)
+    {
+        var cliPath = Path.Combine(AppContext.BaseDirectory, "NuExtVault.Cli.dll");
+        var arguments = new StringBuilder()
+            .Append('"').Append(cliPath).Append('"')
+            .Append(" restore --input \"").Append(backup).Append('"')
+            .Append(" --storage \"").Append(install.StorageRoot).Append('"')
+            .Append(" --extension-root \"").Append(install.ExtensionRoot).Append('"')
+            .Append(" --extension-trust-root \"").Append(install.TrustRootPath).Append('"');
+        if (includeAuthorization)
+        {
+            arguments.Append(" --extension-identity-migration \"")
+                .Append(install.IdentityMigrationPath)
+                .Append('"');
+        }
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments = arguments.ToString(),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        })!;
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return (process.ExitCode, await output + await error);
+    }
+
     private static async Task<string> OutcomeAsync(HttpResponseMessage response)
     {
         var body = await response.Content.ReadAsStringAsync();
@@ -114,9 +218,10 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
     {
         var (key, trustRoot) = ConformanceAttestationFixture.CreateTrustedKey(publisher: "NuExtVault");
         var install = StagingInstall.Create();
+        var package = ExternalExtensionPackageBuilder.BuildValidPackage(assets, key);
         File.WriteAllBytes(
             Path.Combine(install.ExtensionRoot, "NuExtVault.PackageStaging.nupkg"),
-            ExternalExtensionPackageBuilder.BuildValidPackage(assets, key));
+            package);
         File.WriteAllText(
             install.TrustRootPath,
             JsonSerializer.Serialize(new
@@ -126,6 +231,28 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
                 algorithm = trustRoot.Algorithm,
                 subjectPublicKeyInfoBase64 =
                     Convert.ToBase64String(trustRoot.SubjectPublicKeyInfo.ToArray())
+            }));
+        using var runtime = ExternalExtensionPackageLoader.Load(
+            new ExternalExtensionConfiguration(
+                [install.ExtensionRoot],
+                [trustRoot],
+                TimeProvider.System));
+        var identity = Assert.Single(runtime.Diagnostics.Results).ActivationIdentity
+            ?? throw new InvalidOperationException("The staging package did not load.");
+        File.WriteAllText(
+            install.IdentityMigrationPath,
+            JsonSerializer.Serialize(new
+            {
+                predecessorId = "NuTest.PackageStaging",
+                successorExtensionId = "NuExtVault.PackageStaging",
+                successorPackageId = "NuExtVault.PackageStaging",
+                expectedPublisher = trustRoot.Publisher,
+                expectedSigningKeyId = trustRoot.KeyId,
+                expectedSigningKeyFingerprint = Convert.ToHexStringLower(
+                    SHA256.HashData(trustRoot.SubjectPublicKeyInfo.Span)),
+                expectedPackageVersion = identity.PackageVersion,
+                expectedManifestDigest = identity.ManifestDigest,
+                expectedStagedContentDigest = identity.StagedContentIdentity
             }));
         return install;
     }
@@ -139,7 +266,10 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
             .Append(" start --port ").Append(port)
             .Append(" --storage \"").Append(install.StorageRoot).Append('"')
             .Append(" --extension-root \"").Append(install.ExtensionRoot).Append('"')
-            .Append(" --extension-trust-root \"").Append(install.TrustRootPath).Append('"');
+            .Append(" --extension-trust-root \"").Append(install.TrustRootPath).Append('"')
+            .Append(" --extension-identity-migration \"")
+            .Append(install.IdentityMigrationPath)
+            .Append('"');
         foreach (var grant in grants)
         {
             arguments.Append(" --extension-grant ").Append(grant);
@@ -195,6 +325,7 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
             ExtensionRoot = Path.Combine(root, "extensions");
             StorageRoot = Path.Combine(root, "storage");
             TrustRootPath = Path.Combine(root, "trust-root.json");
+            IdentityMigrationPath = Path.Combine(root, "identity-migration.json");
             Directory.CreateDirectory(ExtensionRoot);
             Directory.CreateDirectory(StorageRoot);
         }
@@ -206,6 +337,8 @@ public sealed class PackageStagingCliTests(PackageStagingFunctionalAssetsFixture
         public string StorageRoot { get; }
 
         public string TrustRootPath { get; }
+
+        public string IdentityMigrationPath { get; }
 
         public static StagingInstall Create() =>
             new(Path.Combine(
