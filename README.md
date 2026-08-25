@@ -8,11 +8,15 @@ development workflows.
 
 ## Quick start
 
-Install the .NET SDK 10.0, then run:
+Install the .NET SDK 10.0, then install and run the global tool:
 
 ```powershell
-dotnet run --project .\src\NuExtVault.Cli -- start
+dotnet tool install --global NuExtVault
+nuextvault start
 ```
+
+Contributors can run the source checkout with
+`dotnet run --project .\src\NuExtVault.Cli -- start`.
 
 - [User manual](docs/user/README.md)
 - [Contributor manual](docs/contributing/README.md)

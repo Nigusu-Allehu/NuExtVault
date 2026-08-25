@@ -46,15 +46,31 @@ capability, SDK API, canonical manifest, and structural snapshots deliberately.
 
 ## Packaging and consumer smoke
 
-Release-pack these projects when their surfaces are affected:
+Only `src\NuExtVault.Cli` is released publicly. It produces the .NET 10 global
+tool package `NuExtVault` and the command `nuextvault`. The SDK, TestKit,
+official extensions, Package Staging, and fixtures remain unpublished; their
+local package tests continue to validate extension boundaries.
 
-- `src\NuExtVault.Extensions.Sdk`;
-- `src\NuExtVault.Extensions.TestKit`;
-- `tests\NuExtVault.SdkFixture`;
-- `src\NuExtVault.Cli`;
-- `src\NuExtVault.Extensions.PackageStaging`.
+Use these commands to exercise the exact tool package from an isolated local
+feed:
 
-Use `--configuration Release -p:TreatWarningsAsErrors=true --output <directory>`.
+<!-- example-id: contrib-08-local-tool-pack-install; evidence: executable -->
+```powershell
+dotnet pack .\src\NuExtVault.Cli\NuExtVault.Cli.csproj --configuration Release -p:TreatWarningsAsErrors=true --output "{{ARTIFACTS}}"
+@"
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="ExactPackage" value="{{ARTIFACTS}}" />
+  </packageSources>
+</configuration>
+"@ | Set-Content "{{NUGET_CONFIG}}"
+dotnet tool install --tool-path "{{TOOLS}}" NuExtVault --configfile "{{NUGET_CONFIG}}" --version 1.0.0 --no-cache
+```
+
+For a faster contributor loop without packaging, run
+`dotnet run --project .\src\NuExtVault.Cli -- start`.
+
 [`PackagingContractTests`](../../tests/NuExtVault.Extensions.Sdk.Tests/PackagingContractTests.cs)
 inspect SDK/TestKit package contents and pack the independent consumer.
 `DocumentationExampleTests` installs and exercises the CLI tool from a local
@@ -64,9 +80,9 @@ exercise the built CLI. Package Staging tests assemble loading
 metadata and an ephemeral ES256 attestation, then perform real-host installation
 and publication smoke.
 
-Packing produces local artifacts only. A raw Package Staging `.nupkg` is not
+Local packing produces local artifacts only. A raw Package Staging `.nupkg` is not
 loader-ready without package metadata and a trusted attestation. No external
-publication workflow or production signing service exists.
+publication includes those extension packages.
 
 ## Cross-platform CI
 
@@ -84,8 +100,7 @@ The general matrix retains SDK/TestKit packaging contracts and Package Staging
 loading/functional smoke. The documentation matrix owns link/navigation,
 stable-ID, evidence/drift, SDK compilation, root quick-start, and CLI
 pack/install checks. Avoid shell-only setup, path separator, filename-casing,
-and locked-file assumptions. External publication, production signing, and
-release automation remain absent.
+and locked-file assumptions. Hosted cross-platform checks remain required before the first live release.
 
 ## Review, rollback, and release
 
@@ -99,12 +114,41 @@ removed from configured roots and the host restarted. State or backup changes
 require a tested backup, previous executable/image, clean restore target, and
 explicit downgrade behavior.
 
-The repository currently has no tracked package-publication or release workflow.
-Supported release preparation ends at reviewed, locally packed artifacts plus
-the CI evidence applicable to the change. First external publication requires a
-separate approved design for coordinated versions, feed ownership, signing,
-provenance, secrets, support-window activation, smoke tests, and
-rollback/unlisting.
+`.github/workflows/release.yml` runs only for `v*` tags or manual dispatch. It
+restores, performs a warning-as-error Release build, runs the full solution,
+packs once, verifies that the requested version exactly matches the project
+version, inspects and installs the exact package from an isolated feed, starts
+real Kestrel, probes readiness, uninstalls the tool, and uploads the validated
+package. Its publish job uses the protected `nuget.org` environment and exchanges
+GitHub OIDC for a short-lived credential through `NuGet/login@v1`; no long-lived
+NuGet API key is stored.
+
+Every action in the release workflow is pinned to a reviewed full commit SHA;
+the adjacent version comment records the corresponding upstream release.
+Dependabot checks GitHub Actions weekly and groups action updates into a review
+PR. Review upstream release notes and the old-to-new commit diff, then rerun the
+publication workflow contracts and local package smoke before accepting a pin
+update. Never replace a release-workflow SHA with a mutable tag.
+
+Before the first release, an administrator must create the `nuget.org` GitHub
+environment with required reviewers and prevent self-review where the repository
+plan supports it. Restrict environment deployment refs to the `main` branch and
+protected `v*` tags. Add the `NUGET_USER` environment secret containing the
+NuGet.org profile name, and register a NuGet.org Trusted Publishing policy for
+owner `Nigusu-Allehu`, repository `NuExtVault`, workflow file `release.yml`, and
+environment `nuget.org`. Review repository history and complete Windows, Ubuntu,
+and macOS checks before creating `v1.0.0` or manually dispatching version
+`1.0.0` from `main`.
+
+The workflow independently fails closed before packaging: manual dispatch is
+accepted only from `refs/heads/main`, while a tag release fetches `origin/main`
+and proves that the tagged commit is contained in it. The OIDC-capable publish
+job requires the resulting verified output in addition to environment approval.
+
+NuGet.org versions are immutable. A bad release cannot be overwritten: stop
+further releases, unlist the affected version on NuGet.org, publish a corrected
+new version, and document the impact. Reverting this repository or deleting a
+Git tag does not remove an already published package.
 
 ---
 

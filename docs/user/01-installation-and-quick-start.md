@@ -2,19 +2,21 @@
 
 [User manual](README.md)
 
-NuExtVault currently ships from this repository. The CLI tool is locally
-packable but is not published to NuGet.org. Run these commands from the repository
-root. The examples use cross-platform PowerShell 7 (`pwsh`).
+NuExtVault is a .NET 10 global tool. Install the .NET SDK 10.0 before installing
+the tool.
 
-## Pack and install the local tool
+## Install the global tool
 
-The example uses isolated output and installation directories.
-
-<!-- example-id: user-01-pack-install; evidence: executable -->
+<!-- example-id: user-01-global-install; evidence: reference -->
 ```powershell
-dotnet pack .\src\NuExtVault.Cli\NuExtVault.Cli.csproj --configuration Release --output "{{ARTIFACTS}}"
-dotnet tool install --tool-path "{{TOOLS}}" NuExtVault.Cli --add-source "{{ARTIFACTS}}" --version 1.0.0
+dotnet tool install --global NuExtVault
+nuextvault start
 ```
+
+The initial `1.0.0` package becomes available only after the protected release
+workflow completes. Contributors validating an unpublished checkout should use
+the source and local-package commands in the
+[build, test, and release guide](../contributing/08-build-test-and-release.md).
 
 ## Start an isolated server
 
