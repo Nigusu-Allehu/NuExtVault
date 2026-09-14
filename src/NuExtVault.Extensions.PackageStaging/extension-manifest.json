@@ -3,9 +3,9 @@
   "schemaVersion": 2,
   "id": "NuExtVault.PackageStaging",
   "identityPredecessors": [ "NuTest.PackageStaging" ],
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "NuExtVault",
-  "sdk": { "minimum": "1.4.0", "maximumExclusive": "2.0.0" },
+  "sdk": { "minimum": "1.5.0", "maximumExclusive": "2.0.0" },
   "contracts": {
     "manifest": 2,
     "operation": 1,
@@ -91,6 +91,14 @@
       "responseContract": "NuExtVault.PackageStaging.ExpireResponse.v1",
       "ownership": "new",
       "allowReplacement": false
+    },
+    {
+      "id": "NuExtVault.PackageStaging.CompatibilityUpload",
+      "version": 1,
+      "requestContract": "NuExtVault.PackageStaging.CompatibilityUploadRequest.v1",
+      "responseContract": "NuExtVault.PackageStaging.CompatibilityUploadResponse.v1",
+      "ownership": "new",
+      "allowReplacement": false
     }
   ],
   "contributions": [
@@ -99,6 +107,14 @@
       "kind": "service-resource",
       "version": 1,
       "routeId": "nuextvault.staging.list-groups"
+    },
+    {
+      "id": "NuExtVault.PackageStaging.NuGetServiceIndex",
+      "kind": "service-resource",
+      "version": 1,
+      "routeId": "nuextvault.staging.nuget-upload",
+      "resourceType": "PackageStaging",
+      "resourceVersion": "1.0.0"
     }
   ],
   "routes": [
@@ -160,7 +176,7 @@
       "head": "none",
       "body": "stream",
       "headers": [ "Idempotency-Key" ],
-      "maximumRequestBytes": 16777216,
+      "maximumRequestBytes": 16842752,
       "maximumResponseBytes": 65536,
       "timeoutMilliseconds": 60000
     },
@@ -212,6 +228,19 @@
       "maximumRequestBytes": 0,
       "maximumResponseBytes": 65536,
       "timeoutMilliseconds": 30000
+    },
+    {
+      "id": "nuextvault.staging.nuget-upload",
+      "operationId": "NuExtVault.PackageStaging.CompatibilityUpload",
+      "methods": [ "PUT" ],
+      "path": "/staging/nuget/{uploadKind}",
+      "access": "admin",
+      "head": "none",
+      "body": "stream",
+      "allowsResourceBaseReference": true,
+      "maximumRequestBytes": 16777216,
+      "maximumResponseBytes": 65536,
+      "timeoutMilliseconds": 60000
     }
   ],
   "capabilities": [

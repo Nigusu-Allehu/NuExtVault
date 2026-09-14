@@ -3028,6 +3028,34 @@ internal sealed class StagedContentWriteCapabilityHandle(
                 },
                 cancellationToken);
 
+    public ValueTask<StagedContentWriteResult> WriteSymbolsAsync(
+        StreamHandle content,
+        CancellationToken cancellationToken) =>
+        StreamGate(BuiltInCapabilityNames.PackageContentWriteStaged)
+            .InvokeAsync(
+                "staged-content.write-symbols",
+                async token =>
+                {
+                    var (stream, limit, owned) = Resolve(content);
+                    try
+                    {
+                        return await coordinator.StageSymbolsAsync(
+                            OwnerId,
+                            stream,
+                            null,
+                            limit,
+                            token);
+                    }
+                    finally
+                    {
+                        if (owned)
+                        {
+                            await stream.DisposeAsync();
+                        }
+                    }
+                },
+                cancellationToken);
+
     public ValueTask<StagedContentReleaseResult> ReleaseAsync(
         StagedContentHandle handle,
         CancellationToken cancellationToken) =>

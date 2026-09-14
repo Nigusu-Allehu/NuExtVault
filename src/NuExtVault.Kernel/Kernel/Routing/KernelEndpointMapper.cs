@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using NuExtVault.Extensions.Sdk;
@@ -224,6 +225,81 @@ internal sealed class HttpEndpointRequest(
             maximumLength: Limits.MaxRequestBytes > 0
                 ? Limits.MaxRequestBytes
                 : Math.Max(1, file.Length));
+    }
+
+    public override async ValueTask<MultipartUpload> BindMultipartUploadAsync(
+        string fileFieldName,
+        ImmutableArray<string> textFieldNames,
+        long maximumFileBytes,
+        CancellationToken cancellationToken)
+    {
+        if (!HasFormContent)
+        {
+            throw BindingFailure(
+                OperationResultStatus.UnsupportedMediaType,
+                "Expected multipart form data.");
+        }
+
+        IFormCollection form;
+        try
+        {
+            form = await context.Request.ReadFormAsync(cancellationToken);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new OperationBindingException(new OperationResult(
+                OperationResultStatus.PayloadTooLarge,
+                new OperationProblemBody(exception.Message)));
+        }
+
+        if (form.Files.Count != 1 ||
+            !string.Equals(form.Files[0].Name, fileFieldName, StringComparison.Ordinal))
+        {
+            throw BindingFailure(
+                OperationResultStatus.InvalidRequest,
+                $"The multipart request must contain one '{fileFieldName}' file.");
+        }
+
+        var allowedFields = textFieldNames.ToImmutableHashSet(StringComparer.Ordinal);
+        if (form.Keys.Any(field => !allowedFields.Contains(field)))
+        {
+            throw BindingFailure(
+                OperationResultStatus.InvalidRequest,
+                "The multipart request contains an unexpected text field.");
+        }
+
+        var fields = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var fieldName in allowedFields)
+        {
+            if (!form.TryGetValue(fieldName, out var values))
+            {
+                continue;
+            }
+            if (values.Count != 1)
+            {
+                throw BindingFailure(
+                    OperationResultStatus.InvalidRequest,
+                    $"The multipart field '{fieldName}' must occur once.");
+            }
+            fields[fieldName] = values[0] ?? string.Empty;
+        }
+
+        var file = form.Files[0];
+        if (file.Length > maximumFileBytes)
+        {
+            throw BindingFailure(
+                OperationResultStatus.PayloadTooLarge,
+                "The uploaded file exceeds the declared content limit.");
+        }
+        return new MultipartUpload(
+            execution.Content.RegisterStream(
+                file.OpenReadStream(),
+                string.IsNullOrWhiteSpace(file.ContentType)
+                    ? "application/octet-stream"
+                    : file.ContentType,
+                file.Length,
+                maximumLength: maximumFileBytes),
+            fields.ToImmutable());
     }
 
     public override StreamHandle RegisterContent(ReadOnlyMemory<byte> content, string contentType) =>

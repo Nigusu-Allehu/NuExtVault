@@ -79,7 +79,9 @@
           "id": { "$ref": "#/$defs/stableIdentity" },
           "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
           "version": { "const": 1 },
-          "routeId": { "type": "string", "minLength": 1, "maxLength": 256 }
+          "routeId": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "resourceType": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "resourceVersion": { "$ref": "#/$defs/version" }
         }
       }
     },
@@ -114,6 +116,7 @@
           "access": { "enum": [ "anonymous", "read", "write", "publish", "unlist", "delete", "admin", "control" ] },
           "head": { "enum": [ "none", "mirrors-get" ] },
           "body": { "enum": [ "none", "bounded", "stream" ] },
+          "allowsResourceBaseReference": { "type": "boolean" },
           "headers": {
             "type": "array",
             "maxItems": 16,

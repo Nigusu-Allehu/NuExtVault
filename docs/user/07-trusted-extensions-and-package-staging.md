@@ -73,7 +73,7 @@ of the signing key's SubjectPublicKeyInfo:
   "expectedPublisher": "NuExtVault",
   "expectedSigningKeyId": "<approved key ID>",
   "expectedSigningKeyFingerprint": "<lowercase SPKI SHA-256>",
-  "expectedPackageVersion": "1.1.0",
+  "expectedPackageVersion": "1.2.0",
   "expectedManifestDigest": "<lowercase manifest SHA-256>",
   "expectedStagedContentDigest": "<lowercase verified staged-content SHA-256>"
 }
@@ -120,6 +120,8 @@ GET  /staging/groups/{groupId}/packages/{packageId}/{version}
 POST /staging/groups/{groupId}/packages/{packageId}/{version}/promote
 POST /staging/groups/{groupId}/packages/{packageId}/{version}/reject
 POST /staging/groups/{groupId}/expire
+PUT  /staging/nuget/package
+PUT  /staging/nuget/symbols
 ```
 
 Group IDs are 1–64 ASCII letters, digits, `-`, or `.`. Group creation accepts
@@ -139,7 +141,11 @@ group history. Backups include staging state, bytes, and publication journals.
 Restore them with the same trusted package configuration, then supply all grants
 again when starting.
 
-The SDK (`1.4.0`) and TestKit (`1.1.0`) target `net10.0` and are locally packable,
+The service index also advertises `PackageStaging/1.0.0` at `/staging/nuget/`.
+Its two compatibility routes accept NuGet.Client multipart uploads with a required
+`groupId` field and return non-success HTTP status codes for rejected uploads.
+
+The SDK (`1.5.0`) and TestKit (`1.1.0`) target `net10.0` and are locally packable,
 not externally published. There is no network extension feed, hot reload,
 sidecar, security sandbox, multi-node coordination, or optional degradation.
 

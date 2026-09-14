@@ -87,6 +87,29 @@ public sealed class PackageStagingModule : IExtensionModule
             new RouteIdentity("nuextvault.staging.expire"),
             static (request, _) => ValueTask.FromResult(
                 new ExpireRequest(request.GetRoute("groupId"))));
+
+        routes.Bind<CompatibilityUploadRequest>(
+            new RouteIdentity("nuextvault.staging.nuget-upload"),
+            static async (request, token) =>
+            {
+                var uploadKind = request.GetRoute("uploadKind");
+                var fileField = uploadKind switch
+                {
+                    "package" => "package",
+                    "symbols" => "symbols",
+                    _ => uploadKind
+                };
+                var upload = await request.BindMultipartUploadAsync(
+                    fileField,
+                    ["groupId"],
+                    16 * 1024 * 1024,
+                    token);
+                upload.Fields.TryGetValue("groupId", out var groupId);
+                return new CompatibilityUploadRequest(
+                    uploadKind,
+                    groupId,
+                    upload.Content);
+            });
     }
 
     public void RegisterOperations(
@@ -143,6 +166,10 @@ public sealed class PackageStagingModule : IExtensionModule
             ExtensionId,
             new OperationIdentity("NuExtVault.PackageStaging.Expire"),
             handler.ExpireAsync);
+        operations.RegisterNew<CompatibilityUploadRequest, CompatibilityUploadResponse>(
+            ExtensionId,
+            new OperationIdentity("NuExtVault.PackageStaging.CompatibilityUpload"),
+            handler.CompatibilityUploadAsync);
     }
 
     private static CapabilityRequest Required(string name) =>
@@ -465,32 +492,146 @@ internal sealed class PackageStagingHandler(
                 Map(staged.Outcome), null, null, null, staged.FailureDetail));
         }
 
-        var write = await state.WriteAsync(
-            Key(request.GroupId),
-            group with
-            {
-                Packages = group.Packages.SetItem(
-                    index,
-                    package with
-                    {
-                        SymbolHandleId = staged.Handle.HandleId,
-                        SymbolUploadIdempotencyKey = request.IdempotencyKey,
-                        SymbolContentSha256 = staged.Handle.ContentSha256
-                    })
-            },
-            entry.ConcurrencyToken,
+        return Ok(await CommitSymbolAsync(
+            request.GroupId,
+            request.IdempotencyKey,
+            entry,
+            index,
+            staged.Handle,
+            token));
+    }
+
+    internal async ValueTask<OperationResponse<CompatibilityUploadResponse>>
+        CompatibilityUploadAsync(
+            CompatibilityUploadRequest request,
+            CancellationToken token)
+    {
+        if (!IsValidGroupId(request.GroupId))
+        {
+            return CompatibilityFailure(
+                StagingOutcome.InvalidContent,
+                "A valid groupId form field is required.");
+        }
+
+        if (request.UploadKind == "package")
+        {
+            var response = await UploadPackageAsync(
+                new UploadPackageRequest(request.GroupId!, null, request.Content),
+                token);
+            var packageResult = response.Value!;
+            return Compatibility(
+                packageResult.Outcome,
+                packageResult.PackageId,
+                packageResult.Version,
+                packageResult.Detail);
+        }
+
+        if (request.UploadKind != "symbols")
+        {
+            return CompatibilityFailure(
+                StagingOutcome.InvalidContent,
+                "The upload path must end in package or symbols.");
+        }
+
+        using var mutation = await EnterMutationAsync(token);
+        var entry = await state.ReadEntryAsync<StagingGroupState>(Key(request.GroupId!), token);
+        if (entry is null)
+        {
+            return CompatibilityFailure(
+                StagingOutcome.GroupNotFound,
+                "No staging group matches that identifier.");
+        }
+
+        var staged = await content.WriteSymbolsAsync(request.Content, token);
+        if (staged.Outcome != StagedContentWriteOutcome.Succeeded ||
+            staged.Handle is null ||
+            staged.Identity is null)
+        {
+            return Compatibility(
+                Map(staged.Outcome),
+                null,
+                null,
+                staged.FailureDetail);
+        }
+
+        var index = IndexOf(
+            entry.Value,
+            staged.Identity.PackageId,
+            staged.Identity.PackageVersion);
+        if (index < 0)
+        {
+            await content.ReleaseAsync(staged.Handle, CancellationToken.None);
+            return CompatibilityFailure(
+                StagingOutcome.PackageNotFound,
+                "No staged package matches the symbol package identity.");
+        }
+        if (entry.Value.Packages[index].Status != StagedPackageStatus.Staged)
+        {
+            await content.ReleaseAsync(staged.Handle, CancellationToken.None);
+            return CompatibilityFailure(
+                StagingOutcome.AlreadyResolved,
+                "The staged package is no longer pending.");
+        }
+
+        var symbolResult = await CommitSymbolAsync(
+            request.GroupId!,
+            null,
+            entry,
+            index,
+            staged.Handle,
             token);
+        return Compatibility(
+            symbolResult.Outcome,
+            symbolResult.PackageId,
+            symbolResult.Version,
+            symbolResult.Detail);
+    }
+
+    private async ValueTask<UploadSymbolResponse> CommitSymbolAsync(
+        string groupId,
+        string? idempotencyKey,
+        TransactionalStateEntry<StagingGroupState> entry,
+        int index,
+        StagedContentHandle staged,
+        CancellationToken token)
+    {
+        var group = entry.Value;
+        var package = group.Packages[index];
+        TransactionalStateWriteResult write;
+        try
+        {
+            write = await state.WriteAsync(
+                Key(groupId),
+                group with
+                {
+                    Packages = group.Packages.SetItem(
+                        index,
+                        package with
+                        {
+                            SymbolHandleId = staged.HandleId,
+                            SymbolUploadIdempotencyKey = idempotencyKey,
+                            SymbolContentSha256 = staged.ContentSha256
+                        })
+                },
+                entry.ConcurrencyToken,
+                token);
+        }
+        catch
+        {
+            await content.ReleaseAsync(staged, CancellationToken.None);
+            throw;
+        }
         if (write.Outcome != TransactionalStateWriteOutcome.Written)
         {
-            await content.ReleaseAsync(staged.Handle, token);
-            return Ok(new UploadSymbolResponse(
+            await content.ReleaseAsync(staged, CancellationToken.None);
+            return new UploadSymbolResponse(
                 write.Outcome == TransactionalStateWriteOutcome.ConcurrencyConflict
                     ? StagingOutcome.Conflict
                     : StagingOutcome.Failed,
                 null,
                 null,
                 null,
-                write.FailureDetail));
+                write.FailureDetail);
         }
 
         if (package.SymbolHandleId is { Length: > 0 } previousSymbolHandleId)
@@ -505,12 +646,12 @@ internal sealed class PackageStagingHandler(
                 token);
         }
 
-        return Ok(new UploadSymbolResponse(
+        return new UploadSymbolResponse(
             StagingOutcome.Succeeded,
             package.PackageId,
             package.Version,
-            staged.Handle.ContentSha256,
-            null));
+            staged.ContentSha256,
+            null);
     }
 
     internal async ValueTask<OperationResponse<InspectResponse>> InspectAsync(
@@ -881,6 +1022,37 @@ internal sealed class PackageStagingHandler(
         PublicationRequestOutcome.Canceled => StagingOutcome.Canceled,
         _ => StagingOutcome.Failed
     };
+
+    private static OperationResponse<CompatibilityUploadResponse> Compatibility(
+        StagingOutcome outcome,
+        string? packageId,
+        string? version,
+        string? detail) =>
+        outcome == StagingOutcome.Succeeded
+            ? OperationResponse<CompatibilityUploadResponse>.Success(
+                new CompatibilityUploadResponse(outcome, packageId, version))
+            : CompatibilityFailure(outcome, detail ?? outcome.ToString());
+
+    private static OperationResponse<CompatibilityUploadResponse> CompatibilityFailure(
+        StagingOutcome outcome,
+        string detail) =>
+        OperationResponse<CompatibilityUploadResponse>.Failure(outcome switch
+        {
+            StagingOutcome.GroupNotFound or StagingOutcome.PackageNotFound =>
+                OperationErrors.NotFound(detail),
+            StagingOutcome.GroupInactive or
+                StagingOutcome.GroupExpired or
+                StagingOutcome.AlreadyResolved or
+                StagingOutcome.Conflict or
+                StagingOutcome.DuplicatePackage =>
+                OperationErrors.Conflict(detail),
+            StagingOutcome.QuotaExceeded or StagingOutcome.ContentTooLarge =>
+                OperationErrors.LimitExceeded(detail),
+            StagingOutcome.Unauthorized => OperationErrors.Unauthorized(detail),
+            StagingOutcome.Canceled => OperationErrors.Unavailable(detail),
+            StagingOutcome.Failed => OperationErrors.Internal(detail),
+            _ => OperationErrors.InvalidRequest(detail)
+        });
 
     private static OperationResponse<T> Ok<T>(T value) => OperationResponse<T>.Success(value);
 }
