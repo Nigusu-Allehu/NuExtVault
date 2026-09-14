@@ -117,6 +117,185 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
             resource.GetProperty("@id").GetString());
     }
 
+    [Fact]
+    public async Task The_service_index_advertises_the_NuGet_staging_compatibility_base()
+    {
+        await using var server = await StartAsync();
+
+        using var index = await server.HttpClient.GetAsync("/v3/index.json");
+        using var document = JsonDocument.Parse(await index.Content.ReadAsStringAsync());
+
+        var resource = document.RootElement.GetProperty("resources")
+            .EnumerateArray()
+            .Single(entry => entry.GetProperty("@type").GetString() == "PackageStaging/1.0.0");
+        Assert.Equal(
+            new Uri(server.BaseUrl, "/staging/nuget/").AbsoluteUri,
+            resource.GetProperty("@id").GetString());
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_package_upload_accepts_chunked_multipart()
+    {
+        await using var server = await StartAsync();
+        await CreateGroupAsync(server.HttpClient, "nuget-package");
+        var content = Nupkg("Contoso.NuGetPackage", "1.0.0");
+
+        using var response = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            content,
+            "nuget-package");
+
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            await response.Content.ReadAsStringAsync());
+        using var inspect = await server.HttpClient.GetAsync(
+            "/staging/groups/nuget-package/packages/Contoso.NuGetPackage/1.0.0");
+        using var document = await ReadAsync(inspect);
+        Assert.Equal("Succeeded", document.RootElement.GetProperty("outcome").GetString());
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_symbol_upload_derives_the_archive_identity()
+    {
+        await using var server = await StartAsync();
+        await CreateGroupAsync(server.HttpClient, "nuget-symbols");
+        await UploadAsync(server.HttpClient, "nuget-symbols", "Contoso.NuGetSymbols", "2.0.0");
+        using var symbols = TestPackageBuilder.Create("Contoso.NuGetSymbols", "2.0.0")
+            .WithFile("lib/net10.0/Contoso.NuGetSymbols.pdb", [1, 2, 3])
+            .Build();
+
+        using var response = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "symbols",
+            "symbols",
+            symbols.Content,
+            "nuget-symbols");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var promote = await PromoteAsync(
+            server.HttpClient,
+            "nuget-symbols",
+            "Contoso.NuGetSymbols",
+            "2.0.0",
+            "compat-symbols");
+        Assert.Equal(HttpStatusCode.OK, promote.StatusCode);
+        Assert.Equal(
+            symbols.Content,
+            await server.Packages.FindSymbolAsync("Contoso.NuGetSymbols", "2.0.0"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task NuGet_compatibility_package_upload_defaults_to_one_ungrouped_bucket(
+        string? groupId)
+    {
+        await using var server = await StartAsync();
+
+        using var response = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.Ungrouped", "1.0.0"),
+            groupId);
+        using var groups = await server.HttpClient.GetAsync("/staging/groups");
+        using var document = await ReadAsync(groups);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var group = Assert.Single(document.RootElement.GetProperty("groups").EnumerateArray());
+        var package = Assert.Single(group.GetProperty("packages").EnumerateArray());
+        Assert.Equal("Contoso.Ungrouped", package.GetProperty("packageId").GetString());
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_symbol_upload_reuses_the_ungrouped_bucket()
+    {
+        await using var server = await StartAsync();
+        using var package = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.UngroupedSymbols", "2.0.0"),
+            null);
+        using var symbols = TestPackageBuilder.Create("Contoso.UngroupedSymbols", "2.0.0")
+            .WithFile("lib/net10.0/Contoso.UngroupedSymbols.pdb", [1, 2, 3])
+            .Build();
+
+        using var symbolResponse = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "symbols",
+            "symbols",
+            symbols.Content,
+            null);
+        using var groups = await server.HttpClient.GetAsync("/staging/groups");
+        using var document = await ReadAsync(groups);
+
+        Assert.Equal(HttpStatusCode.OK, package.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, symbolResponse.StatusCode);
+        var group = Assert.Single(document.RootElement.GetProperty("groups").EnumerateArray());
+        var staged = Assert.Single(group.GetProperty("packages").EnumerateArray());
+        Assert.False(string.IsNullOrWhiteSpace(staged.GetProperty("symbolHandleId").GetString()));
+    }
+
+    [Theory]
+    [InlineData(" ", HttpStatusCode.BadRequest)]
+    [InlineData("missing", HttpStatusCode.NotFound)]
+    public async Task NuGet_compatibility_explicit_group_requires_a_valid_existing_group(
+        string? groupId,
+        HttpStatusCode expected)
+    {
+        await using var server = await StartAsync();
+
+        using var response = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.RequiredGroup", "1.0.0"),
+            groupId);
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_upload_rejects_invalid_content_and_wrong_file_fields()
+    {
+        await using var server = await StartAsync();
+        await CreateGroupAsync(server.HttpClient, "nuget-invalid");
+
+        using var invalid = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            "not a package"u8.ToArray(),
+            "nuget-invalid");
+        using var wrongField = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "symbols",
+            Nupkg("Contoso.WrongField", "1.0.0"),
+            "nuget-invalid");
+
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongField.StatusCode);
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_upload_requires_admin_authentication()
+    {
+        await using var server = await StartAsync(requireApiKey: true);
+
+        using var denied = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.DeniedCompat", "1.0.0"),
+            "denied");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+    }
+
     // ---- upload / inspect / promote ---------------------------------------
 
     [Fact]
@@ -704,6 +883,30 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
             HttpMethod.Post,
             $"/staging/groups/{groupId}/packages/{packageId}/{version}/promote");
         request.Headers.Add("Idempotency-Key", idempotencyKey);
+        return client.SendAsync(request);
+    }
+
+    private static Task<HttpResponseMessage> SendCompatibilityUploadAsync(
+        HttpClient client,
+        string uploadKind,
+        string fileField,
+        byte[] content,
+        string? groupId)
+    {
+        var form = new MultipartFormDataContent();
+        form.Add(new ByteArrayContent(content), fileField, $"{fileField}.nupkg");
+        if (groupId is not null)
+        {
+            form.Add(new StringContent(groupId), "groupId");
+        }
+
+        var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"/staging/nuget/{uploadKind}")
+        {
+            Content = form
+        };
+        request.Headers.TransferEncodingChunked = true;
         return client.SendAsync(request);
     }
 

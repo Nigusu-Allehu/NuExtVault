@@ -104,6 +104,8 @@ type NuExtVault.Extensions.Sdk.ContributionDeclaration
   NuExtVault.Extensions.Sdk.ContributionIdentity Identity { get; }
   System.Nullable<NuExtVault.Extensions.Sdk.RouteIdentity> Route { get; }
   System.String Kind { get; }
+  System.String ResourceType { get; }
+  System.String ResourceVersion { get; }
 type NuExtVault.Extensions.Sdk.ContributionIdentity
   System.String Value { get; }
 type NuExtVault.Extensions.Sdk.EndpointAccessKind
@@ -181,6 +183,7 @@ type NuExtVault.Extensions.Sdk.IRouteBinderRegistry
 type NuExtVault.Extensions.Sdk.IStagedContentWriteCapability
   System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentReleaseResult> ReleaseAsync(NuExtVault.Extensions.Sdk.StagedContentHandle handle,System.Threading.CancellationToken cancellationToken)
   System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentWriteResult> WritePackageAsync(NuExtVault.Extensions.Sdk.StreamHandle content,System.Threading.CancellationToken cancellationToken)
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentWriteResult> WriteSymbolsAsync(NuExtVault.Extensions.Sdk.StreamHandle content,System.Threading.CancellationToken cancellationToken)
   System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.StagedContentWriteResult> WriteSymbolsAsync(NuExtVault.Extensions.Sdk.StreamHandle content,NuExtVault.Extensions.Sdk.StagedPackageIdentity expectedIdentity,System.Threading.CancellationToken cancellationToken)
 type NuExtVault.Extensions.Sdk.ITransactionalStateCapability
   System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.TransactionalStateEntry<T>> ReadEntryAsync<T>(System.String key,System.Threading.CancellationToken cancellationToken)
@@ -199,6 +202,9 @@ type NuExtVault.Extensions.Sdk.ManifestValidationResult
   NuExtVault.Extensions.Sdk.ExtensionManifest Manifest { get; }
   System.Boolean IsValid { get; }
   System.Collections.Immutable.ImmutableArray<NuExtVault.Extensions.Sdk.ManifestValidationError> Errors { get; }
+type NuExtVault.Extensions.Sdk.MultipartUpload
+  NuExtVault.Extensions.Sdk.StreamHandle Content { get; }
+  System.Collections.Generic.IReadOnlyDictionary<System.String,System.String> Fields { get; }
 type NuExtVault.Extensions.Sdk.OperationContractVersion
   System.Int32 Value { get; }
 type NuExtVault.Extensions.Sdk.OperationContributor
@@ -213,18 +219,35 @@ type NuExtVault.Extensions.Sdk.OperationDeclaration
 type NuExtVault.Extensions.Sdk.OperationIdentity
   System.String Value { get; }
 type NuExtVault.Extensions.Sdk.OperationOwnership
+type NuExtVault.Extensions.Sdk.OperationError
+  System.Nullable<System.Int32> RetryAfterSeconds { get; }
+  System.String Code { get; }
+  System.String Message { get; }
+type NuExtVault.Extensions.Sdk.OperationErrors
+  NuExtVault.Extensions.Sdk.OperationError Conflict(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError Internal(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError InvalidRequest(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError LimitExceeded(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError NotFound(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError PolicyDenied(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError Unauthorized(System.String message)
+  NuExtVault.Extensions.Sdk.OperationError Unavailable(System.String message,System.Nullable<System.Int32> retryAfterSeconds)
 type NuExtVault.Extensions.Sdk.OperationReplacementPolicies
   NuExtVault.Extensions.Sdk.ReplacementPolicy Default { get; }
   NuExtVault.Extensions.Sdk.ReplacementPolicy For(System.String operationId)
   NuExtVault.Extensions.Sdk.ReplacementPolicy IdentityMutations { get; }
   NuExtVault.Extensions.Sdk.ReplacementPolicy OwnershipMutations { get; }
 type NuExtVault.Extensions.Sdk.OperationResponse<TResponse>
+  NuExtVault.Extensions.Sdk.OperationError Error { get; }
+  NuExtVault.Extensions.Sdk.OperationResponse<TResponse> Failure(NuExtVault.Extensions.Sdk.OperationError error)
   NuExtVault.Extensions.Sdk.OperationResponse<TResponse> Success(TResponse value)
+  TResponse Value { get; }
 type NuExtVault.Extensions.Sdk.OutboundHttpRequest
 type NuExtVault.Extensions.Sdk.PublicationRequestOutcome
 type NuExtVault.Extensions.Sdk.ReplacementPolicy
 type NuExtVault.Extensions.Sdk.RouteBindingRequest
   NuExtVault.Extensions.Sdk.BoundedDocument ReadBody()
+  System.Threading.Tasks.ValueTask<NuExtVault.Extensions.Sdk.MultipartUpload> BindMultipartUploadAsync(System.String fileFieldName,System.Collections.Generic.IEnumerable<System.String> textFieldNames,System.Int64 maximumFileBytes,System.Threading.CancellationToken cancellationToken)
   NuExtVault.Extensions.Sdk.StreamHandle BindBodyStream()
   System.Boolean TryGetQuery(System.String name,System.String& value)
   System.Boolean TryGetRoute(System.String name,System.String& value)
@@ -240,6 +263,7 @@ type NuExtVault.Extensions.Sdk.RouteDeclaration
   NuExtVault.Extensions.Sdk.RouteContractVersion Version { get; }
   NuExtVault.Extensions.Sdk.RouteIdentity Identity { get; }
   System.Collections.Immutable.ImmutableArray<System.String> Methods { get; }
+  System.Boolean AllowsResourceBaseReference { get; }
   System.Int64 MaximumRequestBytes { get; }
   System.Int64 MaximumResponseBytes { get; }
   System.String Path { get; }

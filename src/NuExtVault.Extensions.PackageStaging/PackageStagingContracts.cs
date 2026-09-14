@@ -163,3 +163,13 @@ public sealed record ExpireResponse(
     StagingOutcome Outcome,
     int ExpiredPackages,
     string? Detail);
+
+public sealed record CompatibilityUploadRequest(
+    string UploadKind,
+    string? GroupId,
+    StreamHandle Content);
+
+public sealed record CompatibilityUploadResponse(
+    StagingOutcome Outcome,
+    string? PackageId,
+    string? Version);

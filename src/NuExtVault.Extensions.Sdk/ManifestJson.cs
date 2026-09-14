@@ -271,6 +271,11 @@ public static class ExtensionManifestJson
                 {
                     writer.WriteString("routeId", contributionRoute.Value);
                 }
+                if (contribution.ResourceType is { } resourceType)
+                {
+                    writer.WriteString("resourceType", resourceType);
+                    writer.WriteString("resourceVersion", contribution.ResourceVersion);
+                }
                 writer.WriteNumber("version", contribution.Version.Value);
                 writer.WriteEndObject();
             }
@@ -313,6 +318,10 @@ public static class ExtensionManifestJson
             {
                 writer.WriteStartObject();
                 writer.WriteString("access", route.Access);
+                if (route.AllowsResourceBaseReference)
+                {
+                    writer.WriteBoolean("allowsResourceBaseReference", true);
+                }
                 if (route.DeclaredBody is { } declaredBody)
                 {
                     writer.WriteString(
@@ -593,7 +602,8 @@ public static class ExtensionManifestJson
                 continue;
             }
 
-            string[] members = ["id", "kind", "version", "routeId"];
+            string[] members =
+                ["id", "kind", "version", "routeId", "resourceType", "resourceVersion"];
             UnknownMembers(value, Set(members), path, errors);
             Require(value, ["id", "kind", "version"], path, errors);
             var id = String(value, "id", $"{path}.id", errors);
@@ -639,14 +649,37 @@ public static class ExtensionManifestJson
                 }
             }
 
+            var kind = String(value, "kind", $"{path}.kind", errors);
+            var resourceType = value.TryGetProperty("resourceType", out _)
+                ? String(value, "resourceType", $"{path}.resourceType", errors)
+                : null;
+            var resourceVersion = value.TryGetProperty("resourceVersion", out _)
+                ? String(value, "resourceVersion", $"{path}.resourceVersion", errors)
+                : null;
+            if ((resourceType is null) != (resourceVersion is null) ||
+                resourceType is not null &&
+                (kind != "service-resource" ||
+                 resourceType != "PackageStaging" ||
+                 string.IsNullOrWhiteSpace(resourceType) ||
+                 resourceType.Contains('/', StringComparison.Ordinal) ||
+                !SdkContractVersion.TryParse(resourceVersion, out _)))
+            {
+                errors.Add(Error(
+                    path,
+                    "contribution.resource.invalid",
+                    "Service resource type and version overrides must be declared together and valid."));
+            }
+
             result.Add(new ContributionDeclaration(
                 new ContributionIdentity(string.IsNullOrWhiteSpace(id)
                     ? "invalid.contribution"
                     : id),
-                String(value, "kind", $"{path}.kind", errors),
+                kind,
                 new ContributionContractVersion(version))
             {
-                Route = string.IsNullOrWhiteSpace(routeId) ? null : new RouteIdentity(routeId)
+                Route = string.IsNullOrWhiteSpace(routeId) ? null : new RouteIdentity(routeId),
+                ResourceType = resourceType,
+                ResourceVersion = resourceVersion
             });
         }
 
@@ -690,7 +723,8 @@ public static class ExtensionManifestJson
                 "maximumResponseBytes",
                 "timeoutMilliseconds",
                 "body",
-                "headers"
+                "headers",
+                "allowsResourceBaseReference"
             ];
             UnknownMembers(value, Set(members), path, errors);
             Require(
@@ -824,6 +858,14 @@ public static class ExtensionManifestJson
                     "route.headers.invalid",
                     "Declared headers must be unique, token-shaped, and never reserved."));
             }
+            var allowsResourceBaseReference =
+                value.TryGetProperty("allowsResourceBaseReference", out _)
+                    ? Boolean(
+                        value,
+                        "allowsResourceBaseReference",
+                        $"{path}.allowsResourceBaseReference",
+                        errors)
+                    : false;
 
             result.Add(new RouteDeclaration(
                 new RouteIdentity(string.IsNullOrWhiteSpace(id) ? "invalid.route" : id),
@@ -839,7 +881,8 @@ public static class ExtensionManifestJson
                 head,
                 timeoutMilliseconds,
                 body,
-                [.. headers.Order(StringComparer.Ordinal)]));
+                [.. headers.Order(StringComparer.Ordinal)],
+                allowsResourceBaseReference));
         }
 
         return [.. result.OrderBy(value => value.Identity.Value, StringComparer.Ordinal)];

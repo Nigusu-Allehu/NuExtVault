@@ -76,12 +76,17 @@ internal static class PublicExtensionModuleAdapter
                             $"'{contribution.Identity.Value}' must reference a route by id " +
                             "unless the extension declares exactly one route.");
                 return new ServiceResourceContribution(
-                    contribution.Identity.Value,
-                    contribution.Version.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    contribution.ResourceType ?? contribution.Identity.Value,
+                    contribution.ResourceVersion ??
+                        contribution.Version.Value.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture),
                     new OperationId(route.Operation.Value),
-                    route.Path,
+                    ResourceRouteName(route),
                     ServiceResourceVisibility.Advertised,
-                    ServiceResourceAccess.Read,
+                    route.Methods.Any(method =>
+                        method is "GET" or "HEAD")
+                        ? ServiceResourceAccess.Read
+                        : ServiceResourceAccess.Write,
                     [],
                     [],
                     null,
@@ -155,6 +160,7 @@ internal static class PublicExtensionModuleAdapter
                 _ => EndpointBodyBinding.None
             },
             RouteParameters = [.. routeParameterNames.Select(name => new EndpointParameter(name))],
+            AllowsResourceBaseReference = route.AllowsResourceBaseReference,
             Limits = route.MaximumRequestBytes == 0
                 ? EndpointLimits.BodyFree with
                 {
@@ -174,6 +180,24 @@ internal static class PublicExtensionModuleAdapter
             ],
             Handler = handler
         };
+    }
+
+    private static string ResourceRouteName(RouteDeclaration route)
+    {
+        if (!route.AllowsResourceBaseReference)
+        {
+            return route.Path;
+        }
+
+        var parameterStart = route.Path.IndexOf('{');
+        if (parameterStart < 0)
+        {
+            throw new ServerHostingConfigurationException(
+                $"external-extension.resource-base-invalid: Route '{route.Identity.Value}' " +
+                "has no parameter from which to project a resource base.");
+        }
+
+        return route.Path[..parameterStart];
     }
 
     private sealed class MaterializedModule(
@@ -334,6 +358,20 @@ internal static class PublicExtensionModuleAdapter
         public StreamHandle BindBodyStream() =>
             body == RouteBodyBinding.Stream
                 ? request.BindBodyStream()
+                : throw new InvalidOperationException(
+                    "This route does not declare a streaming request body.");
+
+        public ValueTask<MultipartUpload> BindMultipartUploadAsync(
+            string fileFieldName,
+            ImmutableArray<string> textFieldNames,
+            long maximumFileBytes,
+            CancellationToken cancellationToken) =>
+            body == RouteBodyBinding.Stream
+                ? request.BindMultipartUploadAsync(
+                    fileFieldName,
+                    textFieldNames,
+                    maximumFileBytes,
+                    cancellationToken)
                 : throw new InvalidOperationException(
                     "This route does not declare a streaming request body.");
     }

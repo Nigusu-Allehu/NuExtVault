@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace NuExtVault.Extensions.Sdk;
 
 /// <summary>
@@ -67,11 +69,16 @@ internal abstract class EndpointRequest
     public abstract StreamHandle BindBodyStream();
 
     /// <summary>
-    /// Registers an uploaded package or symbol package as kernel content. Multipart
-    /// payloads are streamed; nothing is buffered by the gateway.
+    /// Registers an uploaded package or symbol package as kernel content.
     /// </summary>
     public abstract ValueTask<StreamHandle> BindUploadAsync(
         string missingFileDetail,
+        CancellationToken cancellationToken);
+
+    public abstract ValueTask<MultipartUpload> BindMultipartUploadAsync(
+        string fileFieldName,
+        ImmutableArray<string> textFieldNames,
+        long maximumFileBytes,
         CancellationToken cancellationToken);
 
     public abstract StreamHandle RegisterContent(ReadOnlyMemory<byte> content, string contentType);
