@@ -142,8 +142,9 @@ Restore them with the same trusted package configuration, then supply all grants
 again when starting.
 
 The service index also advertises `PackageStaging/1.0.0` at `/staging/nuget/`.
-Its two compatibility routes accept NuGet.Client multipart uploads with a required
-`groupId` field and return non-success HTTP status codes for rejected uploads.
+Its two compatibility routes accept NuGet.Client multipart uploads. An omitted or
+empty `groupId` uses a lazily created ungrouped bucket; a nonempty value selects an
+existing named group. Rejected uploads return non-success HTTP status codes.
 
 The SDK (`1.5.0`) and TestKit (`1.1.0`) target `net10.0` and are locally packable,
 not externally published. There is no network extension feed, hot reload,

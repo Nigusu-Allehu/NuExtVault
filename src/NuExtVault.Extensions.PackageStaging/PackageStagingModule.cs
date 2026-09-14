@@ -201,6 +201,7 @@ internal sealed class PackageStagingHandler(
     private const int DefaultMaximumPackages = 50;
     private const int DefaultTtlMinutes = 1440;
     private const int MaximumGroupsPerPage = 200;
+    private const string CompatibilityGroupId = "ungrouped";
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
 
     internal async ValueTask<OperationResponse<CreateGroupResponse>> CreateGroupAsync(
@@ -506,17 +507,34 @@ internal sealed class PackageStagingHandler(
             CompatibilityUploadRequest request,
             CancellationToken token)
     {
-        if (!IsValidGroupId(request.GroupId))
+        var groupId = request.GroupId;
+        if (string.IsNullOrEmpty(groupId))
+        {
+            groupId = CompatibilityGroupId;
+            var created = (await CreateGroupAsync(
+                new CreateGroupRequest(groupId, null, null),
+                token)).Value!;
+            if (created.Outcome is not (
+                StagingOutcome.Succeeded or StagingOutcome.Conflict))
+            {
+                return Compatibility(
+                    created.Outcome,
+                    null,
+                    null,
+                    created.Detail);
+            }
+        }
+        else if (!IsValidGroupId(groupId))
         {
             return CompatibilityFailure(
                 StagingOutcome.InvalidContent,
-                "A valid groupId form field is required.");
+                "The groupId form field is invalid.");
         }
 
         if (request.UploadKind == "package")
         {
             var response = await UploadPackageAsync(
-                new UploadPackageRequest(request.GroupId!, null, request.Content),
+                new UploadPackageRequest(groupId, null, request.Content),
                 token);
             var packageResult = response.Value!;
             return Compatibility(
@@ -534,7 +552,7 @@ internal sealed class PackageStagingHandler(
         }
 
         using var mutation = await EnterMutationAsync(token);
-        var entry = await state.ReadEntryAsync<StagingGroupState>(Key(request.GroupId!), token);
+        var entry = await state.ReadEntryAsync<StagingGroupState>(Key(groupId), token);
         if (entry is null)
         {
             return CompatibilityFailure(
@@ -574,7 +592,7 @@ internal sealed class PackageStagingHandler(
         }
 
         var symbolResult = await CommitSymbolAsync(
-            request.GroupId!,
+            groupId,
             null,
             entry,
             index,

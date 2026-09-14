@@ -187,10 +187,62 @@ public sealed class PackageStagingFunctionalTests(PackageStagingFunctionalAssets
     }
 
     [Theory]
-    [InlineData(null, HttpStatusCode.BadRequest)]
-    [InlineData("", HttpStatusCode.BadRequest)]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task NuGet_compatibility_package_upload_defaults_to_one_ungrouped_bucket(
+        string? groupId)
+    {
+        await using var server = await StartAsync();
+
+        using var response = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.Ungrouped", "1.0.0"),
+            groupId);
+        using var groups = await server.HttpClient.GetAsync("/staging/groups");
+        using var document = await ReadAsync(groups);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var group = Assert.Single(document.RootElement.GetProperty("groups").EnumerateArray());
+        var package = Assert.Single(group.GetProperty("packages").EnumerateArray());
+        Assert.Equal("Contoso.Ungrouped", package.GetProperty("packageId").GetString());
+    }
+
+    [Fact]
+    public async Task NuGet_compatibility_symbol_upload_reuses_the_ungrouped_bucket()
+    {
+        await using var server = await StartAsync();
+        using var package = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "package",
+            "package",
+            Nupkg("Contoso.UngroupedSymbols", "2.0.0"),
+            null);
+        using var symbols = TestPackageBuilder.Create("Contoso.UngroupedSymbols", "2.0.0")
+            .WithFile("lib/net10.0/Contoso.UngroupedSymbols.pdb", [1, 2, 3])
+            .Build();
+
+        using var symbolResponse = await SendCompatibilityUploadAsync(
+            server.HttpClient,
+            "symbols",
+            "symbols",
+            symbols.Content,
+            null);
+        using var groups = await server.HttpClient.GetAsync("/staging/groups");
+        using var document = await ReadAsync(groups);
+
+        Assert.Equal(HttpStatusCode.OK, package.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, symbolResponse.StatusCode);
+        var group = Assert.Single(document.RootElement.GetProperty("groups").EnumerateArray());
+        var staged = Assert.Single(group.GetProperty("packages").EnumerateArray());
+        Assert.False(string.IsNullOrWhiteSpace(staged.GetProperty("symbolHandleId").GetString()));
+    }
+
+    [Theory]
+    [InlineData(" ", HttpStatusCode.BadRequest)]
     [InlineData("missing", HttpStatusCode.NotFound)]
-    public async Task NuGet_compatibility_upload_requires_an_existing_valid_group(
+    public async Task NuGet_compatibility_explicit_group_requires_a_valid_existing_group(
         string? groupId,
         HttpStatusCode expected)
     {
