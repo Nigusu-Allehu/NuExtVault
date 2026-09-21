@@ -77,6 +77,10 @@ public interface IStagedContentWriteCapability
         StagedPackageIdentity expectedIdentity,
         CancellationToken cancellationToken);
 
+    ValueTask<StagedContentWriteResult> WriteSymbolsAsync(
+        StreamHandle content,
+        CancellationToken cancellationToken);
+
     /// <summary>
     /// Releases staged content and its lease. Releasing is idempotent and never reports
     /// success for content the caller does not own.

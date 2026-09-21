@@ -633,6 +633,7 @@ internal sealed class ExtensionCatalog
                 ["3.0.0-beta", "3.5.0"],
                 StringComparer.Ordinal),
         ["PackagePublish"] = new HashSet<string>(["2.0.0"], StringComparer.Ordinal),
+        ["PackageStaging"] = new HashSet<string>(["1.0.0"], StringComparer.Ordinal),
         ["SymbolPackagePublish"] = new HashSet<string>(["4.9.0"], StringComparer.Ordinal),
         ["VulnerabilityInfo"] = new HashSet<string>(["6.7.0"], StringComparer.Ordinal)
     };

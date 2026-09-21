@@ -190,7 +190,9 @@ public sealed class DocumentationExampleTests
                 "GET  /staging/groups/{groupId}/packages/{packageId}/{version}",
                 "POST /staging/groups/{groupId}/packages/{packageId}/{version}/promote",
                 "POST /staging/groups/{groupId}/packages/{packageId}/{version}/reject",
-                "POST /staging/groups/{groupId}/expire"
+                "POST /staging/groups/{groupId}/expire",
+                "PUT  /staging/nuget/package",
+                "PUT  /staging/nuget/symbols"
             ],
             Lines(examples["user-07-staging-routes"].Content));
 

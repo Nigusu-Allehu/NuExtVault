@@ -173,6 +173,10 @@ public sealed record ContributionDeclaration(
     /// contribution never carries a host-derived address.
     /// </summary>
     public RouteIdentity? Route { get; init; }
+
+    public string? ResourceType { get; init; }
+
+    public string? ResourceVersion { get; init; }
 }
 
 /// <summary>
@@ -234,7 +238,8 @@ public sealed class RouteDeclaration
         string head,
         int timeoutMilliseconds,
         RouteBodyBinding? body = null,
-        ImmutableArray<string> headers = default)
+        ImmutableArray<string> headers = default,
+        bool allowsResourceBaseReference = false)
     {
         Identity = identity;
         Operation = operation;
@@ -248,6 +253,7 @@ public sealed class RouteDeclaration
         TimeoutMilliseconds = timeoutMilliseconds;
         DeclaredBody = body;
         Headers = headers.IsDefault ? [] : headers;
+        AllowsResourceBaseReference = allowsResourceBaseReference;
     }
 
     public RouteIdentity Identity { get; }
@@ -279,6 +285,8 @@ public sealed class RouteDeclaration
     /// <summary>The request headers a binder for this route may read.</summary>
     internal ImmutableArray<string> Headers { get; }
 
+    public bool AllowsResourceBaseReference { get; }
+
     /// <summary>
     /// The effective body binding: a declared value, otherwise <see cref="RouteBodyBinding.None"/>
     /// for body-free routes and <see cref="RouteBodyBinding.Bounded"/> for the rest.
@@ -295,7 +303,7 @@ public static class ExtensionSdkVersions
     public static SdkContractIdentity Identity { get; } =
         new("NuExtVault.Extensions.Sdk");
 
-    public static SdkContractVersion Current { get; } = new(1, 4, 0);
+    public static SdkContractVersion Current { get; } = new(1, 5, 0);
 
     public static SdkContractVersion OldestSupported { get; } = new(1, 0, 0);
 
@@ -520,7 +528,17 @@ internal interface IRouteBindingSource
     BoundedDocument ReadBody();
 
     StreamHandle BindBodyStream();
+
+    ValueTask<MultipartUpload> BindMultipartUploadAsync(
+        string fileFieldName,
+        ImmutableArray<string> textFieldNames,
+        long maximumFileBytes,
+        CancellationToken cancellationToken);
 }
+
+public sealed record MultipartUpload(
+    StreamHandle Content,
+    IReadOnlyDictionary<string, string> Fields);
 
 public sealed class RouteBindingRequest
 {
@@ -584,6 +602,22 @@ public sealed class RouteBindingRequest
     /// </summary>
     public StreamHandle BindBodyStream() => _source.BindBodyStream();
 
+    public ValueTask<MultipartUpload> BindMultipartUploadAsync(
+        string fileFieldName,
+        IEnumerable<string> textFieldNames,
+        long maximumFileBytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileFieldName);
+        ArgumentNullException.ThrowIfNull(textFieldNames);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumFileBytes);
+        return _source.BindMultipartUploadAsync(
+            fileFieldName,
+            [.. textFieldNames],
+            maximumFileBytes,
+            cancellationToken);
+    }
+
     private sealed class DictionaryBindingSource(
         IReadOnlyDictionary<string, string> route,
         IReadOnlyDictionary<string, string> query,
@@ -610,6 +644,14 @@ public sealed class RouteBindingRequest
         public StreamHandle BindBodyStream() =>
             throw new InvalidOperationException(
                 "This route does not declare a streaming request body.");
+
+        public ValueTask<MultipartUpload> BindMultipartUploadAsync(
+            string fileFieldName,
+            ImmutableArray<string> textFieldNames,
+            long maximumFileBytes,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                "This route does not declare multipart content.");
     }
 }
 

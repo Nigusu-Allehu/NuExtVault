@@ -82,7 +82,7 @@ internal sealed record OperationResult(
 /// Typed operation errors. Owners classify failures; the kernel maps the classification
 /// onto the wire.
 /// </summary>
-internal static class OperationErrors
+public static class OperationErrors
 {
     public static OperationError NotFound(string message) =>
         new(OperationErrorCodes.NotFound, message, null);
@@ -111,7 +111,7 @@ internal static class OperationErrors
     /// <summary>
     /// The transport-neutral status the kernel renders for one error classification.
     /// </summary>
-    public static OperationResultStatus Classify(OperationErrorKind kind) => kind switch
+    internal static OperationResultStatus Classify(OperationErrorKind kind) => kind switch
     {
         OperationErrorKind.InvalidRequest => OperationResultStatus.InvalidRequest,
         OperationErrorKind.Unauthorized => OperationResultStatus.Unauthorized,

@@ -118,10 +118,10 @@ public sealed record OperationResponse<TResponse>
     }
 
     [JsonInclude]
-    internal TResponse? Value { get; }
+    public TResponse? Value { get; }
 
     [JsonInclude]
-    internal OperationError? Error { get; }
+    public OperationError? Error { get; }
 
     /// <summary>
     /// The optional transport-neutral rendering an owner attached to this response. It
@@ -142,7 +142,7 @@ public sealed record OperationResponse<TResponse>
             null,
             rendering ?? throw new ArgumentNullException(nameof(rendering)));
 
-    internal static OperationResponse<TResponse> Failure(OperationError error) =>
+    public static OperationResponse<TResponse> Failure(OperationError error) =>
         new(default, error ?? throw new ArgumentNullException(nameof(error)), null);
 
     internal static OperationResponse<TResponse> Failure(
@@ -154,7 +154,7 @@ public sealed record OperationResponse<TResponse>
             rendering ?? throw new ArgumentNullException(nameof(rendering)));
 }
 
-internal sealed record OperationError
+public sealed record OperationError
 {
     [JsonConstructor]
     internal OperationError(string code, string message, int? retryAfterSeconds)
@@ -168,7 +168,7 @@ internal sealed record OperationError
     public string Code { get; }
 
     [JsonIgnore]
-    public OperationErrorKind Kind { get; }
+    internal OperationErrorKind Kind { get; }
 
     public string Message { get; }
 

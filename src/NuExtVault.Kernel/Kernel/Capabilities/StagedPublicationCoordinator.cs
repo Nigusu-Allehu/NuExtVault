@@ -113,41 +113,42 @@ internal sealed class StagedPublicationCoordinator(
     public async ValueTask<StagedContentWriteResult> StageSymbolsAsync(
         string ownerId,
         Stream content,
-        StagedPackageIdentity expectedIdentity,
+        StagedPackageIdentity? expectedIdentity,
         long maximumBytes,
         CancellationToken token)
     {
-        ArgumentNullException.ThrowIfNull(expectedIdentity);
         var written = await staged.WriteAsync(
             ownerId,
             content,
             "application/octet-stream",
             maximumBytes,
-            expectedIdentity.PackageId,
-            expectedIdentity.PackageVersion,
+            expectedIdentity?.PackageId,
+            expectedIdentity?.PackageVersion,
             token);
         if (written.Status != StagedContentWriteStatus.Succeeded || written.Record is null)
         {
             return Rejected(written);
         }
 
+        var record = written.Record;
         TestPackage? symbols = null;
         try
         {
-            await using var stream = staged.Open(written.Record);
+            await using var stream = staged.Open(record);
             symbols = await TestPackage.FromStreamAsync(stream, packageLimits, clock, token);
-            if (!string.Equals(
-                    symbols.Identity.Id,
-                    expectedIdentity.PackageId,
-                    StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(
-                    symbols.NormalizedVersion,
-                    KernelPackageVersion(expectedIdentity.PackageVersion),
-                    StringComparison.OrdinalIgnoreCase))
+            if (expectedIdentity is not null &&
+                (!string.Equals(
+                     symbols.Identity.Id,
+                     expectedIdentity.PackageId,
+                     StringComparison.OrdinalIgnoreCase) ||
+                 !string.Equals(
+                     symbols.NormalizedVersion,
+                     KernelPackageVersion(expectedIdentity.PackageVersion),
+                     StringComparison.OrdinalIgnoreCase)))
             {
                 await staged.TransitionAsync(
                     ownerId,
-                    written.Record.ContentId,
+                    record.ContentId,
                     StagedContentState.Released,
                     CancellationToken.None);
                 return new StagedContentWriteResult(
@@ -157,9 +158,19 @@ internal sealed class StagedPublicationCoordinator(
                     "The symbol package identity does not match the staged package.");
             }
 
+            if (expectedIdentity is null)
+            {
+                record = record with
+                {
+                    PackageId = symbols.Identity.Id,
+                    PackageVersion = symbols.NormalizedVersion
+                };
+                await staged.AnnotateAsync(record, token);
+            }
+
             return new StagedContentWriteResult(
                 StagedContentWriteOutcome.Succeeded,
-                Handle(written.Record),
+                Handle(record),
                 new StagedPackageIdentity(symbols.Identity.Id, symbols.NormalizedVersion),
                 null);
         }
@@ -167,7 +178,7 @@ internal sealed class StagedPublicationCoordinator(
         {
             await staged.TransitionAsync(
                 ownerId,
-                written.Record.ContentId,
+                record.ContentId,
                 StagedContentState.Released,
                 CancellationToken.None);
             return new StagedContentWriteResult(
@@ -180,7 +191,7 @@ internal sealed class StagedPublicationCoordinator(
         {
             await staged.TransitionAsync(
                 ownerId,
-                written.Record.ContentId,
+                record.ContentId,
                 StagedContentState.Released,
                 CancellationToken.None);
             return new StagedContentWriteResult(
@@ -188,6 +199,15 @@ internal sealed class StagedPublicationCoordinator(
                 null,
                 null,
                 Redact(exception.Message));
+        }
+        catch
+        {
+            await staged.TransitionAsync(
+                ownerId,
+                record.ContentId,
+                StagedContentState.Released,
+                CancellationToken.None);
+            throw;
         }
         finally
         {

@@ -139,9 +139,17 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         Assert.Contains(BuiltInCapabilityNames.ExtensionStateWrite, required);
         Assert.Contains(BuiltInCapabilityNames.PackageContentWriteStaged, required);
         Assert.Contains(BuiltInCapabilityNames.PublicationRequest, required);
-        var contribution = Assert.Single(manifest.Contributions);
-        Assert.Equal("service-resource", contribution.Kind);
-        Assert.Equal(new RouteIdentity("nuextvault.staging.list-groups"), contribution.Route);
+        Assert.Equal(2, manifest.Contributions.Length);
+        var native = manifest.Contributions.Single(contribution =>
+            contribution.Identity.Value == "NuExtVault.PackageStaging.ServiceIndex");
+        Assert.Equal("service-resource", native.Kind);
+        Assert.Equal(new RouteIdentity("nuextvault.staging.list-groups"), native.Route);
+        var compatibility = manifest.Contributions.Single(contribution =>
+            contribution.ResourceType == "PackageStaging");
+        Assert.Equal("1.0.0", compatibility.ResourceVersion);
+        Assert.Equal(
+            new RouteIdentity("nuextvault.staging.nuget-upload"),
+            compatibility.Route);
     }
 
     [Fact]
@@ -171,6 +179,9 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
         Assert.Contains(
             "Idempotency-Key",
             Route(manifest, "nuextvault.staging.upload-package").Headers);
+        Assert.True(
+            Route(manifest, "nuextvault.staging.nuget-upload")
+                .AllowsResourceBaseReference);
     }
 
     [Fact]
@@ -178,7 +189,7 @@ public sealed class PackageStagingExtensionTests(PackageStagingAssetsFixture fix
     {
         var manifest = ExtensionManifestJson.Parse(Assets.ManifestJsonBytes);
 
-        Assert.Equal(new SdkContractVersion(1, 4, 0), manifest.Sdk.Minimum);
+        Assert.Equal(new SdkContractVersion(1, 5, 0), manifest.Sdk.Minimum);
         Assert.True(ExtensionSdkVersions.IsSupported(manifest.Sdk.Minimum));
         Assert.True(ExtensionSdkVersions.IsSupported(ExtensionSdkVersions.OldestSupported));
     }

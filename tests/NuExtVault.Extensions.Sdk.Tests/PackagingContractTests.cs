@@ -26,7 +26,7 @@ public sealed class PackagingContractTests
         Assert.Equal(0, results[1].ExitCode);
 
         AssertPackage(
-            Path.Combine(output, "NuExtVault.Extensions.Sdk.1.4.0.nupkg"),
+            Path.Combine(output, "NuExtVault.Extensions.Sdk.1.5.0.nupkg"),
             [
                 "lib/net10.0/NuExtVault.Extensions.Sdk.dll",
                 "lib/net10.0/NuExtVault.Extensions.Sdk.xml",

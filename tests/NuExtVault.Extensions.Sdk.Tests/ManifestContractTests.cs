@@ -181,4 +181,50 @@ public sealed class ManifestContractTests
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, error => error.Code == expectedCode);
     }
+
+    [Fact]
+    public void Service_resources_can_advertise_an_explicit_protocol_type_and_base_route()
+    {
+        var root = JsonNode.Parse(
+            File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        var contribution = root["contributions"]![0]!.AsObject();
+        contribution["resourceType"] = "PackageStaging";
+        contribution["resourceVersion"] = "1.0.0";
+        var route = root["routes"]![0]!.AsObject();
+        route["allowsResourceBaseReference"] = true;
+
+        var manifest = ExtensionManifestJson.Parse(Encoding.UTF8.GetBytes(root.ToJsonString()));
+        var canonical = Encoding.UTF8.GetString(ExtensionManifestJson.Canonicalize(manifest).Span);
+
+        Assert.Equal("PackageStaging", manifest.Contributions[0].ResourceType);
+        Assert.Equal("1.0.0", manifest.Contributions[0].ResourceVersion);
+        Assert.True(manifest.Routes[0].AllowsResourceBaseReference);
+        Assert.Contains("\"resourceType\":\"PackageStaging\"", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"resourceVersion\":\"1.0.0\"", canonical, StringComparison.Ordinal);
+        Assert.Contains("\"allowsResourceBaseReference\":true", canonical, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("PackageStaging", null)]
+    [InlineData(null, "1.0.0")]
+    [InlineData("PackageStaging/1.0.0", "1.0.0")]
+    [InlineData("OtherProtocol", "1.0.0")]
+    [InlineData("PackageStaging", "not-a-version")]
+    public void Service_resource_protocol_metadata_is_strict(
+        string? resourceType,
+        string? resourceVersion)
+    {
+        var root = JsonNode.Parse(
+            File.ReadAllBytes(TestPaths.Fixture("valid-v1.manifest.json")))!.AsObject();
+        var contribution = root["contributions"]![0]!.AsObject();
+        contribution["resourceType"] = resourceType;
+        contribution["resourceVersion"] = resourceVersion;
+
+        var result = ExtensionManifestJson.Validate(Encoding.UTF8.GetBytes(root.ToJsonString()));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(
+            result.Errors,
+            error => error.Code == "contribution.resource.invalid");
+    }
 }
